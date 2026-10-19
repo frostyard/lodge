@@ -257,7 +257,10 @@ Design only. The assistant is built later, from these documents.
 - **Web Push.** Mail and the assistant need notifications while lodge is
   closed. That means a service worker scoped to push alone, which reverses
   `worker-src 'none'` ([ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md)).
-  Decide with an ADR by Phase 4.
+  The user deferred it on 2026-10-19: no service worker for now. Phones
+  get no notifications from lodge until then, and notifications reach only
+  a page that is open. Take it up with Phase 5 if the assistant needs
+  notifications while lodge is closed, with an ADR.
 - **The desktop apps.** frostmail's Tauri app could become a lodge client
   over a WebSocket with its node's identity, or give way to the home-screen
   app. frostnotes' Tauri app stays local-first against its own notesd.
