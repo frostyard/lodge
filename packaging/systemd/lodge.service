@@ -1,0 +1,52 @@
+# lodge, the tailnet web shell for frostyard's apps
+# (https://github.com/frostyard/lodge/blob/main/docs/design/overview.md).
+# Installed by packaging/install.sh, which rewrites ExecStart for its BINDIR.
+[Unit]
+Description=lodge, the tailnet web shell for frostyard's apps
+Documentation=https://github.com/frostyard/lodge/blob/main/docs/design/overview.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=lodge
+Group=lodge
+ExecStart=/usr/bin/lodge
+ExecReload=kill -HUP $MAINPID
+# The first start reads TS_AUTHKEY (and TS_AUTHKEY_CONTENT) from here; a
+# tagged, pre-approved key. Without one, `lodgectl status` shows the login
+# URLs. The file is root's, mode 0600, and never committed.
+EnvironmentFile=-/etc/lodge/lodge.env
+StateDirectory=lodge
+StateDirectoryMode=0700
+# No RuntimeDirectory=: systemd would remove /run/lodge when lodge stops,
+# and the apps' sockets in /run/lodge/apps with it. tmpfiles.d makes it.
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lodge /run/lodge
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

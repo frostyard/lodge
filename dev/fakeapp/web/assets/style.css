@@ -1,0 +1,8 @@
+:root { color-scheme: light; --bg: #fafafa; --fg: #1d1d1f; --line: #d0d0d5; }
+:root[data-theme="dark"] { color-scheme: dark; --bg: #1c1c1e; --fg: #f2f2f7; --line: #3a3a3c; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; gap: 1em; align-items: baseline; padding: 0.5em 1em; border-bottom: 1px solid var(--line); }
+h1 { font-size: 1.2em; margin: 0; }
+main { padding: 0 1em; }
+pre { max-height: 12em; overflow: auto; border: 1px solid var(--line); padding: 0.5em; }
+iframe { width: 100%; height: 8em; border: 1px solid var(--line); }
