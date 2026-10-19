@@ -79,13 +79,20 @@ provisional until it is tried on the user's phone.
   first-party and share the origin.
 - **Frames stay loaded.** A frame that is not shown gets `hidden` and
   `inert`, and keeps its document. If the browser discards it, the shell
-  recreates it at the app's last route when it is next shown.
+  recreates it at the app's last route when it is next shown: a frame that
+  sends `ready` again is sent `navigate` to its last route.
 - **On a switch,** the shell shows the frame, sends `visible` to the frames
   that changed, and moves focus into the shown frame.
 - **Unresponsive or down.** A frame that sends no `ready` within 10 s of
   `load` is shown as not responding, with a Reload button. An app whose
   state is `down` keeps its frame under a notice, which offers to reload
   the frame once the app is up again.
+- **Content frames (a known limitation).** A frame an app opens on the
+  content origin ([lodge-http.md](lodge-http.md#content-routes)) is
+  cross-origin to the app, and sandboxed without scripts. The app cannot
+  size it by its content, and keys pressed inside it, the switcher's
+  shortcut included, never reach lodge-client. The user clicks outside the
+  content frame first.
 
 ### Addresses and history
 

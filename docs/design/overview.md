@@ -25,9 +25,11 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/lodge-client.md](../specs/lodge-client.md),
 [specs/shell.md](../specs/shell.md).
 
-**Status: planned.** Only a stub `cmd/lodge` exists. This document
-describes the design the [roadmap](../plans/0001-roadmap.md) builds, and is
-rewritten as each phase lands.
+**Status: Phases 1 and 2 in review.** The kit and the client, and lodge
+v1 (the nodes, the gateway, the control socket, the shell, the development
+build and packaging), are built and tested; the deployment and the checks
+on the user's devices are not done. Inference (Phase 3) is planned. This
+document is rewritten as each phase lands.
 
 ## Overview
 
@@ -96,10 +98,24 @@ Each has its state in `/var/lib/lodge/tailnet/<node>/`, TLS on `:443` with
 its own certificate, and HTTP/1.1 only. Log upload is disabled before
 either starts. The package gives the gateway a listener per node, each
 node's DNS name (`LODGE`, `CONTENT`), and `WhoIs(ctx, remoteAddr)`. WhoIs
-returns a `Peer`: the stable node ID, the node's short name, its
-addresses, whether it is tagged, and its owner's login and display name.
-Tests elsewhere use a fake WhoIs. The development build uses a fixed one
-on loopback.
+returns a `Peer` (`internal/peer`, which holds no Tailscale): the stable
+node ID, the node's short name, its addresses, whether it is tagged, and
+its owner's login and display name. Tests elsewhere use a fake WhoIs. The
+development build uses a fixed one on loopback.
+
+**Start order.** lodge opens its database, reads the manifests, and starts
+both nodes without waiting for them. It then serves the control socket
+and polls the apps' health, and only then waits for the nodes to join the
+tailnet before the gateway listens. So on a first start without an auth
+key, `lodgectl status` already answers, and shows each node's login URL.
+The journal says only that a login is needed: the URL claims the node for
+whoever opens it first.
+
+**Connections.** Each listener caps connections per remote address and in
+all, refused requests close their connections, and device bodies have a
+deadline per read, since device routes run before any identity is known
+([lodge-http.md](../specs/lodge-http.md#connections)). Before each request,
+lodge checks that an app's socket belongs to the manifest's user.
 
 ### The gateway
 
@@ -224,8 +240,11 @@ Apps pin both to a published lodge commit or release.
 
 - **`internal/tailnet`:** real `tsnet` nodes against Tailscale's in-process
   test control server (`tstest/integration/testcontrol`). WhoIs names a
-  user's node and a tagged node, TLS answers on each node's name, and
-  nothing dials the log host.
+  user's node and a tagged node, a node without a key reports its login
+  URL, and the TLS listener offers HTTP/1.1 only. tsnet starts no log
+  uploader inside a test binary, so the log-host test builds a helper
+  binary and watches its connections through a recording proxy: a plain
+  `tsnet.Server` is seen dialing the log host, and lodge's node is not.
 - **`internal/gateway`:** every check in lodge-http.md has a test that
   fails it and one that passes it, with a fake WhoIs and `httptest`, and
   apps faked by `kit`'s test server on a socket in a temp root.
@@ -236,16 +255,26 @@ Apps pin both to a published lodge commit or release.
   - Every limit is tested at its value and past it.
 - **The development build** (`e2e` tag) runs lodge on loopback with one
   fixed identity, for apps' browser runs. A test proves that a release
-  build holds none of it.
+  build holds none of it, and another serves a kit app through it end to
+  end. `dev/e2e.sh` runs it with two fake apps, for trying the shell in a
+  browser.
+- **The shell:** unit tests of the rail, the switcher, frames, history and
+  app states in the nsl machine (Vitest with happy-dom).
+- **Packaging:** `internal/packagecheck` stages an install and runs
+  `systemd-analyze verify` on the units.
 - **`client/`:** unit tests of both halves in the nsl machine, including
   the origin and source checks.
 
 ## Operational notes
 
+- **Install:** `make shell-build` (in the nsl machine) and `make dist`,
+  then `packaging/install.sh` on the host
+  ([packaging/README.md](../../packaging/README.md)).
 - **First start:**
   1. Make a tagged, pre-approved auth key in the tailnet's admin console.
-  2. Start lodge once with it in `TS_AUTHKEY`. Later starts read
-     `/var/lib/lodge/tailnet/` and need no key.
+  2. Start lodge once with it in `TS_AUTHKEY` (`/etc/lodge/lodge.env`).
+     Later starts read `/var/lib/lodge/tailnet/` and need no key. Without
+     one, `sudo lodgectl status` shows each node's login URL.
   3. Run `sudo lodgectl allow login <your login>` and `sudo lodgectl allow
      node <your phone>`.
   4. Open `https://lodge.<tailnet>.ts.net/`.

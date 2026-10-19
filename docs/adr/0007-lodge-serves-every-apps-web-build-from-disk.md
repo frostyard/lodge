@@ -60,7 +60,8 @@ Node.
   shell, app frames and content each have their own policy
   ([specs/lodge-http.md](../specs/lodge-http.md#headers)).
   - **App frames.** `default-src 'none'`. Scripts and styles come only from
-    the app's own `/app/<id>/` path. `connect-src` allows only the app's
+    the app's own bundle, `/app/<id>/assets/`, so no `x/` read can run as
+    script. `connect-src` allows only the app's
     own path and its `wss://` socket. Images come from lodge and `data:`,
     plus the content origin when the manifest sets `content`, and any
     `https:` image when it sets `remoteImages`. `worker-src`, `object-src`,
