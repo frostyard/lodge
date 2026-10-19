@@ -3,7 +3,7 @@
 A tailnet-only web shell for frostyard's first-party apps. One address on
 your tailnet opens Notes, Mail and, later, an assistant. A quick switcher
 moves between them, and each app stays loaded in its frame
-(overview).
+([overview](docs/design/overview.md)).
 
 - **lodge is the only process on the network.** It joins your tailnet as a
   node of its own, `lodge`, and signs browsers in by their tailnet identity.
@@ -20,10 +20,10 @@ moves between them, and each app stays loaded in its frame
 
 Apps build on the Go kit (`kit/`) and the frontend library
 `@frostyard/lodge-client` (`client/`). The contract between lodge and an app
-is docs/specs/app-contract.md.
+is [docs/specs/app-contract.md](docs/specs/app-contract.md).
 
 Pre-release: these are design documents, all Proposed on 2026-10-18. The
-order of work is the roadmap.
+order of work is the [roadmap](docs/plans/0001-roadmap.md).
 
 ## Develop
 

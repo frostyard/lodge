@@ -20,30 +20,30 @@ frostyard/core's
 
 - [0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)
 - [0002 — Agent-portable instruction surface](adr/0002-agent-portable-instruction-surface.md)
-- 0003 — lodge is the only process on the network
-- 0004 — lodge stays on the tailnet, and joins it itself
-- 0005 — Browsers sign in with their tailnet identity
-- 0006 — Agents reach each app through its own MCP endpoint
-- 0007 — lodge serves every app's web build from disk
-- 0008 — lodge installs as one home-screen app
-- 0009 — Apps switch in frames that stay loaded
-- 0010 — Untrusted bytes come from a second node
-- 0011 — A shared inference layer routes apps to models
+- [0003 — lodge is the only process on the network](adr/0003-lodge-is-the-only-process-on-the-network.md)
+- [0004 — lodge stays on the tailnet, and joins it itself](adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md)
+- [0005 — Browsers sign in with their tailnet identity](adr/0005-browsers-sign-in-with-their-tailnet-identity.md)
+- [0006 — Agents reach each app through its own MCP endpoint](adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md)
+- [0007 — lodge serves every app's web build from disk](adr/0007-lodge-serves-every-apps-web-build-from-disk.md)
+- [0008 — lodge installs as one home-screen app](adr/0008-lodge-installs-as-one-home-screen-app.md)
+- [0009 — Apps switch in frames that stay loaded](adr/0009-apps-switch-in-frames-that-stay-loaded.md)
+- [0010 — Untrusted bytes come from a second node](adr/0010-untrusted-bytes-come-from-a-second-node.md)
+- [0011 — A shared inference layer routes apps to models](adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
 
 ### Design
 
-- Overview — the nodes, the gateway, the shell, the apps behind it, inference, users and paths, operations
+- [Overview](design/overview.md) — the nodes, the gateway, the shell, the apps behind it, inference, users and paths, operations
 
 ### Specs
 
-- App contract — what an app installs and serves, and what lodge provides: layout, manifest, URLs, caller headers, inference, MCP tokens, rules
-- lodge's HTTP surface — listeners, routes by kind, browser, content, agent and device checks, headers, sessions, tokens and allow-lists, `lodgectl`
-- lodge-client — the postMessage protocol between the shell and an app's frame, and the library's API
-- The shell — the shell page: rail, switcher and its shortcut, frames, addresses and history
+- [App contract](specs/app-contract.md) — what an app installs and serves, and what lodge provides: layout, manifest, URLs, caller headers, inference, MCP tokens, rules
+- [lodge's HTTP surface](specs/lodge-http.md) — listeners, routes by kind, browser, content, agent and device checks, headers, sessions, tokens and allow-lists, `lodgectl`
+- [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, and the library's API
+- [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history
 
 ### Plans
 
-- 0001 — Roadmap — the kit, lodge v1 with notes, inference, mail, the assistant
+- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant
 
 ## Conventions
 

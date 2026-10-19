@@ -8,8 +8,8 @@ Unix socket behind it. lodge also holds what the apps share: the Go kit
 (`kit/`), the frontend library `@frostyard/lodge-client` (`client/`), an MCP
 endpoint per app, and an inference layer. Start at
 [docs/README.md](docs/README.md). The architecture is in
-docs/design/overview.md, and the contract with
-apps is docs/specs/app-contract.md. The
+[docs/design/overview.md](docs/design/overview.md), and the contract with
+apps is [docs/specs/app-contract.md](docs/specs/app-contract.md). The
 platform decision is frostyard/core's
 [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md).
 
@@ -24,7 +24,7 @@ the canonical paths; keep content tool-agnostic.
 Pre-release. The founding documents date from 2026-10-18 and are all
 Proposed. The only code is a stub `cmd/lodge` that prints its version, plus
 the repository checks. The order of work is the
-roadmap. The kit is extracted from
+[roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
 [frostyard/frostmail](https://github.com/frostyard/frostmail), which are
 sibling checkouts at `../frostnotes` and `../frostmail` when present. Before
@@ -79,13 +79,14 @@ Everything but `cmd/lodge` and the two check packages is planned.
 ## Invariants (decided; binding from the first line of code)
 
 These are the app contract's rules
-(specs/app-contract.md):
+([specs/app-contract.md](docs/specs/app-contract.md#rules)):
 
 - **Only lodge listens on the network.** App daemons listen only on Unix
   sockets.
-- **An app socket accepts only lodge's uid** (`SO_PEERCRED`) and refuses a
-  request without `Lodge-Caller`. That is why apps can trust the `Lodge-*`
-  headers. lodge deletes every `Lodge-*` header a client sends.
+- **An app socket accepts only lodge's uid** (`SO_PEERCRED`). It refuses a
+  request without `Lodge-Caller`, except `GET /health`, and each path
+  admits one caller kind. That is why apps can trust the `Lodge-*` headers.
+  lodge deletes every `Lodge-*` header a client sends.
 - **Each app runs as its own system user** and cannot read another app's
   state. Agents, the assistant included, reach an app only through
   `/mcp/<id>` with a token.
