@@ -17,7 +17,9 @@ messages inside the shell are [lodge-client.md](lodge-client.md) and
 [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md)
 (files and headers),
 [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md)
-(content). Where it fits: [design/overview.md](../design/overview.md).
+(content),
+[ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+(the agent socket). Where it fits: [design/overview.md](../design/overview.md).
 
 frostnotes' M4 drafted this for notesd's hub (its `docs/specs/hub-http.md`,
 local commit `0586e2b`). It is generalized here to every app, with the
@@ -25,7 +27,11 @@ fixes from M4's review.
 
 **Status:** written on 2026-10-18 for the
 [roadmap's](../plans/0001-roadmap.md) Phase 2, which binds every route as
-it lands.
+it lands. [The agent socket](#the-agent-socket) and the binding of tokens
+to their route were designed on 2026-10-19 and are not built. They are
+marked *(Phase 6)*, and bind when the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+builds them.
 
 ## Interface
 
@@ -39,6 +45,7 @@ it lands.
 | plain HTTP on a loopback address | `--content-listen ADDR` | the content routes, refused likewise |
 | `/run/lodge/control.sock` | — | `lodgectl` ([below](#the-control-socket-and-lodgectl)) |
 | `/run/lodge/inference.sock` | — | app daemons ([app-contract.md](app-contract.md#inference)) |
+| `/run/lodge/agent.sock` *(Phase 6)* | — | `/mcp/<id>` for the agents on lodge's host that its configuration names ([below](#the-agent-socket)) |
 
 - `LODGE` is the `lodge` node's full DNS name, the first of `tsnet`'s
   `CertDomains` (`lodge.<tailnet>.ts.net`). `CONTENT` is the
@@ -223,7 +230,9 @@ holds. Each failure is its own line:
   connection for at most 60 s. Checks d and e run on every request against
   the current lists, so a `lodgectl` change applies to the next request.
 - Agent requests need checks a and b only. Device requests need none
-  ([device routes](#device-routes)).
+  ([device routes](#device-routes)). *(Phase 6)* Requests on the agent
+  socket need none: the peer's uid stands in for WhoIs
+  ([the agent socket](#the-agent-socket)).
 
 ### Native clients
 
@@ -430,7 +439,8 @@ The checks, in order:
 5. **Token:** `Authorization: Bearer <token>` names a live token issued
    for app `<id>`. Otherwise, whether the token is missing, malformed,
    unknown, revoked or for another app, the answer is 401 with
-   `WWW-Authenticate: Bearer` and no detail.
+   `WWW-Authenticate: Bearer` and no detail. *(Phase 6)* A token issued
+   for the agent socket (`--agent`) is refused here the same way.
 6. **App:** an app that is disabled, or has no `mcp: true`, is 503 or 404.
 
 lodge then proxies to the app's `/mcp`:
@@ -449,6 +459,48 @@ lodge then proxies to the app's `/mcp`:
   stream is registered, so a new token of the same name changes nothing.
 - The response carries the [confined set](#device-routes) of device
   responses, without `Cross-Origin-Resource-Policy`.
+
+### The agent socket
+
+**Designed, not built** (Phase 6). `/run/lodge/agent.sock` serves
+`/mcp/<id>` to agents on lodge's own host, such as Porter, with the
+tailnet's token rules, and the peer's uid in place of `Host`, WhoIs and
+the address check.
+
+- **The socket.** lodge makes it at start, beside the control and
+  inference sockets, and serves it before its nodes join: owner `lodge`,
+  group `lodge-agents`, 0660. lodge is in group `lodge-agents` to give it
+  that group. Under `--root` it is `DIR/run/lodge/agent.sock`.
+- **The agents.** The `agents` member of `/etc/lodge/config.json` is an
+  array of up to 16 system user names (`["frostporter"]`), read at start
+  and on reload. `root` and `lodge` are refused. A member that does not
+  parse is refused whole, and lodge keeps the list it had (none at start);
+  `lodgectl status` says why. A name with no system user is skipped, with
+  a log line.
+- **The peer check.** On each connection, lodge reads the peer's uid
+  (`SO_PEERCRED`), and closes the connection before reading from it unless
+  the uid is a listed agent's. Under `--root`, lodge's own uid passes too.
+  A refused uid is logged at most once a minute. Removing an agent from
+  the list, and reloading, closes its connections.
+- **Routes.** `/mcp/<id>` alone. Any other path is 404, and an upgrade is
+  400. The checks, in order:
+  1. **Origin:** a request with an `Origin` header is 403.
+  2. **Method:** `POST`, `GET` or `DELETE`, else 405.
+  3. **Token:** `Authorization: Bearer <token>` names a live token issued
+     for app `<id>` and for this peer's user (`--agent USER`). Otherwise,
+     a tailnet token included, the answer is 401 with
+     `WWW-Authenticate: Bearer` and no detail.
+  4. **App:** an app that is disabled, or has no `mcp: true`, is 503 or
+     404.
+
+  There is no `Host` check, no WhoIs and no address check.
+- **Then everything is as on [`/mcp/<id>`](#mcpid):** the headers set and
+  removed, sessions passed through, streams relayed without buffering,
+  last use recorded, revocation closing streams at once, and the confined
+  response headers. The log line names the agent's user in place of a
+  node.
+- **Connections.** The [limits](#connections) apply to the socket as to a
+  listener, counting a peer uid as a remote address.
 
 ### Device routes
 
@@ -505,7 +557,7 @@ For every kind, before a request goes to an app's socket:
 
 | Credential | Form | Kept by lodge |
 | --- | --- | --- |
-| MCP token | `lgm_` + 43 base64url characters (32 random bytes from `crypto/rand`) | SHA-256, hex, with its name, app, scope, creation, last use and revocation |
+| MCP token | `lgm_` + 43 base64url characters (32 random bytes from `crypto/rand`) | SHA-256, hex, with its name, app, scope, creation, last use and revocation; *(Phase 6)* the agent user it is bound to, or none |
 | allowed login | a tailnet login, 1 to 256 bytes of UTF-8 without control characters | as given, with when it was added |
 | allowed node | a StableNodeID | the ID, the node's name when it was allowed, and when |
 
@@ -514,6 +566,9 @@ For every kind, before a request goes to an app's socket:
   may be reused.
 - A token's scope is 1 to 256 visible ASCII characters, which lodge does
   not interpret.
+- *(Phase 6)* **A token works on one route.** One issued with `--agent
+  USER` works only on [the agent socket](#the-agent-socket), from `USER`.
+  One issued without it works only on the tailnet's `/mcp/<id>`.
 - A token is shown once, when it is issued, and never again: not by
   `lodgectl tokens`, not in a log, not in the state directory.
 - `lodgectl allow node NODE` takes a StableNodeID, or a name that matches
@@ -540,8 +595,8 @@ and allowed while the nodes wait for their login.
 | `lodgectl nodes` | `lodge.nodes` | the allowed nodes |
 | `lodgectl allow node NODE` | `lodge.allowNode` | adds one; `conflict` if listed; `notFound` or `invalidParams` for a name that matches no peer or several |
 | `lodgectl disallow node NODE` | `lodge.disallowNode` | removes it and closes its sessions |
-| `lodgectl tokens` | `lodge.tokens` | the tokens: name, app, scope, creation, last use, revocation |
-| `lodgectl token issue NAME --app ID --scope SCOPE` | `lodge.issueToken` | prints the token alone on stdout, and on stderr how to add it to Claude Code; `conflict` for a live name, `notFound` for an app without MCP |
+| `lodgectl tokens` | `lodge.tokens` | the tokens: name, app, scope, creation, last use, revocation; *(Phase 6)* the agent user |
+| `lodgectl token issue NAME --app ID --scope SCOPE [--agent USER]` | `lodge.issueToken` | prints the token alone on stdout, and on stderr how to add it to Claude Code; `conflict` for a live name, `notFound` for an app without MCP. *(Phase 6)* `--agent` binds it to the agent socket and that user, and `invalidParams` answers a user the configuration does not list; the hint on stderr then names the socket |
 | `lodgectl token revoke NAME` | `lodge.revokeToken` | revokes it and closes its streams; `notFound` if absent |
 | `lodgectl sessions` | `lodge.sessions` | live sessions: ID, app, login, node name, start, `seenAt` |
 | `lodgectl session end ID` | `lodge.endSession` | closes one; `notFound` if absent |
@@ -566,6 +621,9 @@ repository.
   A test sends each.
 - Issuing a token and allowing a login or a node happen only on the
   control socket.
+- *(Phase 6)* Only the agents lodge's configuration names connect to the
+  agent socket, and a token works only on the route it was issued for.
+  Each has a test that fails it.
 - No response, log line or state file holds an MCP token.
 - A release build holds no e2e identity code, proved with `go tool nm`.
 - Nothing dials Tailscale's log host. A test runs a node against the
@@ -581,7 +639,7 @@ repository.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
-- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app)
+- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)

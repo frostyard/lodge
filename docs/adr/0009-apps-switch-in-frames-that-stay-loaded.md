@@ -63,7 +63,8 @@ On 2026-10-18 the user decided:
 - **The companion panel is reserved.** A manifest with `companion: true`
   may open beside the current app, and the shell forwards it the current
   app's `context`. The assistant's design, in the roadmap's Phase 5,
-  decides the rest.
+  decides the rest. It did, in
+  [ADR-0013](0013-the-companion-opens-beside-the-current-app.md).
 - **All apps share one origin,** `https://LODGE`. Content that is not
   trusted never loads there
   ([ADR-0010](0010-untrusted-bytes-come-from-a-second-node.md)).
@@ -112,4 +113,4 @@ On 2026-10-18 the user decided:
 
 - Shapes: [specs/shell.md](../specs/shell.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/lodge-http.md](../specs/lodge-http.md#shell-routes), [specs/app-contract.md](../specs/app-contract.md#public-urls), [design/overview.md](../design/overview.md#the-shell), [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app)
 - Builds on: [ADR-0003](0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0007](0007-lodge-serves-every-apps-web-build-from-disk.md)
-- Related: [ADR-0008](0008-lodge-installs-as-one-home-screen-app.md), [ADR-0010](0010-untrusted-bytes-come-from-a-second-node.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Related: [ADR-0008](0008-lodge-installs-as-one-home-screen-app.md), [ADR-0010](0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0013](0013-the-companion-opens-beside-the-current-app.md) (the companion); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
