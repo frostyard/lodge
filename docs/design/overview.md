@@ -224,7 +224,10 @@ allow a login or a node, issue a token, or reload the apps
   - the socket server, with socket activation, the peer check and
     `LODGE_ROOT`;
   - the `Lodge-*` caller in the request's context;
-  - JSON-RPC over WebSocket, extracted from frostnotes and frostmail;
+  - JSON-RPC 2.0 (`kit/jsonrpc`), extracted from frostnotes and frostmail:
+    the connection loop, the router, the client and the private socket,
+    generic over each app's generated types, with `kit/rpctest` for tests
+    ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md));
   - `/health`;
   - the MCP-session helper;
   - an inference client.
@@ -303,7 +306,7 @@ Apps pin both to a published lodge commit or release.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
 - Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant)
 - Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md)
