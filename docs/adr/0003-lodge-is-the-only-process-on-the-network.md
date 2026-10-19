@@ -61,7 +61,7 @@ app's data.
   which lodge polls, is exempt. Each app path admits one caller kind. The
   peer check is what lets an app trust these headers.
 - **Each app runs as its own system user,** declared in `sysusers.d`
-  (`frostnotes`, `frostmail`, `frostassist`), with its state readable only
+  (`frostnotes`, `frostmail`, `frostporter`), with its state readable only
   by that user. No app reads another's state. The assistant and every other
   agent reach an app only through that app's `/mcp/<id>`, with a token.
 - **lodge decides who reaches an app, and the app decides what they may

@@ -1,8 +1,8 @@
 # Spec: the shell
 
 What lodge's shell page draws and does: the rail, the switcher and its
-shortcut, the frames, the address bar and history, app states, the theme
-and the safe area. Its consumers:
+shortcut, the frames, the address bar and history, app states, the theme,
+the safe area and the companion. Its consumers:
 
 - `shell/`, which implements it;
 - every app, which learns from it what the shell around its frame does.
@@ -13,12 +13,19 @@ The messages it exchanges with frames are
 [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md) (frames
 and the switcher),
 [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md) (the home
-screen). Where it fits:
+screen),
+[ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the
+companion). Where it fits:
 [design/overview.md](../design/overview.md#the-shell).
 
 **Status:** written on 2026-10-18 for the
 [roadmap's](../plans/0001-roadmap.md) Phase 2. The narrow layout's bar is
 provisional until it is tried on the user's phone.
+[The companion](#the-companion) was designed on 2026-10-19
+([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)),
+and is not built: it binds when the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+builds it.
 
 ## Interface
 
@@ -126,11 +133,85 @@ provisional until it is tried on the user's phone.
   light or dark (`lodge:theme` in local storage).
 - It is sent in `init`, and in `theme` whenever it changes.
 
-### The companion (reserved)
+### The companion
 
-An app whose manifest sets `companion: true` may later open as a panel
-beside the current app, in a frame of its own that receives the current
-app's `context`. Its layout and keys are for the roadmap's Phase 5.
+**Designed, not built** (Phase 6). One app at most is the companion: the
+enabled app whose manifest sets `companion: true`
+([app-contract.md](app-contract.md#the-manifest-appjson)). It opens beside
+whatever app is current, and is told what that app shows.
+
+- **Its frame.** The companion has a frame of its own, apart from the one
+  it has when it is opened in full: a second `<iframe>` of the companion
+  app at `/app/<id>/`, with the attributes of [any frame](#frames) and the
+  `title` `<name> (companion)`.
+  - It is created the first time the companion opens, and stays loaded
+    after, hidden and inert while closed. A discarded one is recreated at
+    `/app/<id>/`.
+  - Its `init` says `role: "companion"`
+    ([lodge-client.md](lodge-client.md#the-companion)). Every other frame's
+    says `"app"`.
+- **Layout:**
+
+  | Width | The companion | The current app's frame |
+  | --- | --- | --- |
+  | 600 CSS pixels and wider | a panel at the right edge, the full height, 400 pixels wide or half the window, whichever is less, with a 1-pixel border on its left | fills the rest, between the rail and the panel |
+  | narrower than 600 | a sheet over the frame and the bar, the full height and width inside the safe area, with a handle 24 pixels high at its top | stays loaded beneath it, `inert` while the sheet is up |
+
+  - **The sheet closes** on a tap on its handle, or a drag of the handle
+    down by more than 80 pixels. A shorter drag springs back.
+  - With the panel open, the current app's frame is still the one shown,
+    and keeps `visible: true`.
+- **Opening and closing:**
+  - **A button for the companion,** with its icon and its name as a
+    tooltip, sits on the rail under the apps and above lodge's state, and
+    on the narrow bar before lodge's state. It shows whether the companion
+    is open, and toggles it.
+  - **Its chord,** by default **Ctrl+Shift+\`** (`Ctrl+Shift+Backquote`),
+    toggles it too, in the shell and inside a frame, where lodge-client
+    catches it and posts `shortcut` with this chord. It is a shell setting,
+    kept in local storage (`lodge:companionShortcut`), and sent to every
+    frame in `init.companion`.
+  - An app's `ask` opens it ([below](#the-companions-messages)).
+  - Opening moves focus into the companion's frame, which is sent `visible
+    {visible: true}`. Closing returns focus to the current app's frame, and
+    sends the companion's `visible {visible: false}`.
+  - **Whether it is open** is kept in local storage (`lodge:companion`). On
+    load, the shell opens it again from 600 pixels wide. A sheet always
+    starts closed, so a link opened on a phone shows its app.
+  - Opening and closing make no history entry, and the address bar keeps
+    the current app's canonical URL.
+- **The companion app in full.** The switcher and the companion app's
+  `key` open it as any app, in its own frame. While it is the current app,
+  the panel and the sheet are hidden, since they would show the same thread
+  twice, and its button and chord open the app shown before it, with the
+  companion open beside it. When another app becomes current, the
+  companion returns if it was open.
+
+### The companion's messages
+
+**Designed, not built** (Phase 6). The messages are
+[lodge-client.md's](lodge-client.md#the-companion).
+
+- **Context.** The shell keeps each app's latest `context`. While the
+  companion is open beside another app, it sends the companion's frame
+  `context` with the current app's ID:
+  - when the companion opens;
+  - when the current app reports a new context;
+  - when another app becomes current, with that app's latest, or with
+    `kind: null` and empty `ref` and `title` when it reported none.
+
+  While the companion is closed, nothing is sent, and opening sends the
+  latest.
+- **`ask`.** The shell takes `ask` only from the current app's frame, and
+  only when there is a companion and the companion app is not the current
+  app. It takes at most one a second, and drops the rest. It opens the
+  companion, sends it the current `context`, then sends it `ask` with the
+  current app's ID and the prompt.
+- **What the shell takes from the companion's frame:** `ready`, `open` and
+  `shortcut`, as from any frame. It ignores the companion frame's `route`,
+  `context` and `ask`: its routes are not the page's address, and it is not
+  the app any context is about. An `open` of a canonical URL makes that app
+  current, beside the open companion.
 
 ## Rules
 
@@ -140,10 +221,14 @@ app's `context`. Its layout and keys are for the roadmap's Phase 5.
 - A frame is never unloaded on purpose while the page lives.
 - The switcher's default shortcut collides with none of the ruled-out keys
   above. A test lists them.
+- The companion's default chord collides with none of the ruled-out keys,
+  nor with the switcher's. The same test lists it (Phase 6).
+- The companion frame never changes the address bar or history, and its
+  messages never move the current app.
 
 ## References
 
-- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md)
+- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the companion)
 - Context: [design/overview.md](../design/overview.md#the-shell)
 - Related: [lodge-client.md](lodge-client.md), [lodge-http.md](lodge-http.md#shell-routes), [app-contract.md](app-contract.md#public-urls)
-- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app)
+- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the companion in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)

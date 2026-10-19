@@ -96,7 +96,10 @@ M4's review found that:
 - **The tailnet is the fence, and the token is the key.** `/mcp/<id>` does
   not ask that the peer be an allowed login or node. An agent on a tagged
   node (a container, a build machine, stomp's) can use a token. lodge logs
-  each request's node and token name.
+  each request's node and token name. Agents off lodge's host stay on this
+  route. An agent on lodge's own host, such as the assistant, uses lodge's
+  local agent socket instead, with the same tokens' rules
+  ([ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
 - **Agents' writes are attributed to the token.** An app records the
   token's name (`Lodge-Token`) as an agent write's author. The client's own
   name from `initialize` is self-chosen, so it goes to the log only.
@@ -153,4 +156,4 @@ what an app must do.
 
 - Shapes: [specs/lodge-http.md](../specs/lodge-http.md#mcpid), [specs/app-contract.md](../specs/app-contract.md#mcp-tokens-and-scope), [design/overview.md](../design/overview.md#agents), [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the session helper), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app)
 - Builds on: [ADR-0003](0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md); frostnotes' M4 draft ADR-0028 (local commit `0586e2b`), with review findings 9 and 11; frostnotes [ADR-0012](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0012-agents-reach-notes-through-mcp.md)
-- Related: [ADR-0005](0005-browsers-sign-in-with-their-tailnet-identity.md); frostnotes [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md) (notes' scope)
+- Related: [ADR-0005](0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md) (agents on lodge's host); frostnotes [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md) (notes' scope)

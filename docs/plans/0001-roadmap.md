@@ -1,7 +1,7 @@
 # Plan: Roadmap
 
 What lodge delivers, in order, from the shared kit to the assistant's
-design. lodge is the platform frostyard/core
+design and lodge's side of it. lodge is the platform frostyard/core
 [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 decided on. frostnotes' M4 ([plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md))
 runs notes inside lodge, and depends on Phases 1 and 2. frostmail's move
@@ -27,7 +27,13 @@ Status (2026-10-19):
 - **Phase 4:** the new-app skill is built. Mail's side is frostmail's
   [plan 0011](https://github.com/frostyard/frostmail/blob/main/docs/plans/0011-m8-mail-in-lodge.md),
   in progress.
-- **Phase 5** has not started.
+- **Phase 5 is designed** (2026-10-19). The assistant is Porter. lodge's
+  side is [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
+  and [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md),
+  both Proposed, with their specs written and marked not built. Porter's
+  own ADRs and design doc are in frostyard/porter, which is not published
+  yet.
+- **Phase 6** has not started.
 
 Nothing changes on the user's machines without the user's go-ahead.
 
@@ -225,23 +231,108 @@ maild becomes lodge's `mail` app: one maild for every client. Implements
 
 ## Phase 5 — The assistant's design
 
-Design only. The assistant is built later, from these documents.
+Design only. The assistant is **Porter**: app `porter`, daemon `porterd`,
+user `frostporter`, in its own repository, frostyard/porter. Its own
+decisions are there: Porter's
+[ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md)
+(a lodge app that owns no data) and its
+[design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md).
+lodge's part is below. Phase 6 builds it, and Porter is built on it.
 
-- **ADRs and a design doc for the assistant,** user `frostassist`:
-  - the companion panel, and how `context` reaches it
-    ([lodge-client.md](../specs/lodge-client.md#context),
-    [shell.md](../specs/shell.md#the-companion-reserved));
-  - its tools through `/mcp/<id>`, with one token per app;
-  - its identities: a machine account, scoped tokens and a tagged node,
-    never the account that owns the data;
-  - what it may do unattended;
-  - the inference aliases it uses.
-- **The companion, or chat panels per app:** decided here. The strawman
-  leaned towards the companion: "chat inside notes" is the assistant opened
-  beside notes, with notes' tools and the open note as context.
+- **The companion**
+  ([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)).
+  Porter's chat panel is lodge's companion, opened beside whatever app is
+  current, with that app's `context`. "Chat inside an app" is that panel,
+  so there are no chat panels per app. The layout and keys are
+  [shell.md](../specs/shell.md#the-companion), and the messages, `ask`
+  among them, [lodge-client.md](../specs/lodge-client.md#the-companion).
+- **Its tools through `/mcp/<id>`, with one token per app,** each scoped by
+  the user. Porter owns none of the user's data. For it, notes' scope gains
+  a folder limit (frostnotes
+  [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md),
+  built in its [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md)),
+  and mail gains tools for calendars, tasks and contacts (frostmail
+  [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md)).
+- **Its identities:** a system user, `frostporter`, and scoped tokens,
+  never the account that owns the data. It reaches `/mcp/<id>` on lodge's
+  local agent socket
+  ([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)),
+  with no tailnet node of its own. Tagged nodes stay the rule for agents
+  off lodge's host
+  ([ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md)).
+- **What it may do unattended** is decided in Porter's docs: its
+  [ADR-0004](https://github.com/frostyard/porter/blob/main/docs/adr/0004-porter-drafts-and-the-owner-sends.md) (Porter
+  drafts, and the owner sends) and
+  [ADR-0005](https://github.com/frostyard/porter/blob/main/docs/adr/0005-memory-and-routines-live-in-the-vault.md) (memory
+  and routines live in the vault, with
+  [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md)). Unattended, it writes only
+  mail drafts and notes in its own folder, and everything else waits for
+  the user's approval. No token of its has mail's `;send` in v1.
+- **Inference:** only through lodge's inference socket, with the aliases
+  that exist, `local` and `smart`, and no alias of its own. Chat asks for
+  `interactive` priority, and its scheduled routines for `background`.
+- **Notifications:** none in v1. Porter is pull, not push: its morning
+  brief waits as a note, so Web Push stays deferred
+  ([open questions](#open-questions)).
+- **The companion, or chat panels per app:** decided, the companion
+  (ADR-0013).
 - **Done when:** the assistant's ADRs and design doc are Proposed, and
-  lodge-client's companion messages and the shell's companion layout are
-  specified.
+  lodge-client's companion messages, the shell's companion layout and the
+  agent socket are specified. **Met on 2026-10-19,** with the specs marked
+  not built until Phase 6.
+
+## Phase 6 — The companion and the agent socket
+
+lodge's side of the assistant, built from Phase 5's design before Porter
+is. Implements [shell.md](../specs/shell.md#the-companion),
+[lodge-client.md](../specs/lodge-client.md#the-companion),
+[app-contract.md](../specs/app-contract.md#the-agent-socket) and
+[lodge-http.md](../specs/lodge-http.md#the-agent-socket)
+([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md),
+[ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)),
+and design/overview.md's [shell](../design/overview.md#the-shell) and
+[agents](../design/overview.md#agents).
+
+- **`client/`:**
+  - the message types: `init`'s `role` and `companion`, `ask` both ways,
+    and the shell's `context` to the companion;
+  - the app half: the companion's chord caught like the switcher's,
+    history kept in memory in the companion's frame, and `lodge.role`,
+    `lodge.companion`, `lodge.ask()`, `on("context")` and `on("ask")`;
+  - the shell half keys its ports by frame rather than by app, so one app
+    can have two frames.
+- **`shell/`:** the companion's frame, the panel from 600 pixels wide and
+  the sheet under it, the button on the rail and the bar, the chord,
+  `lodge:companion`, context forwarding, `ask`, and the panel hidden while
+  the companion app is current.
+- **`internal/apps`:** at most one companion, with the reason in
+  `lodgectl apps` when two manifests claim it.
+- **The agent socket:** the socket and its group, the `agents`
+  configuration, the peer check, and `/mcp/<id>` on it with the tailnet's
+  proxying, log and revocation.
+- **Tokens bound to their route:** `lodgectl token issue --agent`, the
+  agent user in `lodgectl tokens`, and a migration of lodge's database.
+- **`kit/`:** an HTTP client that dials the agent socket, honoring
+  `LODGE_ROOT`.
+- **Packaging:** group `lodge-agents` in `sysusers.d`, with lodge in it,
+  and `agents` in `config.example.json`.
+- **The development build:** `dev/e2e.sh` runs a fake app as the
+  companion, for trying the panel and the sheet in a browser.
+- **Done when:**
+  - on a desktop browser, Ctrl+Shift+\` opens the companion beside notes,
+    and it is told the open note's context;
+  - an app's `ask` opens the companion with its prompt, and the
+    companion's own `route`, `context` and `ask` change nothing;
+  - on the phone, the companion opens as a sheet over notes, and the
+    handle closes it with notes as it was;
+  - a process running as a listed agent's user reads notes through
+    `/run/lodge/agent.sock` with a token issued `--agent`, and revoking the
+    token cuts it off at once;
+  - a token issued for the agent socket is refused on the tailnet, a
+    tailnet token is refused on the agent socket, and a user not listed
+    cannot connect, each with a test that fails it;
+  - Porter, built in frostyard/porter from its
+    [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md), can start on these pieces.
 
 ## Later / ideas
 
@@ -259,8 +350,9 @@ Design only. The assistant is built later, from these documents.
   `worker-src 'none'` ([ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md)).
   The user deferred it on 2026-10-19: no service worker for now. Phones
   get no notifications from lodge until then, and notifications reach only
-  a page that is open. Take it up with Phase 5 if the assistant needs
-  notifications while lodge is closed, with an ADR.
+  a page that is open. Phase 5 left it deferred: Porter is pull, not push,
+  in v1. Take it up, with an ADR, when an app needs notifications while
+  lodge is closed.
 - **The desktop apps.** frostmail's Tauri app could become a lodge client
   over a WebSocket with its node's identity, or give way to the home-screen
   app. frostnotes' Tauri app stays local-first against its own notesd.
@@ -277,5 +369,5 @@ Design only. The assistant is built later, from these documents.
 ## References
 
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
-- Related: frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md) and [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md); frostmail [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)
+- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)

@@ -6,7 +6,7 @@ consumers:
 - lodge, which installs nothing of an app's but proxies to it;
 - `lodge/kit`, the Go side every app daemon builds on;
 - `@frostyard/lodge-client`, the frontend side;
-- each app: `notesd`, `maild`, and later the assistant.
+- each app: `notesd`, `maild`, and later `porterd`, the assistant.
 
 The browser-facing checks are [lodge-http.md](lodge-http.md), and the
 messages between the shell and a frame are
@@ -17,11 +17,18 @@ gateway), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpo
 (MCP), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md)
 (bundles), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md)
 (content), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
-(inference). Where it fits: [design/overview.md](../design/overview.md).
+(inference), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
+(the companion), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+(the agent socket). Where it fits: [design/overview.md](../design/overview.md).
 
 **Status:** contract major **1**, written on 2026-10-18. The app side binds
 when the kit lands (the [roadmap's](../plans/0001-roadmap.md) Phase 1), and
-lodge's side when lodge v1 does (Phase 2).
+lodge's side when lodge v1 does (Phase 2). Two additions were designed on
+2026-10-19 and are not built: what `companion: true` does, and
+[the agent socket](#the-agent-socket). They are marked *(Phase 6)*, and
+bind, additively in major 1, when the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+builds them.
 
 ## Interface
 
@@ -32,10 +39,11 @@ lodge's side when lodge v1 does (Phase 2).
                              ├─ /app/<id>/…        app bundles (from disk), /api and /x/ (proxied)
                              ├─ /mcp/<id>          agents, with scoped tokens
                              ├─ /device/<id>/…     routes the app authenticates itself
-                             └─ inference.sock     local only: OpenAI-compatible, for app daemons
+                             ├─ inference.sock     local only: OpenAI-compatible, for app daemons
+                             └─ agent.sock         local only: /mcp/<id> for agents on this host (Phase 6)
  tsnet node "lodge-content" ─▶ /<id>/…            untrusted bytes, sandboxed
                              │ HTTP/1.1 over Unix sockets; the peer must be lodge
-       maild (user frostmail) · notesd (user frostnotes) · the assistant (user frostassist)
+       maild (user frostmail) · notesd (user frostnotes) · porterd (user frostporter)
 ```
 
 `LODGE` is the `lodge` node's DNS name (`lodge.<tailnet>.ts.net`), and
@@ -49,6 +57,7 @@ lodge's side when lodge v1 does (Phase 2).
 | web bundle | `/usr/share/lodge/apps/<id>/web/`; its scripts and stylesheets under `web/assets/` | root; directories 0755, files 0644 |
 | app socket | `/run/lodge/apps/<id>.sock` | the app's user, group `lodge`, 0660 |
 | inference socket | `/run/lodge/inference.sock` | `lodge`, group `lodge-apps`, 0660 |
+| agent socket *(Phase 6)* | `/run/lodge/agent.sock` | `lodge`, group `lodge-agents`, 0660 |
 | control socket | `/run/lodge/control.sock` | `lodge`, 0600 |
 | the shell's bundle | `/usr/share/lodge/shell/` | root; directories 0755, files 0644 |
 | lodge's configuration | `/etc/lodge/config.json` | root, 0644; no secrets |
@@ -58,7 +67,8 @@ lodge's side when lodge v1 does (Phase 2).
 - **System users.** Every daemon runs as its own system user, declared in
   `sysusers.d`. lodge runs as `lodge`, in group `lodge`. Each app's user
   MUST be in group `lodge-apps` (for inference), and MUST NOT be in group
-  `lodge`.
+  `lodge`. *(Phase 6)* An app that is also an agent on lodge's host, such
+  as Porter, is in group `lodge-agents` too ([below](#the-agent-socket)).
 - **Sockets.** An app's socket SHOULD be created by a systemd socket unit
   (`SocketUser=<user>`, `SocketGroup=lodge`, `SocketMode=0660`) and passed
   to the daemon. The kit accepts a passed socket or creates one itself. A
@@ -88,8 +98,8 @@ lodge's side when lodge v1 does (Phase 2).
 | `contentLinks` | bool | no | the app's content may open links in a new window: lodge's content policy becomes `sandbox allow-popups allow-popups-to-escape-sandbox` ([lodge-http.md](lodge-http.md#content-routes)), and the app's sanitizer drops `form`, `base` and `target` and sets `<base target="_blank">` |
 | `device` | bool | no | the app has routes it authenticates itself |
 | `mcp` | bool | no | the app serves MCP |
-| `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; the assistant: never) |
-| `companion` | bool | no | the app can open as the side panel beside another app |
+| `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; Porter: never) |
+| `companion` | bool | no | the app is the companion: it opens in a panel beside the current app, and is told that app's context ([shell.md](shell.md#the-companion)). At most one app *(Phase 6)* |
 
 A missing bool is `false`. Notes' manifest:
 
@@ -107,7 +117,9 @@ A missing bool is `false`. Notes' manifest:
   or its icon is missing. lodge logs why, the rail shows it, and every route
   of that app answers 503. The other apps are unaffected.
 - When two manifests claim one `user`, both are disabled. When two claim one
-  `key`, both lose the key and stay enabled.
+  `key`, both lose the key and stay enabled. *(Phase 6)* When two set
+  `companion`, neither is the companion, and both stay enabled. In each
+  case `lodgectl apps` says why.
 
 ### Public URLs
 
@@ -233,7 +245,9 @@ client sent, then sets these:
 - **Issuing.** lodge issues and checks tokens:
   `lodgectl token issue NAME --app ID --scope SCOPE`. A token is `lgm_`
   followed by 43 base64url characters, kept as its SHA-256. It works for one
-  app only ([lodge-http.md](lodge-http.md#mcpid)).
+  app only ([lodge-http.md](lodge-http.md#mcpid)). *(Phase 6)* With
+  `--agent USER`, it works only on [the agent socket](#the-agent-socket),
+  from that user. Without it, it works only on the tailnet.
 - **What reaches the app:** `Lodge-Caller: agent`, `Lodge-Token` and
   `Lodge-Scope`. lodge removes `Authorization`, so the app never sees the
   token.
@@ -257,6 +271,32 @@ client sent, then sets these:
 - **Revocation is lodge's.** lodge refuses a revoked token, and closes
   every request and stream it is proxying for it. Apps keep no list of
   tokens.
+
+### The agent socket
+
+**Designed, not built** (Phase 6). For an agent on lodge's own host, such
+as Porter, the assistant: an app daemon that owns no data of the user's,
+and reads and writes the other apps only through their MCP
+([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
+
+- **Where.** `/run/lodge/agent.sock`, owner `lodge`, group `lodge-agents`,
+  0660, or `DIR/run/lodge/agent.sock` under `LODGE_ROOT`.
+- **Who.** The agent's system user MUST be in group `lodge-agents`, and be
+  named in the `agents` member of lodge's configuration
+  ([lodge-http.md](lodge-http.md#the-agent-socket)). lodge closes any other
+  peer's connection before reading from it.
+- **What.** HTTP/1.1, and Streamable HTTP MCP at `/mcp/<id>`, as at
+  `https://LODGE/mcp/<id>`: `POST`, `GET` and `DELETE`, with
+  `Authorization: Bearer <token>` and no `Origin`. Every other path is 404.
+- **Its tokens.** One per app it uses, each issued for it with
+  `lodgectl token issue NAME --app ID --scope SCOPE --agent USER`, and kept
+  in the agent's own state, readable only by its user.
+- **What the called app sees is the same** as from the tailnet:
+  `Lodge-Caller: agent`, `Lodge-Token` and `Lodge-Scope`. The app's scope
+  enforcement, session binding and attribution apply unchanged. An app
+  cannot tell the two routes apart, and MUST NOT try.
+- **The kit dials it,** with an HTTP client for the socket that honors
+  `LODGE_ROOT`, so the agent needs no Tailscale.
 
 ### Inference
 
@@ -315,10 +355,15 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 - The shell sends `init {contract, contentOrigin, shortcut, theme}` when
   the frame loads, and lodge-client's `contentURL(path)` builds content
-  URLs.
+  URLs. *(Phase 6)* `init` adds `role` and `companion`, and an app may send
+  `ask` for its "Ask about this"
+  ([lodge-client.md](lodge-client.md#the-companion)).
 - The app reports its route, and never calls `history.pushState` in a
   frame.
-- The app MUST NOT bind the switcher's shortcut.
+- The app MUST NOT bind the switcher's shortcut, nor *(Phase 6)* the
+  companion's chord.
+- *(Phase 6)* The app works in a frame 400 CSS pixels narrower than the
+  window, since the companion's panel may be open beside it.
 - The app prefixes its local-storage keys with `<id>:`.
 
 [lodge-client.md](lodge-client.md) pins the messages. For an app with
@@ -345,8 +390,9 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
    `GET /health`. That is why the `Lodge-*` headers can be trusted. lodge
    deletes every `Lodge-*` header a client sends.
 3. Every app runs as its own system user, and no app can read another's
-   state. The assistant reaches other apps only through `/mcp/<id>`, with a
-   token.
+   state. Agents, the assistant included, reach other apps only through
+   `/mcp/<id>`, with a token: on the tailnet, or *(Phase 6)* on lodge's
+   agent socket.
 4. lodge serves every app's web files itself, from root-owned directories.
    No daemon serves code to the lodge origin.
 5. Untrusted bytes come only from `lodge-content`, under a `sandbox`
@@ -372,7 +418,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [lodge-http.md](lodge-http.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
-- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference)
+- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)

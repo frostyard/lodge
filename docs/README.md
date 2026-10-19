@@ -30,22 +30,24 @@ frostyard/core's
 - [0010 — Untrusted bytes come from a second node](adr/0010-untrusted-bytes-come-from-a-second-node.md)
 - [0011 — A shared inference layer routes apps to models](adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
 - [0012 — The kit shares the RPC runtime, not the generator](adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)
+- [0013 — The companion opens beside the current app](adr/0013-the-companion-opens-beside-the-current-app.md)
+- [0014 — Agents on lodge's host use a local agent socket](adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
 
 ### Design
 
-- [Overview](design/overview.md) — the nodes, the gateway, the shell, the apps behind it, inference, users and paths, operations
+- [Overview](design/overview.md) — the nodes, the gateway, the shell and its companion, the apps behind it, agents, inference, users and paths, operations
 
 ### Specs
 
-- [App contract](specs/app-contract.md) — what an app installs and serves, and what lodge provides: layout, manifest, URLs, caller headers, inference, MCP tokens, rules
-- [lodge's HTTP surface](specs/lodge-http.md) — listeners, routes by kind, browser, content, agent and device checks, headers, sessions, tokens and allow-lists, `lodgectl`
-- [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, and the library's API
-- [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history
+- [App contract](specs/app-contract.md) — what an app installs and serves, and what lodge provides: layout, manifest, URLs, caller headers, inference, MCP tokens, the agent socket, rules
+- [lodge's HTTP surface](specs/lodge-http.md) — listeners, routes by kind, browser, content, agent and device checks, the agent socket, headers, sessions, tokens and allow-lists, `lodgectl`
+- [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, the companion's messages, and the library's API
+- [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history, the companion
 - [The inference layer](specs/inference.md) — lodge's side of the inference socket: the caller, providers, aliases and allow-lists, the queue, credentials, availability and the usage log
 
 ### Plans
 
-- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant
+- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant's design, the companion and the agent socket
 
 ## Conventions
 

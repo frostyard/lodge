@@ -12,12 +12,19 @@ Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md)
 (frames, canonical URLs, the shortcut),
 [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md) (the
 content origin), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md)
-(storage on one origin). Where it fits:
+(storage on one origin),
+[ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the
+companion). Where it fits:
 [design/overview.md](../design/overview.md#the-shell).
 
 **Status:** contract major **1**, written on 2026-10-18. It binds when the
 library lands in the [roadmap's](../plans/0001-roadmap.md) Phase 1, and
-the shell's half in Phase 2.
+the shell's half in Phase 2. [The companion's](#the-companion) additions
+(`ask`, the shell's `context` to the companion, and `init`'s `role` and
+`companion`) were designed on 2026-10-19 and are not built: they bind,
+additively in major 1, when the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+builds them. The rows marked *(Phase 6)* below are those.
 
 ## Interface
 
@@ -47,15 +54,17 @@ the shell's half in Phase 2.
 | Message | Direction | Fields | Meaning |
 | --- | --- | --- | --- |
 | `ready` | app → shell | `contract` (int) | the app's lodge-client is listening |
-| `init` | shell → app | `contract` (int), `contentOrigin` (string or null), `shortcut` (string), `theme` (`"light"` or `"dark"`) | the answer to `ready`, on load |
+| `init` | shell → app | `contract` (int), `contentOrigin` (string or null), `shortcut` (string), `theme` (`"light"` or `"dark"`); *(Phase 6)* `role` (`"app"` or `"companion"`), `companion` (string or null) | the answer to `ready`, on load |
 | `route` | app → shell | `path` (string), `title` (string), `replace` (bool, optional) | the app's route changed; the address bar and history follow it |
 | `context` | app → shell | `kind` (string or null), `ref` (string), `title` (string) | what is on screen, for the companion: `{kind: "note", ref: "notes/1/Projects/Plan.md", title: "Plan"}` |
 | `open` | app → shell | `url` (string) | open a URL, possibly in another app |
-| `shortcut` | app → shell | `key` (string) | the switcher's shortcut was pressed inside the frame, or the app asked for the switcher |
+| `shortcut` | app → shell | `key` (string) | the switcher's shortcut, or *(Phase 6)* the companion's, was pressed inside the frame, or the app asked for the switcher |
+| `ask` | app → shell | `prompt` (string) | *(Phase 6)* open the companion with a prompt about what is on screen: an app's "Ask about this" |
 | `navigate` | shell → app | `route` (string) | go to this route: a deep link, or history, into an app already loaded |
 | `visible` | shell → app | `visible` (bool) | the frame was shown or hidden |
 | `theme` | shell → app | `scheme` (`"light"` or `"dark"`) | the theme changed |
-| `context` | shell → companion | `app` (string), `kind`, `ref`, `title` | the current app's context, for a frame opened as the companion (reserved for the roadmap's Phase 5) |
+| `context` | shell → companion | `app` (string), `kind`, `ref`, `title` | *(Phase 6)* the current app's context, for the frame opened as the companion |
+| `ask` | shell → companion | `app` (string), `prompt` (string) | *(Phase 6)* the current app's `ask`, after its `context` |
 
 ### Start
 
@@ -70,6 +79,10 @@ the shell's half in Phase 2.
    - `shortcut` is the switcher's chord, by default `Ctrl+Backquote`
      ([shell.md](shell.md#the-switcher)).
    - `theme` is the current scheme.
+   - *(Phase 6)* `role` is `"companion"` in the frame opened as the
+     companion, else `"app"`. `companion` is the companion's chord, by
+     default `Ctrl+Shift+Backquote`, or `null` when no app is the companion
+     ([the companion](#the-companion)).
 
    `connectLodge()` resolves on `init`.
 4. If `ready.contract` is not a major the shell speaks, the shell sends no
@@ -127,7 +140,8 @@ handler.
   open. `ref` is at most 1,024 characters, in a form each app defines, and
   `title` is at most 200.
 - The shell keeps the latest per app. It forwards the current app's
-  context to a frame opened as the companion.
+  context to the frame opened as the companion
+  ([the companion](#the-companion)).
 
 ### The shortcut
 
@@ -142,11 +156,50 @@ handler.
   chord}`. The app never sees the event.
 - An app MUST NOT bind the chord. `lodge.openSwitcher()` posts the same
   message, for an app's own menu or touch button.
+- *(Phase 6)* lodge-client catches `init.companion`'s chord the same way,
+  and posts `shortcut {key: chord}` with it. The shell tells the two apart
+  by `key`. An app MUST NOT bind it either.
+
+### The companion
+
+**Designed, not built** (Phase 6). The companion is the one app whose
+manifest sets `companion: true`, opened in a frame of its own beside the
+current app ([shell.md](shell.md#the-companion)).
+
+- **Roles.** `init.role` is `"companion"` in that frame, and `"app"` in
+  every other. One app can run in both at once, the companion and the app
+  opened in full: two documents, each with its own `/api` session.
+- **`ask`, app → shell.** `prompt` is 1 to 4,000 characters, or the message
+  is dropped. An app sends it from the handler of the input that asked,
+  after reporting the `context` it is about. The shell takes it only from
+  the current app's frame, at most once a second, and only when there is a
+  companion ([shell.md](shell.md#the-companions-messages)). An app SHOULD
+  offer "Ask about this" only when `init.companion` is not `null`.
+- **`context`, shell → companion.** `app` is the current app's ID, and
+  `kind`, `ref` and `title` are its latest `context`. When it reported none,
+  `kind` is `null`, and `ref` and `title` are empty. The shell sends it
+  while the companion is open: when it opens, when the current app reports
+  a new context, and when another app becomes current.
+- **`ask`, shell → companion.** `app` and `prompt`, sent after the `context`
+  they are about. What the companion does with the prompt, such as filling
+  its composer or sending it, is its own choice.
+- **In the companion's frame:**
+  - the shell takes `ready`, `open` and `shortcut`, and ignores `route`,
+    `context` and `ask`;
+  - the shell sends no `navigate`, so `lodge.history` keeps the frame's
+    routes in memory: `push` and `replace` move it, and post nothing;
+  - `visible` says whether the companion is open.
+- **The context is a pointer,** never content. The companion reads what
+  `ref` points at with its own credentials, through that app's
+  `/mcp/<id>` and its own token
+  ([app-contract.md](app-contract.md#the-agent-socket)), so it sees only
+  what its scopes allow. No frame is sent another frame's content.
 
 ### Visibility and theme
 
 - `visible` says whether this frame is the one shown, or the open
-  companion. A hidden frame stays loaded and keeps its sessions. An app
+  companion. A current app's frame stays visible while the companion is
+  open beside it or over it. A hidden frame stays loaded and keeps its sessions. An app
   MAY pause work while hidden.
 - **Keepalive follows the page, not the frame.** An app's socket traffic
   that keeps its session alive follows `document.visibilityState`
@@ -177,6 +230,13 @@ lodge.on("navigate", ({ route }) => {});
 lodge.on("visible", ({ visible }) => {});
 lodge.on("theme", ({ scheme }) => {});
 lodge.history;                        // location, push, replace, listen
+
+// Phase 6: the companion
+lodge.role;                           // "app" | "companion"
+lodge.companion;                      // "Ctrl+Shift+Backquote", or null without a companion
+lodge.ask("What is due here?");       // opens the companion with a prompt
+lodge.on("context", ({ app, kind, ref, title }) => {}); // in the companion
+lodge.on("ask", ({ app, prompt }) => {});               // in the companion
 ```
 
 - **Outside a frame,** where `window.parent === window`, `connectLodge()`
@@ -200,7 +260,9 @@ lodge.history;                        // location, push, replace, listen
   the rest.
 - No message is evaluated, or inserted as HTML.
 - An app in a frame never changes the top window's history or location.
-- The switcher's shortcut never reaches an app.
+- The switcher's shortcut never reaches an app, nor, from Phase 6, the
+  companion's chord.
+- A frame sends a context as a pointer, never another frame's content.
 - A contract-major mismatch stops one frame's messages, not the shell.
 - Unknown messages are dropped, so a major grows by addition only.
 
@@ -209,11 +271,11 @@ lodge.history;                        // location, push, replace, listen
 | Artifact | Derivation |
 | --- | --- |
 | `client/src/messages.ts` | the [messages](#messages) table, as TypeScript types |
-| the shell's frame handling (`shell/`) | [Start](#start), [routes](#routes), [`open`](#open) and [the shortcut](#the-shortcut) |
+| the shell's frame handling (`shell/`) | [Start](#start), [routes](#routes), [`open`](#open), [the shortcut](#the-shortcut) and, from Phase 6, [the companion](#the-companion) |
 
 ## References
 
-- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md) (keepalive)
+- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md) (keepalive), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the companion)
 - Context: [design/overview.md](../design/overview.md#the-shell)
 - Related: [shell.md](shell.md), [app-contract.md](app-contract.md#the-frontend-frostyardlodge-client), [lodge-http.md](lodge-http.md#headers)
-- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the library), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (the shell's half)
+- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the library), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (the shell's half), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion)

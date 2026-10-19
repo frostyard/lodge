@@ -18,7 +18,11 @@ shell),
 [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md)
 (content),
 [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
-(inference). The platform decision is frostyard/core's
+(inference),
+[ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the
+companion),
+[ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+(the agent socket). The platform decision is frostyard/core's
 [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md).
 Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/lodge-http.md](../specs/lodge-http.md),
@@ -34,6 +38,10 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
   user's phone and Chrome's PDF viewer are not done, and the Copilot and
   Codex providers are not built.
+- The assistant, Porter, is designed (Phase 5). lodge's side of it, the
+  companion and the agent socket, is not built: the roadmap's
+  [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+  builds it. What this document says of them is marked *(Phase 6)*.
 
 This document is rewritten as each phase lands.
 
@@ -61,9 +69,10 @@ tells the app in headers, and moves the bytes.
    │    └─ CONTENT/<id>/…               sandboxed bytes ────┘
    ├─ internal/inference ◀── /run/lodge/inference.sock ◀── app daemons (peer uid → app)
    │       └─▶ the local model (MODEL_HOST), later Copilot and Codex
+   ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid; Phase 6)
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
 
- notesd (user frostnotes) · maild (user frostmail) · the assistant (user frostassist)
+ notesd (user frostnotes) · maild (user frostmail) · porterd (user frostporter)
 ```
 
 **One host per lodge.** lodge and every app it hosts share one host,
@@ -78,15 +87,18 @@ works from behind it.
 
 | Process | User | Groups | Holds |
 | --- | --- | --- | --- |
-| lodge | `lodge` | `lodge` | `/var/lib/lodge/`: tsnet state, allow-lists, tokens, provider credentials |
+| lodge | `lodge` | `lodge`, `lodge-apps`, *(Phase 6)* `lodge-agents` | `/var/lib/lodge/`: tsnet state, allow-lists, tokens, provider credentials |
 | notesd | `frostnotes` | `lodge-apps` | its vaults' state; its socket is `frostnotes:lodge` 0660 |
 | maild | `frostmail` | `lodge-apps` | mail, its accounts' credentials |
-| the assistant | `frostassist` | `lodge-apps` | its own state, and MCP tokens for the apps it uses |
+| porterd, the assistant | `frostporter` | `lodge-apps`, *(Phase 6)* `lodge-agents` | its own state (its thread), and an MCP token for each app it uses |
 
 - lodge can open every app's socket (group `lodge`), and nothing else of
   theirs.
 - An app can open the inference socket (group `lodge-apps`), and nothing of
   lodge's or another app's.
+- *(Phase 6)* An agent on lodge's host can open the agent socket (group
+  `lodge-agents`), and lodge serves it only when lodge's configuration
+  names its user.
 - systemd socket units create the app sockets
   ([app-contract.md](../specs/app-contract.md#install-layout)).
 - An app's private socket, for its CLI and desktop bridge, is its own
@@ -172,6 +184,25 @@ each to the token name and scope that opened it. `lodge/kit` provides the
 session helper. Revoking a token closes every stream lodge is proxying for
 it.
 
+**Agents on lodge's host** *(Phase 6)* use the agent socket,
+`/run/lodge/agent.sock`, rather than the tailnet
+([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md);
+[lodge-http.md](../specs/lodge-http.md#the-agent-socket)). Porter, the
+assistant, is the first: an app that owns none of the user's data, and
+reaches notes and mail only through their MCP, with one token per app.
+
+- lodge admits a connection only when its peer's uid is one of the agents
+  that `/etc/lodge/config.json` names. That uid stands in for `Host`,
+  WhoIs and the address check.
+- The socket serves `/mcp/<id>` alone, with the tailnet's token check,
+  scope, sessions, revocation and log, and the agent's user logged in
+  place of a node.
+- A token issued with `--agent USER` works only there, from that user, and
+  any other token only on the tailnet. A token copied off the host is
+  useless, and one agent cannot use another's.
+- So an agent on lodge's host needs no tsnet and no node, and its calls
+  never leave the host. Agents elsewhere stay on the tailnet.
+
 ### Untrusted content
 
 `lodge-content` serves `https://CONTENT/<id>/<path>` from the app's
@@ -194,6 +225,22 @@ served for `/`, `/<id>` and `/<id>/<route>`.
 - It talks to frames only through lodge-client
   ([lodge-client.md](../specs/lodge-client.md)), keeps the address bar on
   canonical URLs, and owns history.
+
+**The companion** *(Phase 6)* is the one app whose manifest sets
+`companion: true`: Porter, whose chat is its main surface
+([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md);
+[shell.md](../specs/shell.md#the-companion)).
+
+- It opens in a frame of its own beside the current app's: a panel 400
+  pixels wide from 600 pixels, or a full-height sheet under that, over an
+  app that stays loaded.
+- A button on the rail and the bar, and Ctrl+Shift+\`, toggle it. The
+  switcher and its `key` open the same app in full, and the panel hides
+  while that is current.
+- The shell forwards it the current app's `context`, a pointer it reads
+  through MCP with its own tokens. An app's "Ask about this" sends `ask`,
+  which opens the companion with a prompt
+  ([lodge-client.md](../specs/lodge-client.md#the-companion)).
 
 One web manifest, `/lodge/manifest.webmanifest`, makes lodge a single
 home-screen app. No service worker is registered.
@@ -312,6 +359,11 @@ Apps pin both to a published lodge commit or release.
   it. Its sessions close within a minute, or at once.
 - **A token in the wrong hands:** `lodgectl token revoke NAME`. Its streams
   close at once. Its writes carry its name in each app's history.
+- **Adding an agent on lodge's host** *(Phase 6)*: put its system user in
+  group `lodge-agents`, add the user to `agents` in
+  `/etc/lodge/config.json`, run `sudo lodgectl reload`, and issue its
+  tokens with `sudo lodgectl token issue NAME --app ID --scope SCOPE
+  --agent USER`.
 - **Back up** `/var/lib/lodge/` with the apps' state. Restoring it keeps
   the nodes' names. Losing it means new auth keys, and the same names only
   if the old nodes are first removed from the tailnet.
@@ -329,7 +381,7 @@ Apps pin both to a published lodge commit or release.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
-- Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant)
-- Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md), [specs/inference.md](../specs/inference.md)
+- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)
+- Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md); Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) and [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md)
