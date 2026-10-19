@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build fmt lint lint-version-check test race cross verify check ci clean
+.PHONY: help build e2e-build fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -60,7 +60,7 @@ cross: ## Build every package for linux/amd64 and linux/arm64
 
 # The gate triad (frostyard/core ADR-0043, ADR-0044). verify is credential-free
 # and leaves a clean checkout clean; check formats first; ci adds the race
-# detector and the cross-builds.
+# detector, the cross-builds and the frontend checks.
 verify: ## Tidy, vet, format, lint and tests
 	$(call IN_MODULES,go mod tidy -diff)
 	$(call IN_MODULES,go vet ./...)
@@ -71,7 +71,19 @@ verify: ## Tidy, vet, format, lint and tests
 
 check: fmt verify ## Format, then verify (the developer gate)
 
-ci: verify race cross ## verify plus the race detector and cross-builds
+ci: verify race cross client-check ## verify plus the race detector, cross-builds and client/ (nsl)
 
 clean: ## Remove build output
 	rm -rf build dist coverage.out coverage.html
+
+# The frontends build and test in the nsl machine (dev/nsl/provision.sh),
+# never on the host; CI, whose runner has Node, runs the same targets with
+# IN_NSL='sh -c'.
+NSL_MACHINE ?= lodge
+IN_NSL ?= nsl run -m $(NSL_MACHINE) sh -lc
+
+client-check: ## Lint (Biome), typecheck and test client/ (nsl)
+	$(IN_NSL) 'cd client && pnpm install --frozen-lockfile --silent && pnpm run check'
+
+client-fmt: ## Format client/ and organize its imports with Biome (nsl)
+	$(IN_NSL) 'cd client && pnpm install --frozen-lockfile --silent && pnpm run fmt'
