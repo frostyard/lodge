@@ -73,8 +73,12 @@ type Server struct {
 }
 
 // Serve serves the socket until ctx ends, then closes every connection,
-// waits for the API sessions to return, and returns nil.
+// waits for the API sessions to return, and returns nil. Off Linux it
+// returns ErrUnsupported at once.
 func (s *Server) Serve(ctx context.Context, ln *Listener) error {
+	if !supported {
+		return ErrUnsupported
+	}
 	if s.Health == nil || s.API == nil {
 		return errors.New("lodgeapp: Server needs Health and API")
 	}
