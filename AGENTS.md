@@ -70,6 +70,8 @@ Everything in the map is built.
     private socket), generic over each app's generated types, and
     `kit/rpctest`, its test harness
     ([ADR-0012](docs/adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
+  - `kit/inference`: an app daemon's client of the inference socket
+    (models, chat completions and responses, streamed or not).
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
   `shell/`: the shell page's UI, on the client's shell half. Both are
   TypeScript, built in an nsl machine.

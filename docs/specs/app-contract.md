@@ -268,6 +268,13 @@ app daemons only.
 - **The caller** is the socket peer's uid. lodge maps it to a user name and
   that user to the manifest whose `user` it is. A uid that matches no
   enabled app is refused (403). No header can name another app.
+- **Under the development root** (`--root`, `LODGE_ROOT`), every app runs
+  as the developer, so an app names itself in `Lodge-App: <id>`. lodge
+  reads the header there only, from a peer whose uid is its own, and a
+  release lodge without `--root` ignores it.
+- **The kit's client,** `kit/inference`, calls the socket under
+  `LODGE_ROOT`. It sends `Lodge-Priority`, and `Lodge-App` under the root
+  only, and no `Authorization`.
 - **Aliases.** A request's `model` MUST name an alias: `local`, `fast` or
   `smart` in contract 1. lodge replaces it with the provider's model. An
   alias that is unknown, or not allowed for this app, answers 404 with
