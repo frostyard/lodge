@@ -144,14 +144,14 @@ type browserRoute struct {
 // Browser checks).
 func (g *Gateway) browserChecks(r *http.Request, who peer.WhoIs, rt browserRoute) (peer.Peer, *denial) {
 	// 1. Host.
-	if !g.cfg.Names.lodgeHost(r.Host) {
+	if !g.Names().lodgeHost(r.Host) {
 		return peer.Peer{}, deny(http.StatusForbidden, "this is not lodge's address")
 	}
 	upgrade := isWebSocket(r)
 	// 2. Origin: exact when present, and required on an upgrade.
 	origins := r.Header.Values("Origin")
 	switch {
-	case len(origins) > 1 || (len(origins) == 1 && origins[0] != g.cfg.Names.LodgeOrigin):
+	case len(origins) > 1 || (len(origins) == 1 && origins[0] != g.Names().LodgeOrigin):
 		return peer.Peer{}, deny(http.StatusForbidden, "requests from another origin are refused")
 	case len(origins) == 0 && upgrade:
 		return peer.Peer{}, deny(http.StatusForbidden, "a WebSocket needs lodge's Origin")

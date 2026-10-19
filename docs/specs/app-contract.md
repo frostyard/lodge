@@ -24,12 +24,9 @@ gateway), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpo
 **Status:** contract major **1**, written on 2026-10-18. The app side binds
 when the kit lands (the [roadmap's](../plans/0001-roadmap.md) Phase 1), and
 lodge's side when lodge v1 does (Phase 2). Two additions date from
-2026-10-19, in the roadmap's
+2026-10-19, built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket):
-what `companion: true` does, which is built, and
-[the agent socket](#the-agent-socket), which is designed but not built.
-That is marked *(Phase 6)*, and binds, additively in major 1, when Phase 6
-builds it.
+what `companion: true` does, and [the agent socket](#the-agent-socket).
 
 ## Interface
 
@@ -41,7 +38,7 @@ builds it.
                              ├─ /mcp/<id>          agents, with scoped tokens
                              ├─ /device/<id>/…     routes the app authenticates itself
                              ├─ inference.sock     local only: OpenAI-compatible, for app daemons
-                             └─ agent.sock         local only: /mcp/<id> for agents on this host (Phase 6)
+                             └─ agent.sock         local only: /mcp/<id> for agents on this host
  tsnet node "lodge-content" ─▶ /<id>/…            untrusted bytes, sandboxed
                              │ HTTP/1.1 over Unix sockets; the peer must be lodge
        maild (user frostmail) · notesd (user frostnotes) · porterd (user frostporter)
@@ -58,7 +55,7 @@ builds it.
 | web bundle | `/usr/share/lodge/apps/<id>/web/`; its scripts and stylesheets under `web/assets/` | root; directories 0755, files 0644 |
 | app socket | `/run/lodge/apps/<id>.sock` | the app's user, group `lodge`, 0660 |
 | inference socket | `/run/lodge/inference.sock` | `lodge`, group `lodge-apps`, 0660 |
-| agent socket *(Phase 6)* | `/run/lodge/agent.sock` | `lodge`, group `lodge-agents`, 0660 |
+| agent socket | `/run/lodge/agent.sock` | `lodge`, group `lodge-agents`, 0660 |
 | control socket | `/run/lodge/control.sock` | `lodge`, 0600 |
 | the shell's bundle | `/usr/share/lodge/shell/` | root; directories 0755, files 0644 |
 | lodge's configuration | `/etc/lodge/config.json` | root, 0644; no secrets |
@@ -68,7 +65,7 @@ builds it.
 - **System users.** Every daemon runs as its own system user, declared in
   `sysusers.d`. lodge runs as `lodge`, in group `lodge`. Each app's user
   MUST be in group `lodge-apps` (for inference), and MUST NOT be in group
-  `lodge`. *(Phase 6)* An app that is also an agent on lodge's host, such
+  `lodge`. An app that is also an agent on lodge's host, such
   as Porter, is in group `lodge-agents` too ([below](#the-agent-socket)).
 - **Sockets.** An app's socket SHOULD be created by a systemd socket unit
   (`SocketUser=<user>`, `SocketGroup=lodge`, `SocketMode=0660`) and passed
@@ -246,7 +243,7 @@ client sent, then sets these:
 - **Issuing.** lodge issues and checks tokens:
   `lodgectl token issue NAME --app ID --scope SCOPE`. A token is `lgm_`
   followed by 43 base64url characters, kept as its SHA-256. It works for one
-  app only ([lodge-http.md](lodge-http.md#mcpid)). *(Phase 6)* With
+  app only ([lodge-http.md](lodge-http.md#mcpid)). With
   `--agent USER`, it works only on [the agent socket](#the-agent-socket),
   from that user. Without it, it works only on the tailnet.
 - **What reaches the app:** `Lodge-Caller: agent`, `Lodge-Token` and
@@ -275,7 +272,7 @@ client sent, then sets these:
 
 ### The agent socket
 
-**Designed, not built** (Phase 6). For an agent on lodge's own host, such
+For an agent on lodge's own host, such
 as Porter, the assistant: an app daemon that owns no data of the user's,
 and reads and writes the other apps only through their MCP
 ([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
@@ -296,8 +293,10 @@ and reads and writes the other apps only through their MCP
   `Lodge-Caller: agent`, `Lodge-Token` and `Lodge-Scope`. The app's scope
   enforcement, session binding and attribution apply unchanged. An app
   cannot tell the two routes apart, and MUST NOT try.
-- **The kit dials it,** with an HTTP client for the socket that honors
-  `LODGE_ROOT`, so the agent needs no Tailscale.
+- **The kit dials it:** `lodgeapp.Env.AgentClient(token)` is an HTTP
+  client of the socket, under `LODGE_ROOT` when that is set, that sends
+  the token as its bearer, for `lodgeapp.AgentURL(id)`. The agent needs no
+  Tailscale.
 
 ### Inference
 
@@ -392,7 +391,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
    deletes every `Lodge-*` header a client sends.
 3. Every app runs as its own system user, and no app can read another's
    state. Agents, the assistant included, reach other apps only through
-   `/mcp/<id>`, with a token: on the tailnet, or *(Phase 6)* on lodge's
+   `/mcp/<id>`, with a token: on the tailnet, or on lodge's
    agent socket.
 4. lodge serves every app's web files itself, from root-owned directories.
    No daemon serves code to the lodge origin.

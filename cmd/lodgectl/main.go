@@ -35,14 +35,16 @@ var (
 
 const usage = `usage: lodgectl [--root DIR] [--json] COMMAND
 
-  status                                   lodge's nodes, apps and sessions
+  status                                   lodge's nodes, apps, sessions, providers and agent socket
   apps                                     each app's manifest, state and reason
-  reload                                   reread the manifests
+  reload                                   reread the manifests and the configuration
   logins | nodes                           the allowed logins or nodes
   allow login LOGIN | allow node NODE      allow one (NODE: an ID, or a peer's name)
   disallow login LOGIN | disallow node NODE  remove one, closing its sessions
   tokens                                   the MCP tokens
-  token issue NAME --app ID --scope SCOPE  print a new token on stdout, once
+  token issue NAME --app ID --scope SCOPE [--agent USER]
+                                           print a new token on stdout, once; with
+                                           --agent, for the agent socket and USER only
   token revoke NAME                        revoke one, closing its streams
   sessions                                 the live sessions
   session end ID                           close one
@@ -167,7 +169,7 @@ func parse(args []string, stdin io.Reader) (command, error) {
 		if len(args) == 3 && args[1] == "revoke" {
 			return command{method: "lodge.revokeToken", params: map[string]string{"name": args[2]}, show: showDone("revoked " + args[2])}, nil
 		}
-		return command{}, errors.New("token issue NAME --app ID --scope SCOPE, or token revoke NAME")
+		return command{}, errors.New("token issue NAME --app ID --scope SCOPE [--agent USER], or token revoke NAME")
 	case "session":
 		if len(args) == 3 && args[1] == "end" {
 			return command{method: "lodge.endSession", params: map[string]string{"id": args[2]}, show: showDone("ended " + args[2])}, nil
@@ -200,6 +202,8 @@ func parseIssue(args []string) (command, error) {
 	fs.SetOutput(io.Discard)
 	app := fs.String("app", "", "")
 	scope := fs.String("scope", "", "")
+	agent := fs.String("agent", "", "")
+	const want = "token issue NAME --app ID --scope SCOPE [--agent USER]"
 	var name string
 	// The name may come before or after the flags.
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -211,12 +215,16 @@ func parseIssue(args []string) (command, error) {
 	if name == "" && fs.NArg() == 1 {
 		name = fs.Arg(0)
 	} else if fs.NArg() != 0 {
-		return command{}, errors.New("token issue NAME --app ID --scope SCOPE")
+		return command{}, errors.New(want)
 	}
 	if name == "" || *app == "" || *scope == "" {
-		return command{}, errors.New("token issue NAME --app ID --scope SCOPE")
+		return command{}, errors.New(want)
 	}
-	return command{method: "lodge.issueToken", params: map[string]string{"name": name, "app": *app, "scope": *scope}, show: showIssued}, nil
+	params := map[string]string{"name": name, "app": *app, "scope": *scope}
+	if *agent != "" {
+		params["agent"] = *agent
+	}
+	return command{method: "lodge.issueToken", params: params, show: showIssued}, nil
 }
 
 func parseUsage(args []string) (command, error) {
@@ -260,13 +268,19 @@ func showDone(what string) func(*out, []byte) error {
 }
 
 // showIssued prints the token alone on stdout, and on stderr how to add it
-// to Claude Code, never with --scope project.
+// to Claude Code, never with --scope project, or, for an agent, where its
+// agent uses it.
 func showIssued(o *out, raw []byte) error {
 	var is control.Issued
 	if err := json.Unmarshal(raw, &is); err != nil {
 		return err
 	}
 	fmt.Fprintln(o.stdout, is.Token)
+	if is.Agent != "" {
+		fmt.Fprintf(o.stderr, "Shown once. It works only on the agent socket, %s, from user %s: send it to %s as \"Authorization: Bearer <token>\".\n",
+			is.Socket, is.Agent, is.URL)
+		return nil
+	}
 	fmt.Fprintf(o.stderr, "Shown once. Add it to Claude Code with:\n  claude mcp add --transport http %s %s --header \"Authorization: Bearer <token>\"\n", is.App, is.URL)
 	return nil
 }
@@ -315,6 +329,17 @@ func showStatus(o *out, raw []byte) error {
 	}
 	if st.InferenceRefused != "" {
 		rows = append(rows, []string{"inference", "config", "refused", st.InferenceRefused})
+	}
+	if as := st.AgentSocket; as != nil {
+		state := map[bool]string{true: "listening", false: "down"}[as.Listening]
+		detail := as.Path + ", agents: " + cmp(strings.Join(as.Agents, " "), "none")
+		if len(as.Skipped) > 0 {
+			detail += "; no such user: " + strings.Join(as.Skipped, " ")
+		}
+		rows = append(rows, []string{"agents", "socket", state, detail})
+		if as.Refused != "" {
+			rows = append(rows, []string{"agents", "config", "refused", as.Refused})
+		}
 	}
 	rows = append(rows, []string{"sessions", fmt.Sprint(st.Sessions), "", ""})
 	table(o.stdout, "KIND\tNAME\tSTATE\tDETAIL", rows)
@@ -393,9 +418,9 @@ func showTokens(o *out, raw []byte) error {
 	}
 	var rows [][]string
 	for _, t := range list {
-		rows = append(rows, []string{t.Name, t.App, t.Scope, when(t.Created), when(t.LastUsed), when(t.Revoked)})
+		rows = append(rows, []string{t.Name, t.App, t.Scope, cmp(t.Agent, "-"), when(t.Created), when(t.LastUsed), when(t.Revoked)})
 	}
-	table(o.stdout, "NAME\tAPP\tSCOPE\tCREATED\tLAST USE\tREVOKED", rows)
+	table(o.stdout, "NAME\tAPP\tSCOPE\tAGENT\tCREATED\tLAST USE\tREVOKED", rows)
 	return nil
 }
 

@@ -33,9 +33,11 @@ Status (2026-10-19):
   both Proposed, with their specs written and marked not built. Porter's
   own ADRs and design doc are in frostyard/porter, which is not published
   yet.
-- **Phase 6:** the companion is built (2026-10-19): the shell's panel and
-  sheet, its button and chord, `context` and `ask`, with a fake companion
-  in the development build. The agent socket is not built yet.
+- **Phase 6 is built** (2026-10-19): the agent socket, with tokens bound
+  to their route and the kit's client of it, and the companion, with the
+  shell's panel and sheet, its button and chord, `context` and `ask`, and a
+  fake companion in the development build. Its checks on the VM and the
+  user's devices wait for the deployment.
 
 Nothing changes on the user's machines without the user's go-ahead.
 
@@ -315,7 +317,7 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 - **Tokens bound to their route:** `lodgectl token issue --agent`, the
   agent user in `lodgectl tokens`, and a migration of lodge's database.
 - **`kit/`:** an HTTP client that dials the agent socket, honoring
-  `LODGE_ROOT`.
+  `LODGE_ROOT` (`lodgeapp.Env.AgentClient`).
 - **Packaging:** group `lodge-agents` in `sysusers.d`, with lodge in it,
   and `agents` in `config.example.json`.
 - **The development build:** `dev/e2e.sh` runs a fake app as the

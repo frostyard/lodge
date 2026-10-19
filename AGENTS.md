@@ -22,11 +22,13 @@ the canonical paths; keep content tool-agnostic.
 ## Status
 
 Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. Phases 1 to 3 are built:
+Proposed. Phases 1 to 3 and 6 are built:
 - the kit and the client, released as `kit/v0.1.0` and `client/v0.1.0`;
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
-- the inference layer.
+- the inference layer;
+- lodge's side of the assistant: the agent socket and the companion
+  (unreleased in the kit and the client until they are tagged).
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
@@ -56,6 +58,9 @@ Everything in the map is built.
   - `internal/apps`: manifests, bundles and health.
   - `internal/inference`: the inference socket, aliases, the queue,
     providers and the usage log ([specs/inference.md](docs/specs/inference.md)).
+  - `internal/agents`: the agents on lodge's host and their socket,
+    `/run/lodge/agent.sock`, admitted by peer uid
+    ([ADR-0014](docs/adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
   - `internal/control`: the control socket that `lodgectl` uses.
   - `internal/apptest`: fake apps on sockets, for tests.
 - `kit/`: the nested module `github.com/frostyard/lodge/kit` that app
@@ -63,8 +68,9 @@ Everything in the map is built.
   outside `kit/` (checked by `internal/repocheck`), and every gate runs in
   it too.
   - `kit/lodgeapp`: the app-socket server (socket activation, the peer
-    check, `LODGE_ROOT`), the `Lodge-*` caller, `/health`, and `/api` as a
-    `net.Conn` of JSON-RPC lines.
+    check, `LODGE_ROOT`), the `Lodge-*` caller, `/health`, `/api` as a
+    `net.Conn` of JSON-RPC lines, and an agent's client of the agent
+    socket (`AgentClient`).
   - `kit/manifest`: `app.json`, which lodge loads with too.
   - `kit/mcpsession`: binds MCP sessions to their token.
   - `kit/kittest`: plays lodge's side over a socket, and checks the

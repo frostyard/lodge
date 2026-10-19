@@ -219,7 +219,7 @@ func TestContentLinksPolicy(t *testing.T) {
 
 func (h *harness) issue(name, app, scope string) string {
 	h.t.Helper()
-	secret, err := h.tokens.Issue(h.t.Context(), name, app, scope)
+	secret, err := h.tokens.Issue(h.t.Context(), name, app, scope, "")
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestMCPStreamAndRevocation(t *testing.T) {
 	if err != nil || line != "data: first\n" {
 		t.Fatalf("the first event arrived as %q, %v", line, err)
 	}
-	tok, _ := h.tokens.Check(t.Context(), secret, "notes")
+	tok, _ := h.tokens.Check(t.Context(), secret, "notes", "")
 	if n := h.g.streams.count(tok.ID); n != 1 {
 		t.Fatalf("%d streams for the token, want 1", n)
 	}
@@ -504,7 +504,7 @@ func TestDeviceWebSocket(t *testing.T) {
 func TestMCPRevocationIsByRow(t *testing.T) {
 	h := newHarness(t)
 	old := h.issue("agent", "notes", "vault=1")
-	oldTok, _ := h.tokens.Check(t.Context(), old, "notes")
+	oldTok, _ := h.tokens.Check(t.Context(), old, "notes", "")
 	if _, err := h.tokens.Revoke(t.Context(), "agent"); err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestMCPRevocationIsByRow(t *testing.T) {
 	if n := h.g.EndToken(oldTok.ID); n != 0 {
 		t.Errorf("ending the revoked row closed %d of the new token's streams", n)
 	}
-	freshTok, _ := h.tokens.Check(t.Context(), fresh, "notes")
+	freshTok, _ := h.tokens.Check(t.Context(), fresh, "notes", "")
 	if n := h.g.streams.count(freshTok.ID); n != 1 {
 		t.Errorf("the new token holds %d streams, want 1", n)
 	}

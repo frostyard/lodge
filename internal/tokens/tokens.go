@@ -1,7 +1,9 @@
 // Package tokens issues and checks MCP tokens (docs/specs/lodge-http.md,
 // Tokens, logins and nodes; ADR-0006). A token is lgm_ and 43 base64url
 // characters. lodge keeps only its SHA-256, with its name, app and scope;
-// the secret is returned once, by Issue, and never stored or logged.
+// the secret is returned once, by Issue, and never stored or logged. A
+// token works on one route: the tailnet's /mcp/<id>, or, when issued for an
+// agent's user, the agent socket from that user alone (ADR-0014).
 package tokens
 
 import (
@@ -42,10 +44,13 @@ const TouchEvery = time.Minute
 // Token is what lodge keeps of one token, without the secret.
 type Token struct {
 	// ID is the token's row: names are reused, rows are not.
-	ID       int64     `json:"-"`
-	Name     string    `json:"name"`
-	App      string    `json:"app"`
-	Scope    string    `json:"scope"`
+	ID    int64  `json:"-"`
+	Name  string `json:"name"`
+	App   string `json:"app"`
+	Scope string `json:"scope"`
+	// Agent is the user the token was issued for, on the agent socket, or
+	// "" for the tailnet.
+	Agent    string    `json:"agent,omitzero"`
 	Created  time.Time `json:"created"`
 	LastUsed time.Time `json:"lastUsed,omitzero"`
 	Revoked  time.Time `json:"revoked,omitzero"`
@@ -86,8 +91,10 @@ func Hash(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Issue creates a token for app with scope, and returns its secret.
-func (s *Store) Issue(ctx context.Context, name, app, scope string) (string, error) {
+// Issue creates a token for app with scope, and returns its secret. With
+// agent not empty, the token works only on the agent socket, from that
+// user; with agent empty, only on the tailnet.
+func (s *Store) Issue(ctx context.Context, name, app, scope, agent string) (string, error) {
 	if !ValidName(name) {
 		return "", fmt.Errorf("token name %q: %w", name, ErrInvalid)
 	}
@@ -97,8 +104,8 @@ func (s *Store) Issue(ctx context.Context, name, app, scope string) (string, err
 	var b [32]byte
 	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails.
 	secret := Prefix + base64.RawURLEncoding.EncodeToString(b[:])
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tokens (name, app, scope, hash, created_at) VALUES (?, ?, ?, ?, ?)`,
-		name, app, scope, Hash(secret), s.stamp(s.now()))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tokens (name, app, scope, agent, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		name, app, scope, sql.NullString{String: agent, Valid: agent != ""}, Hash(secret), s.stamp(s.now()))
 	if store.IsConstraint(err) {
 		return "", ErrConflict
 	}
@@ -109,23 +116,24 @@ func (s *Store) Issue(ctx context.Context, name, app, scope string) (string, err
 }
 
 // Check returns the live token whose secret this is, when it was issued
-// for app. Every other case is ErrUnauthorized.
-func (s *Store) Check(ctx context.Context, secret, app string) (Token, error) {
+// for app and for this route: agent is the agent socket's peer user, or ""
+// on the tailnet. Every other case is ErrUnauthorized.
+func (s *Store) Check(ctx context.Context, secret, app, agent string) (Token, error) {
 	if !secretRE.MatchString(secret) {
 		return Token{}, ErrUnauthorized
 	}
 	hash := Hash(secret)
 	var t Token
 	var gotHash, created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, app, scope, hash, created_at FROM tokens
-		WHERE hash = ? AND revoked_at IS NULL`, hash).Scan(&t.ID, &t.Name, &t.App, &t.Scope, &gotHash, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, app, scope, COALESCE(agent, ''), hash, created_at FROM tokens
+		WHERE hash = ? AND revoked_at IS NULL`, hash).Scan(&t.ID, &t.Name, &t.App, &t.Scope, &t.Agent, &gotHash, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, ErrUnauthorized
 	}
 	if err != nil {
 		return Token{}, fmt.Errorf("check a token: %w", err)
 	}
-	if subtle.ConstantTimeCompare([]byte(gotHash), []byte(hash)) != 1 || t.App != app {
+	if subtle.ConstantTimeCompare([]byte(gotHash), []byte(hash)) != 1 || t.App != app || t.Agent != agent {
 		return Token{}, ErrUnauthorized
 	}
 	t.Created = parseTime(created)
@@ -169,7 +177,7 @@ func (s *Store) Revoke(ctx context.Context, name string) (int64, error) {
 
 // List returns every token, live and revoked, oldest first.
 func (s *Store) List(ctx context.Context) ([]Token, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, app, scope, created_at, COALESCE(last_used_at, ''), COALESCE(revoked_at, '')
+	rows, err := s.db.QueryContext(ctx, `SELECT name, app, scope, COALESCE(agent, ''), created_at, COALESCE(last_used_at, ''), COALESCE(revoked_at, '')
 		FROM tokens ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list tokens: %w", err)
@@ -179,7 +187,7 @@ func (s *Store) List(ctx context.Context) ([]Token, error) {
 	for rows.Next() {
 		var t Token
 		var created, used, revoked string
-		if err := rows.Scan(&t.Name, &t.App, &t.Scope, &created, &used, &revoked); err != nil {
+		if err := rows.Scan(&t.Name, &t.App, &t.Scope, &t.Agent, &created, &used, &revoked); err != nil {
 			return nil, err
 		}
 		t.Created, t.LastUsed, t.Revoked = parseTime(created), parseTime(used), parseTime(revoked)

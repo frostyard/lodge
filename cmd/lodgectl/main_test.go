@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
@@ -34,7 +36,14 @@ func serve(t *testing.T) string {
 		Providers: map[string]inference.ProviderConfig{"home": {Type: inference.TypeOpenAI, BaseURL: "http://127.0.0.1:1/v1", Slots: 4, Home: true}},
 		Aliases:   map[string]inference.AliasConfig{"local": {Provider: "home", Model: "MODEL"}},
 	}, nil)
-	srv := control.New(control.Deps{Inference: inf, Allow: allow.New(db, nil), Tokens: tokens.New(db, nil), Sessions: sessions.NewRegistry(), Apps: reg,
+	ag := agents.New(agents.Options{Path: "/run/lodge/agent.sock", DevUID: -1, Lookup: func(name string) (int, error) {
+		if name == "frostporter" {
+			return 990, nil
+		}
+		return -1, errors.New("no such user")
+	}})
+	ag.Load([]string{"frostporter", "ghost"}, nil)
+	srv := control.New(control.Deps{Inference: inf, Agents: ag, Allow: allow.New(db, nil), Tokens: tokens.New(db, nil), Sessions: sessions.NewRegistry(), Apps: reg,
 		Reload: reg.Load, MCPURL: func(id string) string { return "https://LODGE/mcp/" + id },
 		Nodes: func(context.Context) []control.Node {
 			return []control.Node{
@@ -112,7 +121,8 @@ func TestAllowAndList(t *testing.T) {
 	code, out, _ := lodgectl(t, root, "status")
 	if code != 0 || !strings.Contains(out, "sessions") ||
 		!regexp.MustCompile(`node\s+lodge\s+needs login\s+log in at https://login.example/a/1`).MatchString(out) ||
-		!regexp.MustCompile(`node\s+lodge-content\s+up\s+lodge-content.example`).MatchString(out) {
+		!regexp.MustCompile(`node\s+lodge-content\s+up\s+lodge-content.example`).MatchString(out) ||
+		!regexp.MustCompile(`agents\s+socket\s+down\s+/run/lodge/agent.sock, agents: frostporter; no such user: ghost`).MatchString(out) {
 		t.Errorf("status: %d %q", code, out)
 	}
 }
@@ -152,5 +162,28 @@ func TestUsageErrors(t *testing.T) {
 	}
 	if code, _, errs := lodgectl(t, t.TempDir(), "status"); code != 1 || !strings.Contains(errs, "sudo lodgectl") {
 		t.Errorf("no lodge: %d %q", code, errs)
+	}
+}
+
+// A token for an agent names the agent socket, not Claude Code, and the
+// tokens list shows whom it is for.
+func TestAgentTokenIssue(t *testing.T) {
+	root := serve(t)
+	code, out, errs := lodgectl(t, root, "token", "issue", "porter-notes", "--app", "notes", "--scope", "vault=1", "--agent", "frostporter")
+	if code != 0 {
+		t.Fatalf("issue: %d %q", code, errs)
+	}
+	if !regexp.MustCompile(`^lgm_[A-Za-z0-9_-]{43}\n$`).MatchString(out) {
+		t.Errorf("stdout = %q, want the token alone", out)
+	}
+	if !strings.Contains(errs, "only on the agent socket, /run/lodge/agent.sock, from user frostporter") || !strings.Contains(errs, "/mcp/notes") ||
+		strings.Contains(errs, "claude mcp add") || strings.Contains(errs, strings.TrimSpace(out)) {
+		t.Errorf("stderr = %q", errs)
+	}
+	if code, out, _ := lodgectl(t, root, "tokens"); code != 0 || !regexp.MustCompile(`porter-notes\s+notes\s+vault=1\s+frostporter\s`).MatchString(out) {
+		t.Errorf("tokens: %d %q", code, out)
+	}
+	if code, _, errs := lodgectl(t, root, "token", "issue", "x", "--app", "notes", "--scope", "s", "--agent", "ghost"); code != 1 || !strings.Contains(errs, "not an agent") {
+		t.Errorf("an unlisted agent: %d %q", code, errs)
 	}
 }
