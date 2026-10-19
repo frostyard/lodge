@@ -82,9 +82,17 @@ notes' Firefox runs do.
   | `Host`: `CONTENT` | `127.0.0.1:PORT2` |
   | the content origin, `https://CONTENT` | `http://127.0.0.1:PORT2` |
 
-  The two loopback origins are cross-origin and on one site, as the two
-  nodes are. Every other rule of this spec holds, with these values read in
-  place of the production ones.
+  The two loopback origins are cross-origin, as the two nodes are. Every
+  other rule of this spec holds, with these values read in place of the
+  production ones, but one:
+- **Content is `Cross-Origin-Resource-Policy: cross-origin`** in the
+  development build, in place of `same-site`. In production `LODGE` and
+  `CONTENT` share the registrable domain `<tailnet>.ts.net`, so `same-site`
+  admits lodge's pages. Chromium does not count two ports of `127.0.0.1` as
+  one site, and would refuse every content image an app frame loads
+  (`net::ERR_BLOCKED_BY_RESPONSE.NotSameSite`). The wrapper is in
+  `internal/e2eid`, so release builds lack it, and a test checks that a
+  release build's content keeps `same-site`.
 - **Absent from release builds.** The identity lives in `internal/e2eid`,
   whose every file carries `//go:build e2e`.
   - A test builds `cmd/lodge` without tags, and fails if `go tool nm` lists

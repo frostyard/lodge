@@ -146,11 +146,11 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 
 	// The plain loopback listeners, bound first so that their names are
 	// the addresses they got.
-	var plainLodge, plainContent net.Listener
+	var plainLodge, plainContentLn net.Listener
 	for _, l := range []struct {
 		addr string
 		ln   *net.Listener
-	}{{o.listen, &plainLodge}, {o.contentListen, &plainContent}} {
+	}{{o.listen, &plainLodge}, {o.contentListen, &plainContentLn}} {
 		if l.addr == "" {
 			continue
 		}
@@ -159,7 +159,7 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		}
 		defer (*l.ln).Close()
 	}
-	names := gateway.LoopbackNames(addrOf(plainLodge), addrOf(plainContent))
+	names := gateway.LoopbackNames(addrOf(plainLodge), addrOf(plainContentLn))
 
 	ss := sessions.NewRegistry()
 	al := allow.New(db, nil)
@@ -297,8 +297,8 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	if plainLodge != nil {
 		lns = append(lns, listener{"plain lodge", plainLodge, g.Lodge(plainWhoIs())})
 	}
-	if plainContent != nil {
-		lns = append(lns, listener{"plain content", plainContent, g.Content(plainWhoIs())})
+	if plainContentLn != nil {
+		lns = append(lns, listener{"plain content", plainContentLn, plainContent(g.Content(plainWhoIs()))})
 	}
 	for _, l := range lns {
 		srv := gateway.Server(l.h)

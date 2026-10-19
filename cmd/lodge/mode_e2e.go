@@ -3,6 +3,8 @@
 package main
 
 import (
+	"net/http"
+
 	"github.com/frostyard/lodge/internal/e2eid"
 	"github.com/frostyard/lodge/internal/peer"
 )
@@ -12,3 +14,8 @@ import (
 const e2eBuild = true
 
 func plainWhoIs() peer.WhoIs { return e2eid.WhoIs{} }
+
+// plainContent sends Cross-Origin-Resource-Policy: cross-origin on content,
+// since Chromium does not count two loopback ports as one site
+// (docs/specs/lodge-http.md, The development build).
+func plainContent(h http.Handler) http.Handler { return e2eid.ContentCORP(h) }

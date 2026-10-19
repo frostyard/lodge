@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/frostyard/lodge/kit/lodgeapp"
@@ -144,6 +145,12 @@ func server(m manifest.Manifest, log *slog.Logger) *lodgeapp.Server {
 		},
 		X: http.HandlerFunc(whoami),
 		Content: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, ".svg") {
+				// An image, as an app's attachments are.
+				w.Header().Set("Content-Type", "image/svg+xml")
+				fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#2f6f5e"/></svg>`)
+				return
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprintf(w, `<!doctype html><title>content</title><body style="font:14px sans-serif">`+
 				`<p>Untrusted content from %s, at %s.</p><p><a href="https://example.com/" target="_blank">A link</a></p>`+

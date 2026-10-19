@@ -36,6 +36,10 @@ window.addEventListener("message", (e) => {
       if (m.contentOrigin) {
         $("#content").src = `${m.contentOrigin}/${id}/hello.html`;
         $("#content").hidden = false;
+        $("#content-img").src = `${m.contentOrigin}/${id}/blobs/square.svg`;
+        $("#content-img").hidden = false;
+        $("#content-img").onerror = () => log("the content image did not load");
+        $("#content-img").onload = () => log("the content image loaded");
         $("#content-wrap").hidden = false;
       }
       send({ type: "route", path: route, title: titleOf(route), replace: true });

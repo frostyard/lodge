@@ -116,15 +116,22 @@ func TestReleaseBuildHoldsNoE2EIdentity(t *testing.T) {
 // refused, whatever it sends.
 func TestReleasePlainListenerRefusesBrowsers(t *testing.T) {
 	release, _ := binaries(t)
-	l := startLodge(t, release, nil, "--node", "", "--listen", "127.0.0.1:0")
-	resp, err := http.Get("http://" + l.lodge + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || strings.TrimSpace(string(b)) != "lodge cannot name this peer" {
-		t.Errorf("a browser on a release build's plain listener: %d %q", resp.StatusCode, b)
+	l := startLodge(t, release, nil, "--node", "", "--listen", "127.0.0.1:0", "--content-listen", "127.0.0.1:0")
+	for _, addr := range []string{l.lodge, l.content} {
+		resp, err := http.Get("http://" + addr + "/notes/x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden || strings.TrimSpace(string(b)) != "lodge cannot name this peer" {
+			t.Errorf("a browser on a release build's plain listener %s: %d %q", addr, resp.StatusCode, b)
+		}
+		// A release build's content keeps same-site; only the development
+		// build loosens it.
+		if addr == l.content && resp.Header.Get("Cross-Origin-Resource-Policy") != "same-site" {
+			t.Errorf("release content CORP = %q, want same-site", resp.Header.Get("Cross-Origin-Resource-Policy"))
+		}
 	}
 }
 
@@ -277,6 +284,14 @@ func TestDevelopmentBuildEndToEnd(t *testing.T) {
 	if code != http.StatusOK || body != "content e2e e2e@example.com E2E /content/blob" ||
 		!strings.Contains(hdr.Get("Content-Security-Policy"), "sandbox; frame-ancestors http://"+l.lodge) {
 		t.Errorf("content: %d %q %q", code, body, hdr.Values("Content-Security-Policy"))
+	}
+	// Chromium does not count two loopback ports as one site, so the
+	// development build's content is cross-origin, errors included.
+	if got := hdr.Values("Cross-Origin-Resource-Policy"); len(got) != 1 || got[0] != "cross-origin" {
+		t.Errorf("development content CORP = %q, want cross-origin", got)
+	}
+	if code, hdr, _ := get(l.content, "/nosuch/blob", nil); code != http.StatusNotFound || hdr.Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+		t.Errorf("a development content error: %d, CORP %q", code, hdr.Get("Cross-Origin-Resource-Policy"))
 	}
 
 	dctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
