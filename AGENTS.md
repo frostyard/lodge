@@ -22,8 +22,8 @@ the canonical paths; keep content tool-agnostic.
 ## Status
 
 Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. The only code is a stub `cmd/lodge` that prints its version, plus
-the repository checks. The order of work is the
+Proposed. The code is a stub `cmd/lodge` that prints its version, the
+repository checks, and the kit's new pieces (Phase 1). The order of work is the
 [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
 [frostyard/frostmail](https://github.com/frostyard/frostmail), which are
@@ -33,7 +33,7 @@ step names.
 
 ## Map
 
-Everything but `cmd/lodge` and the two check packages is planned.
+Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
 
 - `cmd/lodge`: the daemon. Today it only prints its version.
   `cmd/lodgectl`: the CLI, over lodge's control socket.
@@ -50,14 +50,22 @@ Everything but `cmd/lodge` and the two check packages is planned.
     providers.
   - `internal/control`: the control socket that `lodgectl` uses.
 - `kit/`: the nested module `github.com/frostyard/lodge/kit` that app
-  daemons import: the app-socket server, `Lodge-*` callers, JSON-RPC over
-  WebSocket, health, manifests and an MCP-session helper. It never imports
-  `tailscale.com` or anything under lodge's `internal/`.
+  daemons import. It never imports `tailscale.com` or anything of lodge's
+  outside `kit/` (checked by `internal/repocheck`), and every gate runs in
+  it too.
+  - `kit/lodgeapp`: the app-socket server (socket activation, the peer
+    check, `LODGE_ROOT`), the `Lodge-*` caller, `/health`, and `/api` as a
+    `net.Conn` of JSON-RPC lines.
+  - `kit/manifest`: `app.json`, which lodge loads with too.
+  - `kit/mcpsession`: binds MCP sessions to their token.
+  - `kit/kittest`: plays lodge's side over a socket, and checks the
+    contract's socket rules.
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
   `shell/`: the shell page's UI. Both are TypeScript, built in an nsl
   machine.
 - `internal/repocheck`: tests of the repository's rules. Relative links
-  resolve, every doc has an index line, and no private host is named.
+  resolve, every doc has an index line, no private host is named, and
+  `kit/` keeps its import boundary.
   `internal/workflowcheck`: tests that actions are SHA-pinned with least
   privilege.
 

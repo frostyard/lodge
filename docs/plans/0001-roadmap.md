@@ -9,8 +9,9 @@ is Phase 4.
 
 Status (2026-10-18): the founding documents are Proposed. They are
 reviewed and published together with core's ADR-0057 and frostnotes' M4
-rescope. Nothing is built but the repository's gates and a stub
-`cmd/lodge`. No phase starts before the ADRs are accepted, and nothing
+rescope. Phase 1's new kit pieces and `client/` are built and in review
+(2026-10-19), with apps pinned to their commits; the extraction from the
+apps and the tags are still to come. No phase starts before the ADRs are accepted, and nothing
 changes on the user's machines without the user's go-ahead.
 
 ## Phase 1 — The kit

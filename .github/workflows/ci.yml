@@ -60,3 +60,24 @@ jobs:
         run: make race
       - name: linux/amd64 and linux/arm64 builds
         run: make cross
+
+  client:
+    name: lodge-client (make client-check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      NODE_VERSION: "24.21.0"
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # pnpm comes from corepack, pinned with its hash by client/package.json.
+      - run: corepack enable
+      - name: Biome, typecheck and Vitest
+        run: make client-check IN_NSL='sh -c'

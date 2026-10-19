@@ -1,4 +1,4 @@
-.PHONY: help build fmt lint lint-version-check test race cross verify check ci clean
+.PHONY: help build fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -6,6 +6,10 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 # golangci-lint's release, read from mise.toml (frostyard/core ADR-0043).
 GOLANGCI_LINT_VERSION := $(strip $(shell sed -n 's/^golangci-lint = "\(.*\)"/\1/p' mise.toml))
+# The Go modules: lodge, and the kit app daemons import (kit/go.mod). Every
+# gate runs in each.
+MODULES := . kit
+IN_MODULES = for m in $(MODULES); do (cd $$m && $(1)) || exit 1; done
 # Tracked or new Go files, skipping files deleted but not yet staged.
 GO_FILES = $(shell git ls-files --cached --others --exclude-standard '*.go' | while read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 
@@ -19,7 +23,7 @@ fmt: ## Format Go code
 	gofmt -w $(GO_FILES)
 
 lint: lint-version-check ## Run the pinned golangci-lint
-	golangci-lint run
+	$(call IN_MODULES,golangci-lint run)
 
 lint-version-check:
 	@test -n "$(GOLANGCI_LINT_VERSION)" || { echo "mise.toml pins no golangci-lint"; exit 1; }
@@ -31,29 +35,41 @@ lint-version-check:
 
 # Every hermetic test runs, with no name filter (frostyard/core ADR-0038).
 test: ## Run the Go tests
-	go test ./...
+	$(call IN_MODULES,go test ./...)
 
 race: ## Run the Go tests under the race detector
-	go test -race ./...
+	$(call IN_MODULES,go test -race ./...)
 
 # lodge is pure Go (CGO_ENABLED=0); both server architectures must build.
 cross: ## Build every package for linux/amd64 and linux/arm64
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
+	$(call IN_MODULES,CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...)
+	$(call IN_MODULES,CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...)
 
 # The gate triad (frostyard/core ADR-0043, ADR-0044). verify is credential-free
 # and leaves a clean checkout clean; check formats first; ci adds the race
-# detector and the cross-builds.
+# detector, the cross-builds and the frontend checks.
 verify: ## Tidy, vet, format, lint and tests
-	go mod tidy -diff
-	go vet ./...
+	$(call IN_MODULES,go mod tidy -diff)
+	$(call IN_MODULES,go vet ./...)
 	test -z "$$(gofmt -l $(GO_FILES))"
 	$(MAKE) --no-print-directory lint
 	$(MAKE) --no-print-directory test
 
 check: fmt verify ## Format, then verify (the developer gate)
 
-ci: verify race cross ## verify plus the race detector and cross-builds
+ci: verify race cross client-check ## verify plus the race detector, cross-builds and client/ (nsl)
 
 clean: ## Remove build output
 	rm -rf build dist coverage.out coverage.html
+
+# The frontends build and test in the nsl machine (dev/nsl/provision.sh),
+# never on the host; CI, whose runner has Node, runs the same targets with
+# IN_NSL='sh -c'.
+NSL_MACHINE ?= lodge
+IN_NSL ?= nsl run -m $(NSL_MACHINE) sh -lc
+
+client-check: ## Lint (Biome), typecheck and test client/ (nsl)
+	$(IN_NSL) 'cd client && pnpm install --frozen-lockfile --silent && pnpm run check'
+
+client-fmt: ## Format client/ and organize its imports with Biome (nsl)
+	$(IN_NSL) 'cd client && pnpm install --frozen-lockfile --silent && pnpm run fmt'

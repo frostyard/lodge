@@ -85,6 +85,7 @@ lodge's side when lodge v1 does (Phase 2).
 | `user` | string | yes | the system user the daemon runs as, `^[a-z_][a-z0-9_-]{0,31}$`; neither `root` nor `lodge`; unique across manifests |
 | `key` | string | no | one letter, `^[a-z]$`, unique across manifests: the switcher followed by it opens the app |
 | `content` | bool | no | the app serves untrusted bytes through `lodge-content` |
+| `contentLinks` | bool | no | the app's content may open links in a new window: lodge's content policy becomes `sandbox allow-popups allow-popups-to-escape-sandbox` ([lodge-http.md](lodge-http.md#content-routes)), and the app's sanitizer drops `form`, `base` and `target` and sets `<base target="_blank">` |
 | `device` | bool | no | the app has routes it authenticates itself |
 | `mcp` | bool | no | the app serves MCP |
 | `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; the assistant: never) |
@@ -156,7 +157,10 @@ The socket speaks HTTP/1.1.
   15 s, with a 2 s timeout, and shows the app as up, degraded or down.
 - **`/api`.** The upgrade carries the session's headers. An app MUST NOT
   check `Origin` here, because lodge has. Each frame is one JSON-RPC
-  message of at most 16 MiB. Frames are moved one to one, and lodge never
+  message of at most 16 MiB, and MAY end with one newline, which is not
+  part of the message. The kit ends each frame it sends with one, as the
+  apps' frontends read them, and hands the app one message per line.
+  Frames are text, uncompressed, moved one to one, and lodge never
   parses them. When the browser leaves, lodge closes the app's side, and
   the app ends that connection's state.
 - **`/content/`** responses SHOULD name what they serve by an unguessable

@@ -335,6 +335,10 @@ response it adds:
 | `Cross-Origin-Resource-Policy` | `same-site` |
 | `Cross-Origin-Opener-Policy` | `same-origin` |
 
+- For an app whose manifest sets `contentLinks`, `sandbox` becomes
+  `sandbox allow-popups allow-popups-to-escape-sandbox`, so a link in its
+  content opens in a new window, outside the sandbox
+  ([app-contract.md](app-contract.md#the-manifest-appjson)).
 - The app's `Content-Type`, `Content-Length`, `Content-Range`,
   `Accept-Ranges`, `Content-Disposition`, `Cache-Control`, `ETag` and
   `Last-Modified` pass through, and so does its own
