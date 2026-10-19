@@ -25,10 +25,12 @@
 // and its rpcserver serves its router on the kit:
 //
 //	rpc := jsonrpc.NewServer[api.ErrorCode](jsonrpc.ServerOptions{Hello: "rpc.hello"})
-//	ln, err := jsonrpc.Listen(socket, log)  // the private socket: same uid only
+//	ln, err := jsonrpc.ListenWith(socket, jsonrpc.ListenOptions{Name: "notesd", Logger: log}) // same uid only
 //	err = rpc.Serve(ctx, ln, router, asLocal) // asLocal puts the caller in each connection's context
 //	rpc.ServeConn(asSession(ctx), nc, router) // lodge's /api (lodgeapp.Server.API)
 //
+// Its NewClient names the daemon in the client's errors:
+// jsonrpc.NewClientWith[ErrorCode](conn, jsonrpc.ClientOptions{Name: "notesd"}).
 // Its rpc.hello calls ConnFrom(ctx).SetReady(client). Its events.subscribe
 // starts delivery with AfterReply and Conn.Go, and sends with
 // Conn.Notify(EventMethod, envelope).

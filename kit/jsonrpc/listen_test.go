@@ -23,8 +23,12 @@ func TestListenMakesAPrivateSocket(t *testing.T) {
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("socket %v, %v; want mode 0600", fi.Mode(), err)
 	}
-	if _, err := jsonrpc.Listen(path, nil); err == nil || !strings.Contains(err.Error(), "already listening") {
+	if _, err := jsonrpc.Listen(path, nil); err == nil || err.Error() != "another server is already listening on "+path {
 		t.Errorf("Listen on a live socket = %v", err)
+	}
+	if _, err := jsonrpc.ListenWith(path, jsonrpc.ListenOptions{Name: "notesd"}); err == nil ||
+		err.Error() != "notesd is already listening on "+path {
+		t.Errorf("ListenWith a name on a live socket = %v, want the daemon named", err)
 	}
 	accepted := make(chan error, 1)
 	go func() {
