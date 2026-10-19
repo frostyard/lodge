@@ -34,7 +34,7 @@ step names.
 
 ## Map
 
-Only `internal/inference` (Phase 3) is planned.
+Everything in the map is built.
 
 - `cmd/lodge`: the daemon. `cmd/lodgectl`: the CLI, over lodge's control
   socket. Built with the `e2e` tag, `cmd/lodge` is the development build
@@ -51,8 +51,8 @@ Only `internal/inference` (Phase 3) is planned.
   - `internal/allow`: the allow-lists of logins and nodes.
   - `internal/store`: lodge's SQLite database, which they live in.
   - `internal/apps`: manifests, bundles and health.
-  - `internal/inference`: the inference socket, aliases, the queue and
-    providers (planned).
+  - `internal/inference`: the inference socket, aliases, the queue,
+    providers and the usage log ([specs/inference.md](docs/specs/inference.md)).
   - `internal/control`: the control socket that `lodgectl` uses.
   - `internal/apptest`: fake apps on sockets, for tests.
 - `kit/`: the nested module `github.com/frostyard/lodge/kit` that app

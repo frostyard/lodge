@@ -1,0 +1,12 @@
+{
+  "inference": {
+    "providers": {
+      "home": { "type": "openai", "baseURL": "http://MODEL_HOST/v1", "slots": 4, "home": true }
+    },
+    "aliases": {
+      "local": { "provider": "home", "model": "MODEL" },
+      "fast": { "provider": "home", "model": "MODEL" },
+      "smart": { "provider": "home", "model": "MODEL" }
+    }
+  }
+}

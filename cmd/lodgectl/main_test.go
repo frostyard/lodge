@@ -12,6 +12,7 @@ import (
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
 	"github.com/frostyard/lodge/internal/control"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/store"
 	"github.com/frostyard/lodge/internal/tokens"
@@ -28,7 +29,12 @@ func serve(t *testing.T) string {
 	apptest.Install(t, root, "notes", map[string]any{"name": "Notes", "mcp": true, "key": "n"}, nil)
 	reg := apps.New(root, nil)
 	reg.Load()
-	srv := control.New(control.Deps{Allow: allow.New(db, nil), Tokens: tokens.New(db, nil), Sessions: sessions.NewRegistry(), Apps: reg,
+	inf := inference.New(inference.Options{DB: db, DevUID: -1})
+	inf.Load(inference.Config{
+		Providers: map[string]inference.ProviderConfig{"home": {Type: inference.TypeOpenAI, BaseURL: "http://127.0.0.1:1/v1", Slots: 4, Home: true}},
+		Aliases:   map[string]inference.AliasConfig{"local": {Provider: "home", Model: "MODEL"}},
+	}, nil)
+	srv := control.New(control.Deps{Inference: inf, Allow: allow.New(db, nil), Tokens: tokens.New(db, nil), Sessions: sessions.NewRegistry(), Apps: reg,
 		Reload: reg.Load, MCPURL: func(id string) string { return "https://LODGE/mcp/" + id },
 		Nodes: func(context.Context) []control.Node {
 			return []control.Node{
@@ -49,9 +55,38 @@ func serve(t *testing.T) string {
 
 func lodgectl(t *testing.T, root string, args ...string) (int, string, string) {
 	t.Helper()
+	return lodgectlIn(t, root, "", args...)
+}
+
+func lodgectlIn(t *testing.T, root, stdin string, args ...string) (int, string, string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(append([]string{"--root", root}, args...), &stdout, &stderr, func(string) string { return "" })
+	code := run(append([]string{"--root", root}, args...), strings.NewReader(stdin), &stdout, &stderr, func(string) string { return "" })
 	return code, stdout.String(), stderr.String()
+}
+
+// The key comes from stdin, and never shows again.
+func TestProviderKeyAndUsage(t *testing.T) {
+	root := serve(t)
+	if code, out, errs := lodgectlIn(t, root, "sk-secret\n", "provider", "key", "home"); code != 0 || !strings.Contains(out, "key set for provider home") {
+		t.Fatalf("provider key: %d %q %q", code, out, errs)
+	}
+	if code, _, errs := lodgectlIn(t, root, "k", "provider", "key", "nosuch"); code != 1 || !strings.Contains(errs, "no provider") {
+		t.Errorf("an unknown provider: %d %q", code, errs)
+	}
+	if code, out, _ := lodgectlIn(t, root, "", "provider", "key", "home"); code != 0 || !strings.Contains(out, "removed") {
+		t.Errorf("removing the key: %d %q", code, out)
+	}
+	code, out, _ := lodgectl(t, root, "status")
+	if code != 0 || !regexp.MustCompile(`provider\s+home\s+unavailable\s+openai: not checked yet`).MatchString(out) || strings.Contains(out, "sk-secret") {
+		t.Errorf("status: %d %q", code, out)
+	}
+	if code, out, _ := lodgectl(t, root, "usage", "--since", "2026-10-01"); code != 0 || !strings.Contains(out, "APP") {
+		t.Errorf("usage: %d %q", code, out)
+	}
+	if code, _, _ := lodgectl(t, root, "usage", "extra"); code != 2 {
+		t.Errorf("usage with an argument: exit %d", code)
+	}
 }
 
 func TestAllowAndList(t *testing.T) {
