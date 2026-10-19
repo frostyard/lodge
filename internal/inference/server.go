@@ -70,6 +70,21 @@ type Provider struct {
 	mu        sync.Mutex
 	available bool
 	reason    string
+	// checked is closed once the provider has been checked.
+	checked chan struct{}
+	once    *sync.Once
+}
+
+// waitChecked waits, at most CheckTimeout and a second, for the provider's
+// first check, so a request right after start is not refused for it.
+func (p *Provider) waitChecked(ctx context.Context) {
+	t := time.NewTimer(CheckTimeout + time.Second)
+	defer t.Stop()
+	select {
+	case <-p.checked:
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 func (p *Provider) state() (bool, string) {
@@ -80,9 +95,10 @@ func (p *Provider) state() (bool, string) {
 
 func (p *Provider) set(ok bool, reason string) (changed bool) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	changed = p.available != ok || p.reason != reason
 	p.available, p.reason = ok, reason
+	p.mu.Unlock()
+	p.once.Do(func() { close(p.checked) })
 	return changed
 }
 
@@ -144,14 +160,16 @@ func (s *Server) Load(cfg Config, err error) {
 		for name, pc := range cfg.Providers {
 			p := &Provider{Name: name, Cfg: pc}
 			if o, ok := old.providers[name]; ok && o.Cfg == pc {
-				p.Queue = o.Queue
+				p.Queue, p.checked, p.once = o.Queue, o.checked, o.once
 				p.available, p.reason = o.state()
 			} else {
 				p.Queue = NewQueue(max(pc.Slots, 1))
 				p.reason = "not checked yet"
+				p.checked, p.once = make(chan struct{}), new(sync.Once)
 			}
 			if pc.Type != TypeOpenAI {
 				p.available, p.reason = false, "not built: its terms are to verify (ADR-0011)"
+				p.once.Do(func() { close(p.checked) })
 			}
 			next.providers[name] = p
 		}
@@ -373,7 +391,7 @@ func (s *Server) Handler() http.Handler {
 				apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "GET only")
 				return
 			}
-			s.models(w, app)
+			s.models(r.Context(), w, app)
 			return
 		case "/v1/chat/completions":
 			endpoint = "/chat/completions"
@@ -399,7 +417,7 @@ type modelEntry struct {
 	Available bool   `json:"available"`
 }
 
-func (s *Server) models(w http.ResponseWriter, app string) {
+func (s *Server) models(ctx context.Context, w http.ResponseWriter, app string) {
 	st := s.state()
 	out := struct {
 		Object string       `json:"object"`
@@ -411,6 +429,7 @@ func (s *Server) models(w http.ResponseWriter, app string) {
 		}
 		ok := false
 		if p := st.providers[st.cfg.Aliases[alias].Provider]; p != nil {
+			p.waitChecked(ctx)
 			ok, _ = p.state()
 		}
 		out.Data = append(out.Data, modelEntry{ID: alias, Object: "model", OwnedBy: "lodge", Available: ok})
@@ -458,6 +477,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, app, endpoint s
 	ac := st.cfg.Aliases[alias]
 	p := st.providers[ac.Provider]
 	rec.Provider, rec.Model = p.Name, ac.Model
+	p.waitChecked(r.Context())
 	if ok, reason := p.state(); !ok {
 		apiError(w, http.StatusServiceUnavailable, "server_error", "provider_unavailable",
 			fmt.Sprintf("provider %s for %s is unavailable: %s", p.Name, alias, reason))

@@ -6,8 +6,9 @@ How lodge installs on a systemd host, such as Debian 13
 | File | Installs as |
 | --- | --- |
 | `systemd/lodge.service` | `/usr/lib/systemd/system/lodge.service`: user `lodge`, hardened, no `RuntimeDirectory=` |
-| `sysusers.d/lodge.conf` | user and group `lodge`, group `lodge-apps` |
+| `sysusers.d/lodge.conf` | user and group `lodge`, group `lodge-apps`, with `lodge` a member (for the inference socket) |
 | `tmpfiles.d/lodge.conf` | `/run/lodge` (lodge's), `/run/lodge/apps` (root's), `/var/lib/lodge` (0700) |
+| `config.example.json` | `/etc/lodge/config.example.json`: inference providers and aliases ([inference.md](../docs/specs/inference.md#configuration)), to copy to `/etc/lodge/config.json` |
 | `install.sh` | installs the binaries, the shell's bundle at `/usr/share/lodge/shell/`, and the files above |
 | `app-template/` | a socket unit, a service and a sysusers.d entry for an app to copy |
 

@@ -598,3 +598,19 @@ func TestTapUsage(t *testing.T) {
 		}
 	}
 }
+
+// A provider not checked yet, after start or a reload that changed it, is
+// waited for, not refused.
+func TestUncheckedProviderIsWaitedFor(t *testing.T) {
+	h := newHarness(t, 4)
+	h.s.Load(configFor(h.p, 3), nil) // changed slots: a new, unchecked provider
+	if st, _ := h.s.Status(); st[2].Name != "home" || st[2].Reason != "not checked yet" {
+		t.Fatalf("status = %+v", st)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go h.s.Run(ctx)
+	if r := h.do(http.MethodPost, "/v1/chat/completions", `{"model":"local"}`, nil); r.status != 200 {
+		t.Errorf("right after a reload: %d %q", r.status, r.body)
+	}
+}

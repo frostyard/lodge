@@ -146,6 +146,8 @@ interactive`, and `background` when the header is absent or anything else.
   answered 2xx within 5 s.
 - An unavailable provider's aliases list `"available": false`, and a
   request to one answers 503 at once, without queueing.
+- A provider not yet checked, just after start or a reload that changed
+  it, is neither: a request for it waits for its first check, at most 6 s.
 - `lodgectl status` shows each provider: its type, whether it is
   available and why not, its slots, and how many requests run and wait.
 

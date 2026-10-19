@@ -206,9 +206,22 @@ home-screen app. No service worker is registered.
 - It forwards with the provider's credentials, and logs the metadata,
   never the content.
 
-The first provider is the local model at `MODEL_HOST`. Copilot and Codex
-adapters follow once their terms are checked. A provider that lodge's host
-cannot reach is shown as unavailable.
+The first provider is the local model at `MODEL_HOST`, an `openai`
+provider. Copilot and Codex are accepted in the configuration but not
+built until their terms are checked, so they show as unavailable. A
+provider that lodge's host cannot reach is shown as unavailable, and its
+aliases fail at once.
+
+- The socket is made at start, beside the control socket, and served
+  before the tailnet nodes join. lodge is in group `lodge-apps` to give it
+  that group.
+- The configuration is the `inference` member of `/etc/lodge/config.json`,
+  reloaded with the manifests. A broken one is refused whole, and
+  `lodgectl status` says why.
+- Each provider has its own queue, kept across a reload that leaves the
+  provider unchanged, so requests in flight still count.
+- The usage log goes to the journal and to lodge's database;
+  `lodgectl usage` sums it.
 
 ### The control socket
 
@@ -295,8 +308,11 @@ Apps pin both to a published lodge commit or release.
   if the old nodes are first removed from the tailnet.
 - **Nothing private in node names:** they appear in public certificate
   logs.
-- **Providers:** lodge's host must reach each configured provider. A local
-  model on another machine needs a network path to it: a firewall rule, a
+- **Providers:** copy `/etc/lodge/config.example.json` to
+  `/etc/lodge/config.json` and name the providers and aliases, set any key
+  with `sudo lodgectl provider key NAME` (from stdin), then `sudo lodgectl
+  reload`. lodge's host must reach each configured provider. A local model
+  on another machine needs a network path to it: a firewall rule, a
   listener or the tailnet. `lodgectl status` shows a provider lodge cannot
   reach as unavailable.
 - If Tailscale's coordination service is down at start, lodge logs it and

@@ -38,7 +38,7 @@ dist: ## Package lodge for linux/DIST_ARCH (amd64) into dist/, after make shell-
 	mkdir -p dist/$(DIST_NAME)/bin dist/$(DIST_NAME)/packaging
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_ARCH) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(DIST_NAME)/bin/ ./cmd/lodge ./cmd/lodgectl
 	cp -R shell/dist dist/$(DIST_NAME)/shell
-	cp -R packaging/install.sh packaging/systemd packaging/sysusers.d packaging/tmpfiles.d packaging/app-template dist/$(DIST_NAME)/packaging/
+	cp -R packaging/install.sh packaging/config.example.json packaging/systemd packaging/sysusers.d packaging/tmpfiles.d packaging/app-template dist/$(DIST_NAME)/packaging/
 	tar -C dist -czf dist/$(DIST_NAME).tar.gz $(DIST_NAME)
 	@echo "dist/$(DIST_NAME).tar.gz: unpack it on the host and run sudo ./$(DIST_NAME)/packaging/install.sh"
 

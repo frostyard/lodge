@@ -491,3 +491,72 @@ func startTestControl(t *testing.T) string {
 	t.Cleanup(c.HTTPTestServer.Close)
 	return c.HTTPTestServer.URL
 }
+
+// The development build serves the inference socket: an app (named by
+// Lodge-App, since every app runs as the developer here) streams a chat
+// completion through alias local from a fake provider.
+func TestDevelopmentBuildInference(t *testing.T) {
+	_, e2e := binaries(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			io.WriteString(w, `{"data":[]}`)
+		case "/v1/chat/completions":
+			b, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(b), `"model":"real-model"`) {
+				http.Error(w, "wrong model: "+string(b), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+			io.WriteString(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n")
+		}
+	}))
+	defer upstream.Close()
+	l := startLodge(t, e2e, func(root string) {
+		apptest.Install(t, root, "fake", map[string]any{"name": "Fake"}, nil)
+		cfg := `{"inference": {"providers": {"home": {"type": "openai", "baseURL": "` + upstream.URL + `/v1", "slots": 2, "home": true}},
+			"aliases": {"local": {"provider": "home", "model": "real-model"}}}}`
+		os.MkdirAll(filepath.Join(root, "etc/lodge"), 0o755)
+		if err := os.WriteFile(filepath.Join(root, "etc/lodge/config.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}, "--listen", "127.0.0.1:0", "--content-listen", "127.0.0.1:0")
+	sock := filepath.Join(l.root, "run/lodge/inference.sock")
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}}
+	post := func(app string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, "http://lodge/v1/chat/completions",
+			strings.NewReader(`{"model":"local","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+		req.Header.Set("Lodge-App", app)
+		req.Header.Set("Lodge-Priority", "interactive")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := post("fake"); code != 200 || !strings.Contains(body, `"content":"hi"`) || !strings.Contains(body, "[DONE]") {
+		t.Errorf("a chat completion: %d %q", code, body)
+	}
+	if code, _ := post("nosuch"); code != http.StatusForbidden {
+		t.Errorf("an app that does not exist: %d", code)
+	}
+	c, err := control.Dial(t.Context(), filepath.Join(l.root, "run/lodge/control.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	var sums []struct {
+		App      string `json:"app"`
+		Requests int    `json:"requests"`
+		Input    int    `json:"inputTokens"`
+	}
+	if err := c.Call(t.Context(), "lodge.usage", nil, &sums); err != nil || len(sums) != 1 || sums[0].App != "fake" || sums[0].Input != 3 {
+		t.Errorf("usage = %+v %v", sums, err)
+	}
+}
