@@ -20,6 +20,11 @@ import (
 // socketMode is an app socket's mode: the app's user and group lodge.
 const socketMode = 0o660
 
+// ErrUnsupported is Listen's and Serve's error off Linux: lodge and its
+// apps run on Linux, and the peer check needs SO_PEERCRED, so an app socket
+// elsewhere could only refuse every connection.
+var ErrUnsupported = errors.New("lodgeapp: lodge app sockets are Linux-only")
+
 // Listener is an app socket. Accept admits only connections whose peer uid
 // (SO_PEERCRED) is lodge's, and closes the rest before reading anything
 // from them (Rule 2).
@@ -38,6 +43,9 @@ type Listener struct {
 // (SocketUser=<user>, SocketGroup=lodge, SocketMode=0660). Under e.Root
 // the socket keeps the developer's own group.
 func (e Env) Listen(id string) (*Listener, error) {
+	if !supported {
+		return nil, ErrUnsupported
+	}
 	if !manifest.ValidID(id) {
 		return nil, fmt.Errorf("app id %q is not valid", id)
 	}

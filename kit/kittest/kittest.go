@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -75,9 +76,11 @@ type Lodge struct {
 }
 
 // Start serves srv as app id on a socket in a new temp root, as lodge
-// would reach it, until the test ends.
+// would reach it, until the test ends. Off Linux it skips the test: lodge
+// app sockets are Linux-only (lodgeapp.ErrUnsupported).
 func Start(t testing.TB, id string, srv *lodgeapp.Server) *Lodge {
 	t.Helper()
+	skipOffLinux(t)
 	dir := root(t)
 	serve(t, lodgeapp.Env{Root: dir, LodgeUID: os.Getuid()}, id, srv)
 	// Attach's cleanup, which closes idle connections, runs before
@@ -88,9 +91,11 @@ func Start(t testing.TB, id string, srv *lodgeapp.Server) *Lodge {
 }
 
 // Attach returns lodge's side of app id's socket under root, for an app
-// daemon the test started itself with LODGE_ROOT=root.
+// daemon the test started itself with LODGE_ROOT=root. Off Linux it skips
+// the test, as Start does.
 func Attach(t testing.TB, id string, root string) *Lodge {
 	t.Helper()
+	skipOffLinux(t)
 	env := lodgeapp.Env{Root: root, LodgeUID: os.Getuid()}
 	sock := env.SocketPath(id)
 	tr := &http.Transport{
@@ -104,6 +109,14 @@ func Attach(t testing.TB, id string, root string) *Lodge {
 	tr.Protocols.SetHTTP1(true)
 	t.Cleanup(tr.CloseIdleConnections)
 	return &Lodge{Env: env, ID: id, Socket: sock, client: &http.Client{Transport: tr}}
+}
+
+// skipOffLinux skips a test where lodge app sockets cannot be served.
+func skipOffLinux(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("lodge app sockets are Linux-only")
+	}
 }
 
 // root makes a short temp root: a socket's path is at most 108 bytes.
