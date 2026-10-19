@@ -249,7 +249,8 @@ lodge's part is below. Phase 6 builds it, and Porter is built on it.
 - **Its tools through `/mcp/<id>`, with one token per app,** each scoped by
   the user. Porter owns none of the user's data. For it, notes' scope gains
   a folder limit (frostnotes
-  [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md)),
+  [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md),
+  built in its [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md)),
   and mail gains tools for calendars, tasks and contacts (frostmail
   [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md)).
 - **Its identities:** a system user, `frostporter`, and scoped tokens,
@@ -259,9 +260,14 @@ lodge's part is below. Phase 6 builds it, and Porter is built on it.
   with no tailnet node of its own. Tagged nodes stay the rule for agents
   off lodge's host
   ([ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md)).
-- **What it may do unattended** is decided in Porter's docs. Unattended, it
-  writes only mail drafts and notes in its own folder, and everything else
-  waits for the user's approval. No token of its has mail's `;send` in v1.
+- **What it may do unattended** is decided in Porter's docs: its
+  [ADR-0004](https://github.com/frostyard/porter/blob/main/docs/adr/0004-porter-drafts-and-the-owner-sends.md) (Porter
+  drafts, and the owner sends) and
+  [ADR-0005](https://github.com/frostyard/porter/blob/main/docs/adr/0005-memory-and-routines-live-in-the-vault.md) (memory
+  and routines live in the vault, with
+  [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md)). Unattended, it writes only
+  mail drafts and notes in its own folder, and everything else waits for
+  the user's approval. No token of its has mail's `;send` in v1.
 - **Inference:** only through lodge's inference socket, with the aliases
   that exist, `local` and `smart`, and no alias of its own. Chat asks for
   `interactive` priority, and its scheduled routines for `background`.
@@ -325,7 +331,8 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   - a token issued for the agent socket is refused on the tailnet, a
     tailnet token is refused on the agent socket, and a user not listed
     cannot connect, each with a test that fails it;
-  - Porter, built in frostyard/porter, can start on these pieces.
+  - Porter, built in frostyard/porter from its
+    [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md), can start on these pieces.
 
 ## Later / ideas
 
@@ -363,4 +370,4 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
 - Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
-- Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) and [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md) and [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)
+- Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)
