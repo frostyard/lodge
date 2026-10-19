@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -57,9 +58,13 @@ type Run struct {
 
 // Serve listens on a fresh private socket (jsonrpc.Listen) and runs serve
 // on it until the test ends or Stop. A serve that fails, or that does not
-// return within 5 s of being stopped, fails the test.
+// return within 5 s of being stopped, fails the test. Off Linux, where
+// jsonrpc.Listen serves no private socket, it skips the test.
 func Serve(t testing.TB, serve func(ctx context.Context, ln net.Listener) error) *Run {
 	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("private sockets are Linux-only (jsonrpc.Listen)")
+	}
 	r := &Run{Socket: Socket(t)}
 	ln, err := jsonrpc.Listen(r.Socket, nil)
 	if err != nil {
