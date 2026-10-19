@@ -97,7 +97,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 
 	t.Run("the web bundle", func(t *testing.T) {
 		for path, want := range map[string]string{
-			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#5ee27a15e2fb0cc3dab3ddd489e1062b2d39c09f&path:client"`,
+			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.1.0&path:client"`,
 			"web/vite.config.ts":      `base: "/app/tasks/"`,
 			"web/src/main.ts":         `connectLodge({ app: "tasks" })`,
 			"web/index.html":          `<script type="module" src="/src/main.ts"></script>`,
@@ -208,6 +208,10 @@ func TestRenderRefuses(t *testing.T) {
 		{filepath.Join(dir, "g"), "tasks", "Tasks", "frosttasks", "tt"},
 		{filepath.Join(dir, "h"), "tasks", "Tasks", "frosttasks", "t", "example.com/a b"},
 		{filepath.Join(dir, "i"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "main"},
+		{filepath.Join(dir, "j"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "kit/v0.1.0"},
+		{filepath.Join(dir, "k"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v0.1"},
+		{filepath.Join(dir, "l"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v01.0.0"},
+		{filepath.Join(dir, "m"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v0.1.0&x"},
 		{full, "tasks", "Tasks"},
 	} {
 		if out, err := render(t, args...); err == nil {
@@ -216,6 +220,19 @@ func TestRenderRefuses(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(full, "go.mod")); err == nil {
 		t.Error("render wrote into a directory that was not empty")
+	}
+}
+
+// LODGE_REF takes a lodge commit in place of a client release.
+func TestRenderPinsACommit(t *testing.T) {
+	app := filepath.Join(t.TempDir(), "tasks")
+	const commit = "c48d43a"
+	if out, err := render(t, app, "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", commit); err != nil {
+		t.Fatalf("render: %v\n%s", err, out)
+	}
+	want := `"@frostyard/lodge-client": "github:frostyard/lodge#` + commit + `&path:client"`
+	if got := read(t, filepath.Join(app, "web/package.json")); !strings.Contains(got, want) {
+		t.Errorf("web/package.json lacks %s", want)
 	}
 }
 

@@ -74,9 +74,11 @@ serves untrusted bytes.
   app. It cannot script the shell or any app's frame.
 - **Other nodes on the tailnet are the same site.** Their pages could embed
   content URLs as images or media (`same-site` resource policy) if they
-  knew the URLs, and the user's identity would carry. Content paths should
-  name things by unguessable keys, such as notes' hashes, and the content
-  is never framed outside lodge.
+  knew the URLs, and the user's identity would carry. Content paths name
+  things by keys no one can guess: a MAC under a secret the app keeps, never
+  a bare hash of the content, which anyone holding the same file can compute
+  ([lodge-http.md](../specs/lodge-http.md#content-routes)). The content is
+  never framed outside lodge.
 - The tailnet gains a second node and a second certificate in the
   Certificate Transparency logs, and the owner allows nothing extra: the
   same allow-lists apply.

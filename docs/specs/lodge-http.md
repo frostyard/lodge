@@ -531,7 +531,7 @@ and allowed while the nodes wait for their login.
 
 | Command | Method | Does |
 | --- | --- | --- |
-| `lodgectl status` | `lodge.status` | each node's state, and its login URL while it needs a login; every app's state; session counts; and providers' availability (Phase 3) |
+| `lodgectl status` | `lodge.status` | each node's state, and its login URL while it needs a login; every app's state; session counts; and providers' availability |
 | `lodgectl apps` | `lodge.apps` | each manifest, its state and its reason |
 | `lodgectl reload` | `lodge.reload` | rereads the manifests, as `SIGHUP` does |
 | `lodgectl logins` | `lodge.logins` | the allowed logins |

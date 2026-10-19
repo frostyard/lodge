@@ -7,16 +7,29 @@ decided on. frostnotes' M4 ([plan 0006](https://github.com/frostyard/frostnotes/
 runs notes inside lodge, and depends on Phases 1 and 2. frostmail's move
 is Phase 4.
 
-Status (2026-10-18): the founding documents are Proposed. They are
-reviewed and published together with core's ADR-0057 and frostnotes' M4
-rescope. Phase 1's new kit pieces and `client/` are built and in review
-(2026-10-19), with apps pinned to their commits; the extraction from the
-apps and the tags are still to come. Phase 2's code is built and in review
-(2026-10-19): the nodes, the gateway with every check of lodge-http.md
-tested, the control socket and `lodgectl`, the shell, the development
-build and packaging. Its deployment, lodge's security review and the
-checks on the user's devices are still to come. No phase starts before the ADRs are accepted, and nothing
-changes on the user's machines without the user's go-ahead.
+Status (2026-10-19):
+- **The ADRs are all still Proposed.** Accepting them is the user's call.
+  Phases 1 to 3 were built ahead of that, on the user's go-ahead of
+  2026-10-18.
+- **Phase 1 is done.** The kit, with the RPC runtime extracted from the
+  apps, and the client are tagged `kit/v0.1.0` and `client/v0.1.0`, and
+  notesd and maild run on the kit.
+- **Phase 2's code is merged, and lodge runs on its first host.** Notes
+  moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
+  Lodge's security review ran on 2026-10-19, and each of its lodge findings
+  is fixed with a test. Its report is not in this repository, and the
+  inference layer and the kit's later pieces landed after it. Claude Code's
+  two checks passed on 2026-10-19; the other checks on the user's devices
+  are still to come.
+- **Phase 3 is merged,** and the `local` provider is reachable from lodge's
+  host. The Copilot and Codex adapters are not built until their terms are
+  checked.
+- **Phase 4:** the new-app skill is built. Mail's side is frostmail's
+  [plan 0011](https://github.com/frostyard/frostmail/blob/main/docs/plans/0011-m8-mail-in-lodge.md),
+  in progress.
+- **Phase 5** has not started.
+
+Nothing changes on the user's machines without the user's go-ahead.
 
 ## Phase 1 — The kit
 
@@ -110,7 +123,14 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
   - whether WebKit on iOS sends `Sec-Fetch-Site` on a WebSocket handshake
     (M4 review M3);
   - that Claude Code sends no `Origin` to `/mcp/notes` (L10), and opens a
-    new session after a 404 (L11);
+    new session after a 404 (L11). **Both held on 2026-10-19,** with Claude
+    Code 2.1.300 against `/mcp/notes` and `/mcp/mail`:
+    - It sends no `Origin` and no `Sec-Fetch-*`.
+    - When its session was evicted, its stream and its next POST got 404.
+      It then initialized a new session and retried the tool, which
+      succeeded.
+    - It first probes MCP 2026-07-28's `server/discover`. The kit answers
+      that 400, and Claude Code falls back to `initialize`;
   - Chrome's viewer with a sandboxed PDF in a new tab (review item 12), and
     images and media in a new tab. The PDF exception in lodge-http.md is
     decided here;
@@ -179,7 +199,9 @@ maild becomes lodge's `mail` app: one maild for every client. Implements
   [ADR-0014](https://github.com/frostyard/frostmail/blob/main/docs/adr/0014-images-embedded-in-the-reader-frame.md)
   has it.
 - **`/mcp/mail`,** with a scope grammar of frostmail's.
-- **Links between apps:** notes link to threads at `/mail/<route>`, and
+- **Links between apps:** notes link to mail at its permanent route,
+  `/mail/message/<Message-ID>` (the Message-ID percent-encoded as one
+  segment, which maild resolves; frostmail's plan 0011), and
   mail links back to notes.
 - **The new-app skill:** [`.agents/skills/new-lodge-app/`](../../.agents/skills/new-lodge-app/SKILL.md),
   a thin scaffold on the kit and the client, drawn from what notes and mail
@@ -235,7 +257,10 @@ Design only. The assistant is built later, from these documents.
 - **Web Push.** Mail and the assistant need notifications while lodge is
   closed. That means a service worker scoped to push alone, which reverses
   `worker-src 'none'` ([ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md)).
-  Decide with an ADR by Phase 4.
+  The user deferred it on 2026-10-19: no service worker for now. Phones
+  get no notifications from lodge until then, and notifications reach only
+  a page that is open. Take it up with Phase 5 if the assistant needs
+  notifications while lodge is closed, with an ADR.
 - **The desktop apps.** frostmail's Tauri app could become a lodge client
   over a WebSocket with its node's identity, or give way to the home-screen
   app. frostnotes' Tauri app stays local-first against its own notesd.

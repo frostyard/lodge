@@ -34,13 +34,14 @@ The contract it follows is
    ```
 
    The arguments are `DEST ID NAME [USER] [KEY] [MODULE] [LODGE_REF]`.
-   `LODGE_REF` is the lodge commit the web bundle pins `lodge-client` at.
+   `LODGE_REF` is what the web bundle pins `lodge-client` at: a client
+   release such as `client/v0.1.0` (the default), or a lodge commit.
    render.sh validates every value and refuses a directory that is not
    empty.
 3. **Pin the kit and test.** In the new directory:
 
    ```sh
-   go get github.com/frostyard/lodge/kit@<pushed lodge commit>
+   go get github.com/frostyard/lodge/kit@v0.1.0
    go mod tidy
    make check
    ```
@@ -48,8 +49,9 @@ The contract it follows is
    `cmd/<id>d/main_test.go` runs `kittest.CheckRules` against the daemon
    with the manifest it installs. It also runs a session's `/api` round trip
    and the private socket. All three must pass before anything else
-   changes. Apps pin the kit and the client to a published lodge commit,
-   never a local path.
+   changes. Apps pin the kit and the client to lodge's releases (the
+   tags `kit/vX.Y.Z` and `client/vX.Y.Z`; take the latest of each), or to a
+   pushed lodge commit before a release, never a local path.
 4. **Build the web bundle** in an nsl machine with Node, never on the host:
    `make web-build` (the `lodge` machine, or `NSL_MACHINE=…`). Commit
    `web/pnpm-lock.yaml` after the first build. From then on the build

@@ -95,10 +95,15 @@ the shell's half in Phase 2.
   `title` is empty. Titles are at most 200 characters. A `route` equal to
   the app's current entry changes nothing, so an app may report the route it
   was navigated to.
-- **An app in a frame never touches history or location.** It MUST NOT
-  call `history.pushState` or `replaceState`, or assign `location`, to
-  navigate. It reports `route` and obeys `navigate`. `lodge.history` gives
-  client-side routers a history driven that way.
+- **An app in a frame never makes history entries or moves itself.** It
+  MUST NOT call `history.pushState` or `replaceState`, or assign
+  `location`, to navigate. It reports `route` and obeys `navigate`.
+  `lodge.history` gives client-side routers a history driven that way.
+- **An app MAY call `history.back()`** to undo an entry it pushed itself
+  with `route`, such as a Back button in its own UI (mail's narrow layout).
+  The browser walks the shell's history, and the shell answers with
+  `navigate`. An app MUST NOT call it from a route it was opened at, where
+  the entry before may not be lodge's.
 
 ### `open`
 
@@ -162,10 +167,10 @@ lodge.contract;                       // 1
 lodge.theme;                          // "light" | "dark"
 lodge.shortcut;                       // "Ctrl+Backquote"
 lodge.apiURL();                       // "wss://LODGE/app/notes/api"
-lodge.contentURL("blobs/<hash>.png"); // "https://CONTENT/notes/blobs/<hash>.png"
+lodge.contentURL("blobs/<mac>/<hash>.png"); // "https://CONTENT/notes/blobs/<mac>/<hash>.png"
 lodge.route("/1/Projects/Plan.md", "Plan");
 lodge.context({ kind: "note", ref: "notes/1/Projects/Plan.md", title: "Plan" });
-lodge.open("/mail/thread/42");
+lodge.open("/mail/message/abc%40example.com"); // a mail by its Message-ID
 lodge.openSwitcher();
 lodge.storageKey("workspace");        // "notes:workspace"
 lodge.on("navigate", ({ route }) => {});

@@ -22,10 +22,13 @@ the canonical paths; keep content tool-agnostic.
 ## Status
 
 Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. The kit's new pieces and the client (Phase 1) and lodge v1
-(Phase 2's code: the gateway, the shell, the development build and
-packaging) are in review. The order of work is the
-[roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
+Proposed. Phases 1 to 3 are built:
+- the kit and the client, released as `kit/v0.1.0` and `client/v0.1.0`;
+- lodge v1, which is the gateway, the shell, the development build and
+  packaging;
+- the inference layer.
+The checks on the user's devices and Phase 4 (mail, in frostmail) are in
+progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
 [frostyard/frostmail](https://github.com/frostyard/frostmail), which are
 sibling checkouts at `../frostnotes` and `../frostmail` when present. Before

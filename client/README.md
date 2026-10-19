@@ -6,12 +6,15 @@ every app bundle includes, and the shell half, `@frostyard/lodge-client/shell`.
 It is ESM TypeScript with no runtime dependencies, and ships as source: a
 bundler such as Vite compiles it with the app.
 
-Apps pin it to a pushed lodge commit, as a pnpm git dependency in this
-subdirectory:
+Apps pin it to a release, a lodge tag `client/vX.Y.Z`, as a pnpm git
+dependency in this subdirectory:
 
 ```json
-"@frostyard/lodge-client": "github:frostyard/lodge#<commit>&path:client"
+"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.1.0&path:client"
 ```
+
+Between releases an app may pin a pushed lodge commit in its place
+(`#<commit>&path:client`). The Go kit has its own tags, `kit/vX.Y.Z`.
 
 ```ts
 import { connectLodge } from "@frostyard/lodge-client";
