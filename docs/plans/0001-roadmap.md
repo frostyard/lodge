@@ -38,7 +38,10 @@ from what frostnotes and frostmail already share.
     rather than frostnotes' field per domain;
   - the contract generator (`tools/rpcgen`), if the two copies converge,
     and frostmail's Windows layer for the private socket, if frostmail's
-    local maild needs it from the kit. Both are decided while extracting.
+    local maild needs it from the kit. Both stay in the apps
+    ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)):
+    the generators differ in what a schema means, and the kit's runtime is
+    generic over each app's generated types, so neither generator changes.
 - **New in the kit,** each from
   [app-contract.md](../specs/app-contract.md):
   - the app-socket server: socket activation, the peer check, and

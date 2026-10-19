@@ -60,6 +60,10 @@ Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
   - `kit/mcpsession`: binds MCP sessions to their token.
   - `kit/kittest`: plays lodge's side over a socket, and checks the
     contract's socket rules.
+  - `kit/jsonrpc`: the apps' JSON-RPC runtime (server, router, client, the
+    private socket), generic over each app's generated types, and
+    `kit/rpctest`, its test harness
+    ([ADR-0012](docs/adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
   `shell/`: the shell page's UI. Both are TypeScript, built in an nsl
   machine.
