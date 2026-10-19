@@ -82,9 +82,17 @@ notes' Firefox runs do.
   | `Host`: `CONTENT` | `127.0.0.1:PORT2` |
   | the content origin, `https://CONTENT` | `http://127.0.0.1:PORT2` |
 
-  The two loopback origins are cross-origin and on one site, as the two
-  nodes are. Every other rule of this spec holds, with these values read in
-  place of the production ones.
+  The two loopback origins are cross-origin, as the two nodes are. Every
+  other rule of this spec holds, with these values read in place of the
+  production ones, but one:
+- **Content is `Cross-Origin-Resource-Policy: cross-origin`** in the
+  development build, in place of `same-site`. In production `LODGE` and
+  `CONTENT` share the registrable domain `<tailnet>.ts.net`, so `same-site`
+  admits lodge's pages. Chromium does not count two ports of `127.0.0.1` as
+  one site, and would refuse every content image an app frame loads
+  (`net::ERR_BLOCKED_BY_RESPONSE.NotSameSite`). The wrapper is in
+  `internal/e2eid`, so release builds lack it, and a test checks that a
+  release build's content keeps `same-site`.
 - **Absent from release builds.** The identity lives in `internal/e2eid`,
   whose every file carries `//go:build e2e`.
   - A test builds `cmd/lodge` without tags, and fails if `go tool nm` lists
@@ -121,6 +129,29 @@ On `CONTENT`:
   with no detail about other users, nodes, apps or tokens. They carry their
   kind's headers.
 - An app that cannot be reached on its socket answers 502.
+- Only sessions and device routes take a WebSocket upgrade. An upgrade on
+  any other route that proxies (`x/`, content, `/mcp`) answers 400 before
+  the app sees it.
+
+### Connections
+
+What a peer can hold open, whoever it is, since device routes and the
+first checks run before identity is known:
+
+- Each listener holds at most **64 connections from one remote address**
+  and **1,024 in all**. A connection past either is closed at once, before
+  lodge reads from it.
+- A request's header is at most **64 KiB** (431 past it), and must arrive
+  within 10 s.
+- **A refused request closes its connection:** every 400, 401, 403, 405,
+  426 and 429 carries `Connection: close`.
+- **A device request's body** may be slow but not stalled: each read of
+  it must arrive within **30 s**, or lodge closes the connection and the
+  app's read fails.
+- lodge holds at most **128 connections to one app's socket** for
+  requests that are not sessions; past that, requests wait for one.
+- A relayed frame is held whole, up to 16 MiB in each direction
+  ([sessions](#sessions)), so 64 sessions may hold about 2 GiB at worst.
 
 ### Shell routes
 
@@ -194,6 +225,28 @@ holds. Each failure is its own line:
 - Agent requests need checks a and b only. Device requests need none
   ([device routes](#device-routes)).
 
+### Native clients
+
+A native client on an allowed node, such as frostmail's desktop app through
+its bridge, uses the browser routes as the shell does. lodge tells it from
+a browser by nothing, and needs no code of its own for it.
+
+- It opens `wss://LODGE/app/<id>/api` with `Origin: https://LODGE`, which
+  an upgrade requires, and sends no `Sec-Fetch-*` header, which the
+  [browser checks](#browser-checks) check only when present.
+- **Identity is still WhoIs alone**, with the node and its login both on
+  the allow-lists. Any program on an allowed device that sets lodge's
+  `Origin` is signed in, as
+  [ADR-0005's consequences](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md#consequences)
+  accept.
+- It learns the content origin, `contentOrigin`, from `GET /lodge/apps`
+  ([shell routes](#shell-routes)), sent with the same `Origin`. Deriving
+  `CONTENT` from `LODGE` is only a fallback, since `--content-node` can
+  rename it.
+- Each of its windows may hold its own session, within the
+  [session bounds](#sessions): past a node's 8 per app, lodge closes the
+  least recently active, and that window reconnects.
+
 ### Headers
 
 Every browser response, errors included, carries these:
@@ -215,10 +268,13 @@ default-src 'none'; script-src https://LODGE/lodge/; style-src https://LODGE/lod
 ```
 
 **The app policy,** for app `<id>`, with the bracketed parts present only
-when the manifest sets that flag:
+when the manifest sets that flag. Scripts and stylesheets come only from
+the bundle's `assets/` ([app-contract.md](app-contract.md#install-layout)),
+so nothing the app's daemon serves, such as an `x/` read, can run as
+script:
 
 ```
-default-src 'none'; script-src https://LODGE/app/<id>/; style-src https://LODGE/app/<id>/ 'unsafe-inline'; img-src 'self' data: [content: https://CONTENT] [remoteImages: https:]; media-src 'self' [content: https://CONTENT]; font-src https://LODGE/app/<id>/ data:; connect-src https://LODGE/app/<id>/ wss://LODGE/app/<id>/api; frame-src https://LODGE/app/<id>/ [content: https://CONTENT]; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+default-src 'none'; script-src https://LODGE/app/<id>/assets/; style-src https://LODGE/app/<id>/assets/ 'unsafe-inline'; img-src 'self' data: [content: https://CONTENT] [remoteImages: https:]; media-src 'self' [content: https://CONTENT]; font-src https://LODGE/app/<id>/ data:; connect-src https://LODGE/app/<id>/ wss://LODGE/app/<id>/api; frame-src https://LODGE/app/<id>/ [content: https://CONTENT]; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
 ```
 
 - **Content responses** carry their own set ([content
@@ -321,7 +377,17 @@ unless it says otherwise.
    same-site, and a content URL opened in a new tab is `same-site` or
    `none`.
 4. **Identity:** the [identity checks](#identity), all of them.
-5. **App:** `<id>` names an enabled app with `content: true`, else 404.
+5. **App:** `<id>` names an enabled app with `content: true`, else 404,
+   or 503 with the reason when the app is disabled, as on every route.
+
+**Same-site is the whole tailnet.** `ts.net` is on the Public Suffix List,
+so the site of `CONTENT` is `<tailnet>.ts.net`, and every node in the
+tailnet is same-site to it, a page another node serves included (with
+`tailscale serve` or Funnel, from the internet). Such a page, open on an
+allowed device, can embed a content URL and learn whether it loads. So an
+app MUST name its content by keys no one can guess: a MAC under a secret
+the app keeps, as mail's are, never a bare hash of the content, which
+anyone holding the same file can compute.
 
 lodge then proxies to the app's `GET /content/<path>`, with the query and
 any `Range`, as caller `content` with the identity headers. To the
@@ -329,7 +395,7 @@ response it adds:
 
 | Header | Value |
 | --- | --- |
-| `Content-Security-Policy` | `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox; frame-ancestors https://LODGE` |
+| `Content-Security-Policy` | `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'; sandbox; frame-ancestors https://LODGE` |
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `no-referrer` |
 | `Cross-Origin-Resource-Policy` | `same-site` |
@@ -378,7 +444,11 @@ lodge then proxies to the app's `/mcp`:
 - A token's last use is recorded at most once a minute.
 - lodge logs each request's node name, token name, method and status.
 - **Revoking a token** refuses its next request (401), and at once closes
-  every request and stream lodge is proxying for it.
+  every request and stream lodge is proxying for it. lodge knows a stream
+  by the token's row, not its name, and checks the secret again once the
+  stream is registered, so a new token of the same name changes nothing.
+- The response carries the [confined set](#device-routes) of device
+  responses, without `Cross-Origin-Resource-Policy`.
 
 ### Device routes
 
@@ -389,17 +459,23 @@ lodge then proxies to the app's `/mcp`:
    503 when disabled.
 
 lodge checks no identity here. The app authenticates the request. When
-WhoIs names the peer, lodge adds `Lodge-Node-ID` and `Lodge-Node-Name`,
-plus `Lodge-Login` for an untagged node, for display only. It proxies to
-the app's `/device/<path>` with the query.
+WhoIs names the peer, from one of the node's own addresses (check b),
+lodge adds `Lodge-Node-ID` and `Lodge-Node-Name`, plus `Lodge-Login` for
+an untagged node, for display only. It proxies to the app's
+`/device/<path>` with the query.
 
 - The device's own headers pass through, `Origin` and `Authorization`
   included, except those [proxying](#proxying) removes.
 - Bodies stream both ways. WebSocket frames are relayed as for sessions,
   up to 16 MiB, but with no liveness rule of lodge's.
-- The response passes through. lodge adds `X-Content-Type-Options:
-  nosniff` and `Cross-Origin-Resource-Policy: same-origin`, and drops
-  `Set-Cookie`.
+- Each read of a request body has 30 s ([connections](#connections)).
+- The response passes through. lodge drops `Set-Cookie` and adds a
+  confined set, since a browser could load a device response on the lodge
+  origin, which every app shares: `Content-Security-Policy: default-src
+  'none'; sandbox; frame-ancestors 'none'` (beside the app's own),
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Resource-Policy: same-origin`. Devices ignore them.
 
 ### Proxying
 
@@ -413,6 +489,17 @@ For every kind, before a request goes to an app's socket:
 - It sets `Host: <id>`, and the caller headers of
   [app-contract.md](app-contract.md#caller-headers).
 - The path is the route table's, with the query unchanged.
+- **It checks that the socket is the app's.** The socket's file must be
+  owned by the manifest's `user`, and its peer (`SO_PEERCRED`) must be
+  that user or root: a socket systemd makes and passes to the app reports
+  root, which called `listen`, and another app's user can be neither.
+  Otherwise lodge sends nothing, and the app is disabled with the reason
+  until `lodgectl reload`. An app whose `user` does not exist is disabled.
+  Under `--root`, lodge's own uid passes too.
+- **At start, lodge refuses to run** unless `/run/lodge/apps` is a
+  directory owned by root that no one else can write, since whoever can
+  write it could replace an app's socket. Under `--root`, which is the
+  developer's own, it only warns.
 
 ### Tokens, logins and nodes
 
@@ -438,11 +525,13 @@ For every kind, before a request goes to an app's socket:
 `/run/lodge/control.sock` (owner `lodge`, 0600) serves JSON-RPC 2.0, one
 message per line. It accepts a connection only from uid 0 or lodge's own
 uid, so `lodgectl` runs as root (`sudo lodgectl …`). It is the only place
-that issues credentials.
+that issues credentials. lodge serves it from its start, before its nodes have
+joined the tailnet, so a first start without an auth key can be checked
+and allowed while the nodes wait for their login.
 
 | Command | Method | Does |
 | --- | --- | --- |
-| `lodgectl status` | `lodge.status` | the nodes and whether each is up, every app's state, session counts, and providers' availability (Phase 3) |
+| `lodgectl status` | `lodge.status` | each node's state, and its login URL while it needs a login; every app's state; session counts; and providers' availability (Phase 3) |
 | `lodgectl apps` | `lodge.apps` | each manifest, its state and its reason |
 | `lodgectl reload` | `lodge.reload` | rereads the manifests, as `SIGHUP` does |
 | `lodgectl logins` | `lodge.logins` | the allowed logins |
@@ -456,7 +545,8 @@ that issues credentials.
 | `lodgectl token revoke NAME` | `lodge.revokeToken` | revokes it and closes its streams; `notFound` if absent |
 | `lodgectl sessions` | `lodge.sessions` | live sessions: ID, app, login, node name, start, `seenAt` |
 | `lodgectl session end ID` | `lodge.endSession` | closes one; `notFound` if absent |
-| `lodgectl usage [--since DATE]` | `lodge.usage` | inference usage per app and alias (Phase 3) |
+| `lodgectl usage [--since DATE]` | `lodge.usage` | inference usage per app and alias ([inference.md](inference.md#the-usage-log)) |
+| `lodgectl provider key NAME` | `lodge.providerKey` | sets or removes an inference provider's key, read from stdin; `notFound` for no such provider ([inference.md](inference.md#credentials)) |
 
 The hint on stderr is
 `claude mcp add --transport http <id> https://LODGE/mcp/<id> --header "Authorization: Bearer <token>"`.

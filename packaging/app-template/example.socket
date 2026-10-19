@@ -1,0 +1,18 @@
+# A lodge app's socket unit, for an app to copy
+# (docs/specs/app-contract.md, Install layout). Replace "example" with the
+# app's id and "frostexample" with its system user. systemd creates the
+# socket, owned by the app's user and group lodge, 0660, and passes it to
+# the daemon, which the kit's lodgeapp.Env.Listen accepts.
+[Unit]
+Description=The example app's lodge socket
+
+[Socket]
+ListenStream=/run/lodge/apps/example.sock
+FileDescriptorName=example
+SocketUser=frostexample
+SocketGroup=lodge
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

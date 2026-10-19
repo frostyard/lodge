@@ -1,0 +1,39 @@
+# A lodge app's daemon, for an app to copy (docs/specs/app-contract.md).
+# Replace "example" with the app's id, "frostexample" with its system user
+# (declared in the app's own sysusers.d, in group lodge-apps and never in
+# lodge), and ExecStart with its daemon.
+[Unit]
+Description=The example app, behind lodge
+Requires=example.socket
+After=example.socket
+
+[Service]
+Type=exec
+User=frostexample
+Group=frostexample
+SupplementaryGroups=lodge-apps
+ExecStart=/usr/bin/exampled
+StateDirectory=frostexample
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

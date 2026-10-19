@@ -29,6 +29,7 @@ frostyard/core's
 - [0009 — Apps switch in frames that stay loaded](adr/0009-apps-switch-in-frames-that-stay-loaded.md)
 - [0010 — Untrusted bytes come from a second node](adr/0010-untrusted-bytes-come-from-a-second-node.md)
 - [0011 — A shared inference layer routes apps to models](adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
+- [0012 — The kit shares the RPC runtime, not the generator](adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)
 
 ### Design
 
@@ -40,6 +41,7 @@ frostyard/core's
 - [lodge's HTTP surface](specs/lodge-http.md) — listeners, routes by kind, browser, content, agent and device checks, headers, sessions, tokens and allow-lists, `lodgectl`
 - [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, and the library's API
 - [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history
+- [The inference layer](specs/inference.md) — lodge's side of the inference socket: the caller, providers, aliases and allow-lists, the queue, credentials, availability and the usage log
 
 ### Plans
 
