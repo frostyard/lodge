@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -168,6 +169,7 @@ func TestAllowListsReadEveryRequest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		io.Copy(io.Discard, resp.Body) // a drained body keeps the connection
 		resp.Body.Close()
 		return resp.StatusCode
 	}
@@ -204,6 +206,7 @@ func TestWhoIsCachedPerConnectionFor60s(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		io.Copy(io.Discard, resp.Body) // a drained body keeps the connection
 		resp.Body.Close()
 	}
 	get(c)
