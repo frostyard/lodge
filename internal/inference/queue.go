@@ -51,9 +51,14 @@ type Queue struct {
 	changed chan struct{}
 }
 
+// notify tells a test's changed, read under the lock, since a test sets it
+// while requests are queued. Callers hold no lock.
 func (q *Queue) notify() {
-	if q.changed != nil {
-		q.changed <- struct{}{}
+	q.mu.Lock()
+	changed := q.changed
+	q.mu.Unlock()
+	if changed != nil {
+		changed <- struct{}{}
 	}
 }
 
