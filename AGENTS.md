@@ -22,8 +22,9 @@ the canonical paths; keep content tool-agnostic.
 ## Status
 
 Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. The code is a stub `cmd/lodge` that prints its version, the
-repository checks, and the kit's new pieces (Phase 1). The order of work is the
+Proposed. The kit's new pieces and the client (Phase 1) and lodge v1
+(Phase 2's code: the gateway, the shell, the development build and
+packaging) are in review. The order of work is the
 [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
 [frostyard/frostmail](https://github.com/frostyard/frostmail), which are
@@ -33,22 +34,27 @@ step names.
 
 ## Map
 
-Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
+Only `internal/inference` (Phase 3) is planned.
 
-- `cmd/lodge`: the daemon. Today it only prints its version.
-  `cmd/lodgectl`: the CLI, over lodge's control socket.
+- `cmd/lodge`: the daemon. `cmd/lodgectl`: the CLI, over lodge's control
+  socket. Built with the `e2e` tag, `cmd/lodge` is the development build
+  (`make e2e-build`), whose fixed identity is `internal/e2eid` (every file
+  tagged `e2e`; a test proves with `go tool nm` that releases lack it).
 - `internal/tailnet`: the only package that imports `tailscale.com`. It
   covers the two tsnet nodes (`lodge` and `lodge-content`), their TLS
-  listeners and WhoIs.
+  listeners and WhoIs. `internal/peer` is WhoIs's answer, without
+  Tailscale, for everything else.
 - `internal/gateway`: sorts routes by kind, runs each kind's checks, sets
   the headers, and proxies to app sockets.
   - `internal/sessions`: browser sessions.
   - `internal/tokens`: MCP tokens.
   - `internal/allow`: the allow-lists of logins and nodes.
+  - `internal/store`: lodge's SQLite database, which they live in.
   - `internal/apps`: manifests, bundles and health.
   - `internal/inference`: the inference socket, aliases, the queue and
-    providers.
+    providers (planned).
   - `internal/control`: the control socket that `lodgectl` uses.
+  - `internal/apptest`: fake apps on sockets, for tests.
 - `kit/`: the nested module `github.com/frostyard/lodge/kit` that app
   daemons import. It never imports `tailscale.com` or anything of lodge's
   outside `kit/` (checked by `internal/repocheck`), and every gate runs in
@@ -61,8 +67,13 @@ Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
   - `kit/kittest`: plays lodge's side over a socket, and checks the
     contract's socket rules.
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
-  `shell/`: the shell page's UI. Both are TypeScript, built in an nsl
-  machine.
+  `shell/`: the shell page's UI, on the client's shell half. Both are
+  TypeScript, built in an nsl machine.
+- `packaging/`: the systemd unit, sysusers.d and tmpfiles.d entries, the
+  install script (`make dist`, `make install`) and an app's unit
+  templates. `internal/packagecheck` tests them.
+- `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
+  build with two `dev/fakeapp` apps, for smoke tests in a browser).
 - `internal/repocheck`: tests of the repository's rules. Relative links
   resolve, every doc has an index line, no private host is named, and
   `kit/` keeps its import boundary.
@@ -74,14 +85,17 @@ Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
 - `make check` formats, then runs `make verify`: tidy (`go mod tidy
   -diff`), vet, gofmt, the pinned golangci-lint (`mise install`) and the
   tests. Run it before claiming any change complete, docs included, because
-  `internal/repocheck` checks the docs' links and index. `make ci` is
-  verify plus `make race` and `make cross` (linux/amd64 and linux/arm64).
-  CI runs the same targets.
+  `internal/repocheck` checks the docs' links and index. The `e2e`-tagged
+  files are vetted, linted and tested with their tag too. `make ci` is
+  verify plus `make race`, `make cross` (linux/amd64 and linux/arm64), and
+  `make client-check` and `make shell-check` (nsl). CI runs the same
+  targets.
 - Tests run unfiltered (`go test ./...`, frostyard/core ADR-0038). A test
   that needs a real tailnet, the network or root skips unless
   `LODGE_LIVE_<WHAT>=1` is set, and never runs inside the gate.
 - Never run pnpm, node or cargo on the host. `client/` and `shell/` build in
-  an nsl machine, as frostnotes' app does.
+  the nsl machine `lodge` (`dev/nsl/provision.sh`), as frostnotes' app
+  does.
 - Fix a lint finding rather than loosening `.golangci.yml`.
 
 ## Invariants (decided; binding from the first line of code)

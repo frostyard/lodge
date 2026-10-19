@@ -321,7 +321,8 @@ unless it says otherwise.
    same-site, and a content URL opened in a new tab is `same-site` or
    `none`.
 4. **Identity:** the [identity checks](#identity), all of them.
-5. **App:** `<id>` names an enabled app with `content: true`, else 404.
+5. **App:** `<id>` names an enabled app with `content: true`, else 404,
+   or 503 with the reason when the app is disabled, as on every route.
 
 lodge then proxies to the app's `GET /content/<path>`, with the query and
 any `Range`, as caller `content` with the identity headers. To the
@@ -438,11 +439,13 @@ For every kind, before a request goes to an app's socket:
 `/run/lodge/control.sock` (owner `lodge`, 0600) serves JSON-RPC 2.0, one
 message per line. It accepts a connection only from uid 0 or lodge's own
 uid, so `lodgectl` runs as root (`sudo lodgectl …`). It is the only place
-that issues credentials.
+that issues credentials. lodge serves it from its start, before its nodes have
+joined the tailnet, so a first start without an auth key can be checked
+and allowed while the nodes wait for their login.
 
 | Command | Method | Does |
 | --- | --- | --- |
-| `lodgectl status` | `lodge.status` | the nodes and whether each is up, every app's state, session counts, and providers' availability (Phase 3) |
+| `lodgectl status` | `lodge.status` | each node's state, and its login URL while it needs a login; every app's state; session counts; and providers' availability (Phase 3) |
 | `lodgectl apps` | `lodge.apps` | each manifest, its state and its reason |
 | `lodgectl reload` | `lodge.reload` | rereads the manifests, as `SIGHUP` does |
 | `lodgectl logins` | `lodge.logins` | the allowed logins |
