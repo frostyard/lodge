@@ -8,13 +8,20 @@ export const CONTRACT = 1;
 /** The switcher's default shortcut (docs/specs/shell.md, The switcher). */
 export const DEFAULT_SHORTCUT = "Ctrl+Backquote";
 
+/** The companion's default chord: the switcher's with Shift (docs/specs/shell.md, The companion). */
+export const DEFAULT_COMPANION = "Ctrl+Shift+Backquote";
+
 /** Limits on message fields, in characters. */
 export const MAX_ROUTE = 2048;
 export const MAX_TITLE = 200;
 export const MAX_KIND = 32;
 export const MAX_REF = 1024;
+export const MAX_PROMPT = 4000;
 
 export type Theme = "light" | "dark";
+
+/** A frame's role: an app's own frame, or the frame opened as the companion. */
+export type Role = "app" | "companion";
 
 interface Envelope<T extends string> {
   lodge: typeof CONTRACT;
@@ -48,12 +55,17 @@ export interface OpenMessage extends Envelope<"open"> {
   url: string;
 }
 
-/** app → shell: the switcher's shortcut was pressed, or the app asked for the switcher. */
+/** app → shell: the switcher's shortcut or the companion's chord was pressed, or the app asked for the switcher. */
 export interface ShortcutMessage extends Envelope<"shortcut"> {
   key: string;
 }
 
-export type AppMessage = ReadyMessage | RouteMessage | ContextMessage | OpenMessage | ShortcutMessage;
+/** app → shell: open the companion with a prompt about what is on screen. */
+export interface AskMessage extends Envelope<"ask"> {
+  prompt: string;
+}
+
+export type AppMessage = ReadyMessage | RouteMessage | ContextMessage | OpenMessage | ShortcutMessage | AskMessage;
 
 /** shell → app: the answer to `ready`. */
 export interface InitMessage extends Envelope<"init"> {
@@ -61,6 +73,10 @@ export interface InitMessage extends Envelope<"init"> {
   contentOrigin: string | null;
   shortcut: string;
   theme: Theme;
+  /** "companion" in the frame opened as the companion, else "app"; "app" from a shell that sends none. */
+  role: Role;
+  /** The companion's chord, or null when no app is the companion or the shell sends none. */
+  companion: string | null;
 }
 
 /** shell → app: go to this route. */
@@ -83,10 +99,22 @@ export interface AppContext extends Context {
   app: string;
 }
 
-/** shell → companion: the current app's context (reserved for the roadmap's Phase 5). */
+/** shell → companion: the current app's context. */
 export interface CompanionContextMessage extends Envelope<"context">, AppContext {}
 
-export type ShellMessage = InitMessage | NavigateMessage | VisibleMessage | ThemeMessage | CompanionContextMessage;
+/** shell → companion: the current app's `ask`, after its context. */
+export interface CompanionAskMessage extends Envelope<"ask"> {
+  app: string;
+  prompt: string;
+}
+
+export type ShellMessage =
+  | InitMessage
+  | NavigateMessage
+  | VisibleMessage
+  | ThemeMessage
+  | CompanionContextMessage
+  | CompanionAskMessage;
 
 const ID = /^[a-z][a-z0-9]{0,15}$/;
 const RESERVED = new Set(["app", "device", "lodge", "mcp"]);
@@ -110,6 +138,12 @@ export function validContext(c: Context): boolean {
     c.ref.length <= MAX_REF &&
     typeof c.title === "string"
   );
+}
+
+/** validPrompt reports whether `prompt` is 1 to MAX_PROMPT characters. */
+export function validPrompt(prompt: unknown): prompt is string {
+  if (typeof prompt !== "string" || prompt.length === 0) return false;
+  return prompt.length <= MAX_PROMPT || Array.from(prompt).length <= MAX_PROMPT;
 }
 
 /** title cuts a title to MAX_TITLE characters. */
@@ -162,6 +196,8 @@ export function parseAppMessage(data: unknown): AppMessage | null {
       return typeof m.url === "string" ? { lodge, type: "open", url: m.url } : null;
     case "shortcut":
       return typeof m.key === "string" ? { lodge, type: "shortcut", key: m.key } : null;
+    case "ask":
+      return validPrompt(m.prompt) ? { lodge, type: "ask", prompt: m.prompt } : null;
   }
   return null;
 }
@@ -177,7 +213,9 @@ export function parseShellMessage(data: unknown): ShellMessage | null {
         !Number.isInteger(m.contract) ||
         !(m.contentOrigin === null || typeof m.contentOrigin === "string") ||
         typeof m.shortcut !== "string" ||
-        !isTheme(m.theme)
+        !isTheme(m.theme) ||
+        !(m.role === undefined || m.role === "app" || m.role === "companion") ||
+        !(m.companion === undefined || m.companion === null || typeof m.companion === "string")
       ) {
         return null;
       }
@@ -188,6 +226,8 @@ export function parseShellMessage(data: unknown): ShellMessage | null {
         contentOrigin: m.contentOrigin,
         shortcut: m.shortcut,
         theme: m.theme,
+        role: m.role ?? "app",
+        companion: m.companion ?? null,
       };
     case "navigate":
       return validRoute(m.route) ? { lodge, type: "navigate", route: m.route } : null;
@@ -200,6 +240,9 @@ export function parseShellMessage(data: unknown): ShellMessage | null {
       if (c === null || typeof m.app !== "string" || !validApp(m.app)) return null;
       return { lodge, type: "context", app: m.app, ...c };
     }
+    case "ask":
+      if (typeof m.app !== "string" || !validApp(m.app) || !validPrompt(m.prompt)) return null;
+      return { lodge, type: "ask", app: m.app, prompt: m.prompt };
   }
   return null;
 }

@@ -79,7 +79,7 @@ Constraints from what lodge already is:
   catches it in every frame).
 - [specs/shell.md](../specs/shell.md#the-companion) pins the layout and
   keys, and [specs/lodge-client.md](../specs/lodge-client.md#the-companion)
-  the messages. Both are designed, not built: the roadmap's
+  the messages. The roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
   builds them.
 

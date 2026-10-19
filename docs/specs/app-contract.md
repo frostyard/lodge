@@ -23,12 +23,13 @@ gateway), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpo
 
 **Status:** contract major **1**, written on 2026-10-18. The app side binds
 when the kit lands (the [roadmap's](../plans/0001-roadmap.md) Phase 1), and
-lodge's side when lodge v1 does (Phase 2). Two additions were designed on
-2026-10-19 and are not built: what `companion: true` does, and
-[the agent socket](#the-agent-socket). They are marked *(Phase 6)*, and
-bind, additively in major 1, when the roadmap's
-[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-builds them.
+lodge's side when lodge v1 does (Phase 2). Two additions date from
+2026-10-19, in the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket):
+what `companion: true` does, which is built, and
+[the agent socket](#the-agent-socket), which is designed but not built.
+That is marked *(Phase 6)*, and binds, additively in major 1, when Phase 6
+builds it.
 
 ## Interface
 
@@ -99,7 +100,7 @@ builds them.
 | `device` | bool | no | the app has routes it authenticates itself |
 | `mcp` | bool | no | the app serves MCP |
 | `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; Porter: never) |
-| `companion` | bool | no | the app is the companion: it opens in a panel beside the current app, and is told that app's context ([shell.md](shell.md#the-companion)). At most one app *(Phase 6)* |
+| `companion` | bool | no | the app is the companion: it opens in a panel beside the current app, and is told that app's context ([shell.md](shell.md#the-companion)). At most one app |
 
 A missing bool is `false`. Notes' manifest:
 
@@ -117,9 +118,9 @@ A missing bool is `false`. Notes' manifest:
   or its icon is missing. lodge logs why, the rail shows it, and every route
   of that app answers 503. The other apps are unaffected.
 - When two manifests claim one `user`, both are disabled. When two claim one
-  `key`, both lose the key and stay enabled. *(Phase 6)* When two set
-  `companion`, neither is the companion, and both stay enabled. In each
-  case `lodgectl apps` says why.
+  `key`, both lose the key and stay enabled. When two set `companion`,
+  neither is the companion, and both stay enabled. In each case `lodgectl
+  apps` says why.
 
 ### Public URLs
 
@@ -355,15 +356,15 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 - The shell sends `init {contract, contentOrigin, shortcut, theme}` when
   the frame loads, and lodge-client's `contentURL(path)` builds content
-  URLs. *(Phase 6)* `init` adds `role` and `companion`, and an app may send
+  URLs. `init` adds `role` and `companion`, and an app may send
   `ask` for its "Ask about this"
   ([lodge-client.md](lodge-client.md#the-companion)).
 - The app reports its route, and never calls `history.pushState` in a
   frame.
-- The app MUST NOT bind the switcher's shortcut, nor *(Phase 6)* the
-  companion's chord.
-- *(Phase 6)* The app works in a frame 400 CSS pixels narrower than the
-  window, since the companion's panel may be open beside it.
+- The app MUST NOT bind the switcher's shortcut, nor the companion's
+  chord.
+- The app works in a frame 400 CSS pixels narrower than the window, since
+  the companion's panel may be open beside it.
 - The app prefixes its local-storage keys with `<id>:`.
 
 [lodge-client.md](lodge-client.md) pins the messages. For an app with

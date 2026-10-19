@@ -52,6 +52,22 @@ const rail = (): Rail => ({
   ],
 });
 
+/** A rail whose Porter is the companion. */
+const withCompanion = (): Rail => {
+  const r = rail();
+  r.apps.push({
+    id: "porter",
+    name: "Porter",
+    icon: "/app/porter/icon.svg",
+    key: "p",
+    content: false,
+    companion: true,
+    state: "up",
+    reason: "",
+  });
+  return r;
+};
+
 function memory(init: Record<string, string> = {}): Store & { data: Record<string, string> } {
   const data = { ...init };
   return {
@@ -78,6 +94,10 @@ interface Setup {
   /** fromApp posts a message as app's frame would. */
   fromApp(app: string, data: unknown): void;
   ready(app: string): void;
+  /** panel is the companion's frame, if created; sent.get("companion") is what it was sent. */
+  panel(): HTMLIFrameElement | null;
+  /** fromPanel posts a message as the companion's frame would. */
+  fromPanel(data: unknown): void;
 }
 
 const fakes = new Map<string, { postMessage(m: unknown, o: string): void }>();
@@ -86,14 +106,38 @@ const cleanups: (() => void)[] = [];
 
 async function setup(
   path = "/",
-  opts: { rail?: () => Rail | Promise<Rail>; store?: Record<string, string> } = {},
+  opts: {
+    rail?: () => Rail | Promise<Rail>;
+    store?: Record<string, string>;
+    now?: () => number;
+    /** Whether the window is under 600 pixels wide. */
+    narrow?: boolean;
+  } = {},
 ): Promise<Setup> {
   history.replaceState(null, "", path);
   document.body.replaceChildren();
   const store = memory(opts.store);
   const sent = new Map<string, Sent>();
   const fetchRail = vi.fn(async () => (opts.rail ?? rail)());
-  const shell = new LodgeShell({ window, settings: new Settings(store), fetchRail });
+  if (opts.narrow !== undefined) {
+    const real = window.matchMedia;
+    const narrow = opts.narrow;
+    window.matchMedia = ((q: string) => ({
+      matches: q.includes("max-width") ? narrow : false,
+      media: q,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
+    cleanups.push(() => {
+      window.matchMedia = real;
+    });
+  }
+  const shell = new LodgeShell({
+    window,
+    settings: new Settings(store),
+    fetchRail,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
   document.body.append(shell.root);
   // Each frame gets a fake window as soon as it is created.
   const observer = new MutationObserver(() => {
@@ -105,7 +149,7 @@ async function setup(
     () => shell.stop(),
   );
   const wire = (f: HTMLIFrameElement) => {
-    const app = f.closest<HTMLElement>(".view")?.dataset.app ?? "";
+    const app = f.closest<HTMLElement>(".view")?.dataset.app ?? (f.closest(".companion") ? "companion" : "");
     if (fakes.has(app) && Object.hasOwn(f, "contentWindow")) return;
     const fake = {
       postMessage(m: unknown, origin: string) {
@@ -145,6 +189,17 @@ async function setup(
     },
     ready(app) {
       s.fromApp(app, { lodge: 1, type: "ready", contract: 1 });
+    },
+    panel: () => {
+      const f = document.querySelector<HTMLIFrameElement>(".companion iframe");
+      if (f) wire(f);
+      return f;
+    },
+    fromPanel(data) {
+      if (!s.panel()) throw new Error("no companion frame");
+      window.dispatchEvent(
+        Object.assign(new Event("message"), { data, origin: location.origin, source: fakes.get("companion") }),
+      );
     },
   };
   return s;
@@ -257,6 +312,8 @@ describe("frames", () => {
       contentOrigin: CONTENT,
       shortcut: "Ctrl+Backquote",
       theme: "dark",
+      role: "app",
+      companion: null,
     });
     s.shell.switchTo("plain");
     s.ready("plain");
@@ -421,5 +478,232 @@ describe("open", () => {
     expect(open).toHaveBeenNthCalledWith(1, `${CONTENT}/mail/m/1.pdf`, "_blank", "noopener,noreferrer");
     expect(open).toHaveBeenNthCalledWith(2, "https://example.com/", "_blank", "noopener,noreferrer");
     expect(s.shell.current).toBe("mail");
+  });
+});
+
+describe("the companion", () => {
+  const companion = () => document.querySelector<HTMLElement>(".companion") as HTMLElement;
+  const railButton = () => document.querySelector<HTMLButtonElement>(".rail .companion-button") as HTMLButtonElement;
+  const shown = () => !companion().hidden && document.querySelector(".lodge")?.hasAttribute("data-companion") === true;
+  const chord = () => key("Backquote", "~", { ctrlKey: true, shiftKey: true });
+
+  it("has a button on the rail and the bar only when an app is the companion", async () => {
+    let s = await setup("/notes");
+    expect([...document.querySelectorAll<HTMLButtonElement>(".companion-button")].map((b) => b.hidden)).toEqual([
+      true,
+      true,
+    ]);
+    window.dispatchEvent(chord());
+    expect(s.shell.companionShown).toBe(false);
+    s.shell.stop();
+    s = await setup("/notes", { rail: withCompanion });
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>(".companion-button")];
+    expect(buttons.map((b) => b.hidden)).toEqual([false, false]);
+    expect(railButton().getAttribute("aria-label")).toBe("Porter (Ctrl+Shift+`)");
+    expect(railButton().getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector(".bar .bar-end .companion-button")).toBe(buttons[1]);
+    expect(companion().hidden).toBe(true);
+    expect(s.panel()).toBeNull();
+  });
+
+  it("opens beside the current app from its button and its chord, in a frame of its own, and remembers it", async () => {
+    const s = await setup("/notes", { rail: withCompanion });
+    s.ready("notes");
+    railButton().click();
+    expect(shown()).toBe(true);
+    expect(railButton().getAttribute("aria-pressed")).toBe("true");
+    const panel = s.panel() as HTMLIFrameElement;
+    expect(panel.getAttribute("src")).toBe("/app/porter/");
+    expect(panel.getAttribute("title")).toBe("Porter (companion)");
+    expect(document.querySelector(".view[data-app=porter]")).toBeNull();
+    expect(s.store.data["lodge:companion"]).toBe("open");
+    expect(s.shell.current).toBe("notes");
+    expect(location.pathname).toBe("/notes");
+    window.dispatchEvent(chord());
+    expect(shown()).toBe(false);
+    expect(s.store.data["lodge:companion"]).toBeUndefined();
+    // The frame stays loaded, hidden and inert.
+    expect(s.panel()).toBe(panel);
+    expect(companion().inert).toBe(true);
+    // A frame's lodge-client posts the chord pressed inside it.
+    s.fromApp("notes", { lodge: 1, type: "shortcut", key: "Ctrl+Shift+Backquote" });
+    await vi.waitFor(() => expect(shown()).toBe(true));
+    s.fromApp("notes", { lodge: 1, type: "shortcut", key: "Ctrl+Backquote" });
+    await vi.waitFor(() => expect(s.shell.switcherOpen).toBe(true));
+    expect(shown()).toBe(true);
+    filter().dispatchEvent(chord());
+    expect(s.shell.switcherOpen).toBe(false);
+    expect(shown()).toBe(false);
+  });
+
+  it("says its role in init, and is told it is visible", async () => {
+    const s = await setup("/notes", { rail: withCompanion });
+    s.shell.toggleCompanion();
+    s.fromPanel({ lodge: 1, type: "ready", contract: 1 });
+    await vi.waitFor(() => expect(s.sent.get("companion")?.length).toBeGreaterThan(0));
+    expect(s.sent.get("companion")?.[0]).toEqual({
+      lodge: 1,
+      type: "init",
+      contract: 1,
+      contentOrigin: null,
+      shortcut: "Ctrl+Backquote",
+      theme: "light",
+      role: "companion",
+      companion: "Ctrl+Shift+Backquote",
+    });
+    expect(s.sent.get("companion")).toContainEqual({ lodge: 1, type: "visible", visible: true });
+    s.ready("notes");
+    expect(s.sent.get("notes")?.[0]).toMatchObject({ role: "app", companion: "Ctrl+Shift+Backquote" });
+    s.shell.toggleCompanion();
+    expect(s.sent.get("companion")?.at(-1)).toEqual({ lodge: 1, type: "visible", visible: false });
+  });
+
+  it("is told the current app's latest context, and none for an app that reported none", async () => {
+    const s = await setup("/notes", { rail: withCompanion });
+    s.ready("notes");
+    s.fromApp("notes", { lodge: 1, type: "context", kind: "note", ref: "notes/1/Plan.md", title: "Plan" });
+    s.shell.toggleCompanion();
+    s.fromPanel({ lodge: 1, type: "ready", contract: 1 });
+    const contexts = () => (s.sent.get("companion") ?? []).filter((m) => (m as { type: string }).type === "context");
+    await vi.waitFor(() =>
+      expect(contexts()).toEqual([
+        { lodge: 1, type: "context", app: "notes", kind: "note", ref: "notes/1/Plan.md", title: "Plan" },
+      ]),
+    );
+    s.fromApp("notes", { lodge: 1, type: "context", kind: "note", ref: "notes/1/Other.md", title: "Other" });
+    await vi.waitFor(() => expect(contexts()).toHaveLength(2));
+    s.shell.switchTo("mail");
+    expect(contexts().at(-1)).toEqual({ lodge: 1, type: "context", app: "mail", kind: null, ref: "", title: "" });
+    // Only the current app's context is forwarded.
+    s.fromApp("notes", { lodge: 1, type: "context", kind: "note", ref: "notes/1/Third.md", title: "Third" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(contexts()).toHaveLength(3);
+    s.shell.switchTo("notes");
+    expect(contexts().at(-1)).toMatchObject({ app: "notes", ref: "notes/1/Third.md" });
+    // Nothing goes while it is closed; opening sends the latest.
+    s.shell.toggleCompanion();
+    s.shell.switchTo("mail");
+    expect(contexts()).toHaveLength(4);
+    s.shell.toggleCompanion();
+    expect(contexts()).toHaveLength(5);
+  });
+
+  it("opens on the current app's ask, once a second, with the context first", async () => {
+    let now = 10_000;
+    const s = await setup("/notes", { rail: withCompanion, now: () => now });
+    s.ready("notes");
+    s.fromApp("notes", { lodge: 1, type: "context", kind: "note", ref: "notes/1/Plan.md", title: "Plan" });
+    s.fromApp("notes", { lodge: 1, type: "ask", prompt: "What is due here?" });
+    await vi.waitFor(() => expect(shown()).toBe(true));
+    expect(s.store.data["lodge:companion"]).toBe("open");
+    // The frame is new: the ask waits for its ready.
+    s.fromPanel({ lodge: 1, type: "ready", contract: 1 });
+    const fromShell = () =>
+      (s.sent.get("companion") ?? []).filter((m) => ["context", "ask"].includes((m as { type: string }).type));
+    await vi.waitFor(() =>
+      expect(fromShell()).toEqual([
+        { lodge: 1, type: "context", app: "notes", kind: "note", ref: "notes/1/Plan.md", title: "Plan" },
+        { lodge: 1, type: "ask", app: "notes", prompt: "What is due here?" },
+      ]),
+    );
+    now += 999;
+    s.fromApp("notes", { lodge: 1, type: "ask", prompt: "Too soon" });
+    s.shell.switchTo("mail");
+    s.ready("mail");
+    now += 1;
+    s.fromApp("notes", { lodge: 1, type: "ask", prompt: "From a hidden frame" });
+    s.fromPanel({ lodge: 1, type: "ask", prompt: "From the companion" });
+    s.fromApp("mail", { lodge: 1, type: "ask", prompt: "Draft a yes" });
+    await vi.waitFor(() =>
+      expect(fromShell().at(-1)).toEqual({ lodge: 1, type: "ask", app: "mail", prompt: "Draft a yes" }),
+    );
+    expect(
+      fromShell()
+        .map((m) => (m as { prompt?: string }).prompt)
+        .filter(Boolean),
+    ).toEqual(["What is due here?", "Draft a yes"]);
+  });
+
+  it("ignores the companion frame's route, context and ask, and follows its open", async () => {
+    const s = await setup("/notes", { rail: withCompanion });
+    s.ready("notes");
+    s.shell.toggleCompanion();
+    s.fromPanel({ lodge: 1, type: "ready", contract: 1 });
+    const before = history.length;
+    s.fromPanel({ lodge: 1, type: "route", path: "/thread/1", title: "Thread" });
+    s.fromPanel({ lodge: 1, type: "context", kind: "thread", ref: "1", title: "Thread" });
+    s.fromPanel({ lodge: 1, type: "open", url: "/mail/thread/42" });
+    await vi.waitFor(() => expect(s.shell.current).toBe("mail"));
+    expect(location.pathname).toBe("/mail/thread/42");
+    expect(history.length).toBe(before + 1);
+    expect(document.title).not.toContain("Thread");
+    expect(shown()).toBe(true);
+  });
+
+  it("hides while the companion app is current, and then its toggle shows the app before it beside it", async () => {
+    const s = await setup("/notes", { rail: withCompanion });
+    s.shell.toggleCompanion();
+    const panel = s.panel();
+    s.shell.switchTo("porter");
+    expect(s.shell.current).toBe("porter");
+    expect(shown()).toBe(false);
+    expect(s.frame("porter")).not.toBe(panel);
+    expect(railButton().getAttribute("aria-pressed")).toBe("false");
+    // It is still open: it returns beside the next app.
+    s.shell.switchTo("mail");
+    expect(shown()).toBe(true);
+    s.shell.switchTo("porter");
+    railButton().click();
+    expect(s.shell.current).toBe("mail");
+    expect(shown()).toBe(true);
+    expect(s.panel()).toBe(panel);
+  });
+
+  it("opens again on load from 600 pixels", async () => {
+    const s = await setup("/notes", { rail: withCompanion, store: { "lodge:companion": "open" }, narrow: false });
+    expect(shown()).toBe(true);
+    expect(s.panel()?.getAttribute("src")).toBe("/app/porter/");
+  });
+
+  it("is a sheet under 600 pixels that starts closed, covers the app, and closes from its handle", async () => {
+    const s = await setup("/notes", { rail: withCompanion, store: { "lodge:companion": "open" }, narrow: true });
+    expect(shown()).toBe(false);
+    const views = document.querySelector<HTMLElement>(".views") as HTMLElement;
+    const bar = document.querySelector<HTMLElement>(".bar") as HTMLElement;
+    const handle = document.querySelector<HTMLButtonElement>(".companion-handle") as HTMLButtonElement;
+    s.shell.toggleCompanion();
+    expect(shown()).toBe(true);
+    expect([views.inert, bar.inert]).toEqual([true, true]);
+    expect(s.frame("notes")).toBeTruthy(); // the app stays loaded underneath
+    handle.click();
+    expect(shown()).toBe(false);
+    expect([views.inert, bar.inert]).toEqual([false, false]);
+    // A short drag springs back; a long one closes it.
+    s.shell.toggleCompanion();
+    const drag = (dy: number) => {
+      handle.dispatchEvent(new PointerEvent("pointerdown", { clientY: 100, pointerId: 1, bubbles: true }));
+      handle.dispatchEvent(new PointerEvent("pointermove", { clientY: 100 + dy, pointerId: 1, bubbles: true }));
+      expect(companion().style.transform).toBe(`translateY(${dy}px)`);
+      handle.dispatchEvent(new PointerEvent("pointerup", { clientY: 100 + dy, pointerId: 1, bubbles: true }));
+      handle.click(); // a drag ends in a click too
+    };
+    drag(40);
+    expect(shown()).toBe(true);
+    expect(companion().style.transform).toBe("");
+    drag(120);
+    expect(shown()).toBe(false);
+  });
+
+  it("uses a stored chord, but never the switcher's or a ruled-out one", async () => {
+    let s = await setup("/notes", { rail: withCompanion, store: { "lodge:companionShortcut": "Ctrl+Alt+KeyJ" } });
+    expect(s.shell.companionShortcut).toBe("Ctrl+Alt+KeyJ");
+    window.dispatchEvent(key("KeyJ", "j", { ctrlKey: true, altKey: true }));
+    expect(s.shell.companionShown).toBe(true);
+    s.shell.stop();
+    s = await setup("/notes", { rail: withCompanion, store: { "lodge:companionShortcut": "Ctrl+Backquote" } });
+    expect(s.shell.companionShortcut).toBe("Ctrl+Shift+Backquote");
+    s.shell.stop();
+    s = await setup("/notes", { rail: withCompanion, store: { "lodge:companionShortcut": "Ctrl+KeyT" } });
+    expect(s.shell.companionShortcut).toBe("Ctrl+Shift+Backquote");
   });
 });

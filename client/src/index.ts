@@ -13,9 +13,11 @@ import {
   type Context,
   type InitMessage,
   parseShellMessage,
+  type Role,
   type RouteMessage,
   type Theme,
   validApp,
+  validPrompt,
   validRoute,
 } from "./messages.js";
 
@@ -63,7 +65,11 @@ export interface HistoryUpdate {
   location: LodgeLocation;
 }
 
-/** A history for client-side routers, driven by `route` and `navigate` instead of the window's. */
+/**
+ * A history for client-side routers, driven by `route` and `navigate`
+ * instead of the window's. In the companion's frame it is kept in memory:
+ * push and replace post nothing, and the shell sends no navigate.
+ */
 export interface LodgeHistory {
   readonly location: LodgeLocation;
   /** push posts `route` and calls the listeners. */
@@ -78,8 +84,10 @@ export interface LodgeEvents {
   navigate: { route: string };
   visible: { visible: boolean };
   theme: { scheme: Theme };
-  /** The current app's context, for a frame opened as the companion (reserved). */
+  /** In the companion's frame: the current app's context. */
   context: AppContext;
+  /** In the companion's frame: the current app's "Ask about this", after its context. */
+  ask: { app: string; prompt: string };
 }
 
 export interface Lodge {
@@ -89,6 +97,10 @@ export interface Lodge {
   readonly theme: Theme;
   /** The switcher's chord, such as "Ctrl+Backquote". The app must not bind it. */
   readonly shortcut: string;
+  /** "companion" in the frame opened as the companion, else "app". */
+  readonly role: Role;
+  /** The companion's chord, such as "Ctrl+Shift+Backquote", or null without a companion. The app must not bind it. */
+  readonly companion: string | null;
   /** https://CONTENT, or null for an app without content. */
   readonly contentOrigin: string | null;
   /** Whether this frame is the one shown, or the open companion. */
@@ -102,6 +114,12 @@ export interface Lodge {
   route(path: string, title?: string, options?: { replace?: boolean }): void;
   /** Reports what is on screen, for the companion. */
   context(c: Context): void;
+  /**
+   * Opens the companion with a prompt about what is on screen: an app's
+   * "Ask about this". Report the context first, and call it from the
+   * handler of the input that asked. Offer it only when `companion` is not null.
+   */
+  ask(prompt: string): void;
   /** Asks the shell to open a URL: a canonical lodge URL, a content URL, or an outside one. */
   open(url: string): void;
   /** Opens the switcher, as its shortcut does. */
@@ -184,6 +202,8 @@ class Client implements Lodge {
   readonly app: string;
   readonly contract: number;
   readonly shortcut: string;
+  readonly role: Role;
+  readonly companion: string | null;
   readonly contentOrigin: string | null;
   readonly history: LodgeHistory;
   theme: Theme;
@@ -191,18 +211,28 @@ class Client implements Lodge {
 
   #win: AppWindow;
   #chord: Chord | null;
+  #companionChord: Chord | null;
   #location: LodgeLocation;
   #historyListeners = new Set<(update: HistoryUpdate) => void>();
-  #listeners: Listeners = { navigate: new Set(), visible: new Set(), theme: new Set(), context: new Set() };
+  #listeners: Listeners = {
+    navigate: new Set(),
+    visible: new Set(),
+    theme: new Set(),
+    context: new Set(),
+    ask: new Set(),
+  };
 
   constructor(app: string, win: AppWindow, init: InitMessage) {
     this.app = app;
     this.#win = win;
     this.contract = init.contract;
     this.shortcut = init.shortcut;
+    this.role = init.role;
+    this.companion = init.companion;
     this.contentOrigin = init.contentOrigin;
     this.theme = init.theme;
     this.#chord = parseChord(init.shortcut);
+    this.#companionChord = init.companion === null ? null : parseChord(init.companion);
     this.#location = splitRoute(frameRoute(app, win.location));
     const self = this;
     this.history = {
@@ -234,6 +264,8 @@ class Client implements Lodge {
   route(path: string, t = "", options: { replace?: boolean } = {}): void {
     if (!validRoute(path)) throw new TypeError(`lodge-client: ${JSON.stringify(path)} is not a route`);
     this.#location = splitRoute(path);
+    // The companion's routes are not the page's address: they stay here.
+    if (this.role === "companion") return;
     const m: RouteMessage = { lodge: CONTRACT, type: "route", path, title: t };
     if (options.replace) m.replace = true;
     post(this.#win, m);
@@ -241,6 +273,11 @@ class Client implements Lodge {
 
   context(c: Context): void {
     post(this.#win, { lodge: CONTRACT, type: "context", kind: c.kind, ref: c.ref, title: c.title });
+  }
+
+  ask(prompt: string): void {
+    if (!validPrompt(prompt)) throw new TypeError("lodge-client: a prompt is 1 to 4,000 characters");
+    post(this.#win, { lodge: CONTRACT, type: "ask", prompt });
   }
 
   open(url: string): void {
@@ -301,14 +338,21 @@ class Client implements Lodge {
       case "context":
         this.#emit("context", { app: m.app, kind: m.kind, ref: m.ref, title: m.title });
         break;
+      case "ask":
+        this.#emit("ask", { app: m.app, prompt: m.prompt });
+        break;
     }
   };
 
   #onKey = (event: Event): void => {
     const e = event as KeyboardEvent;
-    if (this.#chord === null || !matchesChord(e, this.#chord)) return;
+    let key: string;
+    if (this.#chord !== null && matchesChord(e, this.#chord)) key = this.shortcut;
+    else if (this.#companionChord !== null && this.companion !== null && matchesChord(e, this.#companionChord))
+      key = this.companion;
+    else return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    this.openSwitcher();
+    post(this.#win, { lodge: CONTRACT, type: "shortcut", key });
   };
 }

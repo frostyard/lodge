@@ -82,7 +82,8 @@ Everything in the map is built.
   install script (`make dist`, `make install`) and an app's unit
   templates. `internal/packagecheck` tests them.
 - `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
-  build with two `dev/fakeapp` apps, for smoke tests in a browser).
+  build with three `dev/fakeapp` apps, one of them the companion, for
+  smoke tests in a browser).
 - `internal/repocheck`: tests of the repository's rules. Relative links
   resolve, every doc has an index line, no private host is named, and
   `kit/` keeps its import boundary.

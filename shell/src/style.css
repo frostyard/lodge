@@ -1,6 +1,8 @@
 /* The shell's layout (docs/specs/shell.md, Layout): a 48 px rail from
    600 CSS pixels up, a 36 px bar below, and frames that fill the rest,
-   inside the safe area. */
+   inside the safe area. The companion (shell.md, The companion) is a
+   400 px panel on the right from 600 pixels, never over half the window,
+   and a full-height sheet below. */
 
 :root {
   color-scheme: light;
@@ -99,7 +101,8 @@ button {
 }
 
 .app-button,
-.menu-button {
+.menu-button,
+.companion-button {
   position: relative;
   width: 36px;
   height: 36px;
@@ -112,7 +115,8 @@ button {
 }
 
 .app-button:hover,
-.menu-button:hover {
+.menu-button:hover,
+.companion-button:hover {
   background: var(--line);
 }
 
@@ -123,6 +127,8 @@ button {
 
 .app-button:focus-visible,
 .menu-button:focus-visible,
+.companion-button:focus-visible,
+.companion-handle:focus-visible,
 .bar-app:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -246,6 +252,40 @@ button {
   border-radius: 6px;
   background: var(--panel);
   cursor: pointer;
+}
+
+/* The companion: its button, and its panel beside the current app. */
+.companion-button[hidden] {
+  display: none;
+}
+
+.companion-button[aria-pressed="true"] {
+  background: var(--bg);
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
+.lodge[data-companion] {
+  grid-template-columns: 48px minmax(0, 1fr) min(400px, 50%);
+}
+
+.companion {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+}
+
+.companion[hidden] {
+  display: none;
+}
+
+.companion-handle {
+  display: none;
 }
 
 /* The switcher. */
@@ -432,10 +472,60 @@ button {
     grid-row: 2;
   }
 
+  /* The companion is a sheet over the app and the bar, inside the safe
+     area, with a handle that closes it. */
+  .lodge[data-companion] {
+    grid-template-columns: 1fr;
+  }
+
+  .companion {
+    position: fixed;
+    top: env(safe-area-inset-top);
+    right: env(safe-area-inset-right);
+    bottom: env(safe-area-inset-bottom);
+    left: env(safe-area-inset-left);
+    z-index: 5;
+    border-left: 0;
+    box-shadow: var(--shadow);
+    transition: transform 0.2s ease-out;
+  }
+
+  .companion-handle {
+    display: block;
+    flex: none;
+    width: 100%;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    background: var(--chrome);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .companion-handle::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 10px auto;
+    border-radius: 2px;
+    background: var(--muted);
+  }
+
+  .companion-button[aria-pressed="true"] {
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+
   .menu {
     left: auto;
     right: max(8px, env(safe-area-inset-right));
     top: calc(40px + env(safe-area-inset-top));
     bottom: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion {
+    transition: none;
   }
 }

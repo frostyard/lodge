@@ -38,10 +38,11 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
   user's phone and Chrome's PDF viewer are not done, and the Copilot and
   Codex providers are not built.
-- The assistant, Porter, is designed (Phase 5). lodge's side of it, the
-  companion and the agent socket, is not built: the roadmap's
-  [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-  builds it. What this document says of them is marked *(Phase 6)*.
+- The assistant, Porter, is designed (Phase 5). Of lodge's side of it, the
+  roadmap's
+  [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
+  the companion is built and the agent socket is not. What this document
+  says of the agent socket is marked *(Phase 6)*.
 
 This document is rewritten as each phase lands.
 
@@ -226,7 +227,7 @@ served for `/`, `/<id>` and `/<id>/<route>`.
   ([lodge-client.md](../specs/lodge-client.md)), keeps the address bar on
   canonical URLs, and owns history.
 
-**The companion** *(Phase 6)* is the one app whose manifest sets
+**The companion** is the one app whose manifest sets
 `companion: true`: Porter, whose chat is its main surface
 ([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md);
 [shell.md](../specs/shell.md#the-companion)).
@@ -241,6 +242,11 @@ served for `/`, `/<id>` and `/<id>/<route>`.
   through MCP with its own tokens. An app's "Ask about this" sends `ask`,
   which opens the companion with a prompt
   ([lodge-client.md](../specs/lodge-client.md#the-companion)).
+- `internal/apps` decides which app is the companion, and `/lodge/apps`
+  marks it. The client's shell half keeps a port for the companion's frame
+  beside the app's own, and drops what the companion may not send. The
+  development build's `dev/e2e.sh` runs a fake app, Helper, as the
+  companion.
 
 One web manifest, `/lodge/manifest.webmanifest`, makes lodge a single
 home-screen app. No service worker is registered.

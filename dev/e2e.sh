@@ -1,7 +1,8 @@
 #!/bin/sh
 # Runs lodge's development build on loopback for a smoke test
 # (docs/specs/lodge-http.md, The development build): a layout root, the
-# shell, the e2e identity allowed, and two fake apps unless FAKE_APPS=0.
+# shell, the e2e identity allowed, and three fake apps unless FAKE_APPS=0:
+# one, two, and helper, which is the companion (Ctrl+Shift+`).
 #
 #   make e2e-build && dev/e2e.sh [ROOT]
 #
@@ -55,8 +56,11 @@ if [ "${FAKE_APPS:-1}" = 1 ]; then
 	pids="$pids $!"
 	LODGE_ROOT=$root "$build/lodge-fakeapp" --id two --name Two --key t --content-links &
 	pids="$pids $!"
+	LODGE_ROOT=$root "$build/lodge-fakeapp" --id helper --name Helper --key h --content=false --companion &
+	pids="$pids $!"
 	i=0
-	until [ -S "$root/run/lodge/apps/one.sock" ] && [ -S "$root/run/lodge/apps/two.sock" ]; do
+	until [ -S "$root/run/lodge/apps/one.sock" ] && [ -S "$root/run/lodge/apps/two.sock" ] &&
+		[ -S "$root/run/lodge/apps/helper.sock" ]; do
 		i=$((i + 1))
 		[ $i -le 100 ] || { echo "e2e.sh: the fake apps did not start" >&2; exit 1; }
 		sleep 0.1

@@ -21,11 +21,10 @@ companion). Where it fits:
 **Status:** written on 2026-10-18 for the
 [roadmap's](../plans/0001-roadmap.md) Phase 2. The narrow layout's bar is
 provisional until it is tried on the user's phone.
-[The companion](#the-companion) was designed on 2026-10-19
+[The companion](#the-companion) was added on 2026-10-19
 ([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)),
-and is not built: it binds when the roadmap's
-[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-builds it.
+and built in the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 
 ## Interface
 
@@ -135,10 +134,10 @@ builds it.
 
 ### The companion
 
-**Designed, not built** (Phase 6). One app at most is the companion: the
-enabled app whose manifest sets `companion: true`
-([app-contract.md](app-contract.md#the-manifest-appjson)). It opens beside
-whatever app is current, and is told what that app shows.
+One app at most is the companion: the enabled app whose manifest sets
+`companion: true` ([app-contract.md](app-contract.md#the-manifest-appjson)),
+which `/lodge/apps` marks with `companion`. It opens beside whatever app is
+current, and is told what that app shows.
 
 - **Its frame.** The companion has a frame of its own, apart from the one
   it has when it is opened in full: a second `<iframe>` of the companion
@@ -146,7 +145,8 @@ whatever app is current, and is told what that app shows.
   `title` `<name> (companion)`.
   - It is created the first time the companion opens, and stays loaded
     after, hidden and inert while closed. A discarded one is recreated at
-    `/app/<id>/`.
+    `/app/<id>/`. When a reload makes another app the companion, or none,
+    the old one's frame is removed.
   - Its `init` says `role: "companion"`
     ([lodge-client.md](lodge-client.md#the-companion)). Every other frame's
     says `"app"`.
@@ -167,10 +167,11 @@ whatever app is current, and is told what that app shows.
     on the narrow bar before lodge's state. It shows whether the companion
     is open, and toggles it.
   - **Its chord,** by default **Ctrl+Shift+\`** (`Ctrl+Shift+Backquote`),
-    toggles it too, in the shell and inside a frame, where lodge-client
-    catches it and posts `shortcut` with this chord. It is a shell setting,
-    kept in local storage (`lodge:companionShortcut`), and sent to every
-    frame in `init.companion`.
+    toggles it too: in the shell, in the switcher, and inside a frame,
+    where lodge-client catches it and posts `shortcut` with this chord. It
+    is a shell setting, set in the shell's menu beside the switcher's and
+    kept in local storage (`lodge:companionShortcut`), and is sent to every
+    frame in `init.companion`. Neither chord may be the other.
   - An app's `ask` opens it ([below](#the-companions-messages)).
   - Opening moves focus into the companion's frame, which is sent `visible
     {visible: true}`. Closing returns focus to the current app's frame, and
@@ -189,8 +190,7 @@ whatever app is current, and is told what that app shows.
 
 ### The companion's messages
 
-**Designed, not built** (Phase 6). The messages are
-[lodge-client.md's](lodge-client.md#the-companion).
+The messages are [lodge-client.md's](lodge-client.md#the-companion).
 
 - **Context.** The shell keeps each app's latest `context`. While the
   companion is open beside another app, it sends the companion's frame
@@ -205,8 +205,9 @@ whatever app is current, and is told what that app shows.
 - **`ask`.** The shell takes `ask` only from the current app's frame, and
   only when there is a companion and the companion app is not the current
   app. It takes at most one a second, and drops the rest. It opens the
-  companion, sends it the current `context`, then sends it `ask` with the
-  current app's ID and the prompt.
+  companion, which opening sends the current `context`, and focuses it,
+  then sends it `ask` with the current app's ID and the prompt. A frame
+  created for the ask is sent it once it is ready.
 - **What the shell takes from the companion's frame:** `ready`, `open` and
   `shortcut`, as from any frame. It ignores the companion frame's `route`,
   `context` and `ask`: its routes are not the page's address, and it is not
@@ -222,7 +223,7 @@ whatever app is current, and is told what that app shows.
 - The switcher's default shortcut collides with none of the ruled-out keys
   above. A test lists them.
 - The companion's default chord collides with none of the ruled-out keys,
-  nor with the switcher's. The same test lists it (Phase 6).
+  nor with the switcher's. The same test lists it.
 - The companion frame never changes the address bar or history, and its
   messages never move the current app.
 

@@ -281,7 +281,7 @@ func (g *Gateway) appsList(w http.ResponseWriter, r *http.Request) {
 	out := rail{Contract: Contract, ContentOrigin: g.cfg.Names.ContentOrigin, Apps: []railApp{}}
 	for _, a := range g.cfg.Apps.List() {
 		ra := railApp{ID: a.ID, Name: cmp.Or(a.Manifest.Name, a.ID), Key: a.Key, Content: a.Manifest.Content,
-			Companion: a.Manifest.Companion, State: a.State, Reason: a.Reason}
+			Companion: a.Companion, State: a.State, Reason: a.Reason}
 		if a.Enabled() {
 			ra.Icon = "/app/" + a.ID + "/" + a.Manifest.Icon
 		}

@@ -33,7 +33,9 @@ Status (2026-10-19):
   both Proposed, with their specs written and marked not built. Porter's
   own ADRs and design doc are in frostyard/porter, which is not published
   yet.
-- **Phase 6** has not started.
+- **Phase 6:** the companion is built (2026-10-19): the shell's panel and
+  sheet, its button and chord, `context` and `ask`, with a fake companion
+  in the development build. The agent socket is not built yet.
 
 Nothing changes on the user's machines without the user's go-ahead.
 

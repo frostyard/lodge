@@ -15,6 +15,9 @@ const log = (msg) => {
   $("#log").textContent = `${new Date().toLocaleTimeString()} ${msg}\n${$("#log").textContent}`.slice(0, 4000);
 };
 let shortcut = "Ctrl+Backquote";
+// The companion's chord, and this frame's role (lodge-client.md, The companion).
+let companion = null;
+let role = "app";
 let route = routeNow();
 const send = (msg) => window.parent.postMessage({ lodge: 1, ...msg }, location.origin);
 
@@ -31,7 +34,12 @@ window.addEventListener("message", (e) => {
   switch (m.type) {
     case "init":
       shortcut = m.shortcut;
-      $("#state").textContent = `init: contract ${m.contract}, theme ${m.theme}, shortcut ${m.shortcut}`;
+      companion = m.companion ?? null;
+      role = m.role ?? "app";
+      $("#state").textContent =
+        `init: contract ${m.contract}, theme ${m.theme}, shortcut ${m.shortcut}, role ${role}, companion ${companion}`;
+      $("#asking").hidden = role !== "app" || companion === null;
+      $("#about-wrap").hidden = role !== "companion";
       document.documentElement.dataset.theme = m.theme;
       if (m.contentOrigin) {
         $("#content").src = `${m.contentOrigin}/${id}/hello.html`;
@@ -42,7 +50,7 @@ window.addEventListener("message", (e) => {
         $("#content-img").onload = () => log("the content image loaded");
         $("#content-wrap").hidden = false;
       }
-      send({ type: "route", path: route, title: titleOf(route), replace: true });
+      if (role === "app") send({ type: "route", path: route, title: titleOf(route), replace: true });
       break;
     case "navigate":
       show(m.route);
@@ -54,6 +62,14 @@ window.addEventListener("message", (e) => {
     case "theme":
       document.documentElement.dataset.theme = m.scheme;
       break;
+    case "context":
+      // In the companion's frame: what the current app shows, a pointer.
+      $("#about").textContent = m.kind === null ? `${m.app}: nothing open` : `${m.app}: ${m.kind} ${m.ref} (${m.title})`;
+      log(`context from ${m.app}: ${m.kind} ${m.ref}`);
+      break;
+    case "ask":
+      log(`ask from ${m.app}: ${m.prompt}`);
+      break;
   }
 });
 
@@ -62,24 +78,36 @@ const titleOf = (r) => (r === "/" ? "" : `Page ${r.split(/[/?#]/)[1].toUpperCase
 for (const b of document.querySelectorAll("[data-route]")) {
   b.addEventListener("click", () => {
     show(b.dataset.route);
-    send({ type: "route", path: b.dataset.route, title: titleOf(b.dataset.route) });
+    // The companion's routes stay in its frame.
+    if (role === "app") send({ type: "route", path: b.dataset.route, title: titleOf(b.dataset.route) });
   });
 }
+$("#context").addEventListener("click", () =>
+  send({ type: "context", kind: "page", ref: `${id}${route}`, title: titleOf(route) || id }),
+);
+$("#ask").addEventListener("click", () => {
+  send({ type: "context", kind: "page", ref: `${id}${route}`, title: titleOf(route) || id });
+  send({ type: "ask", prompt: `What is on ${id}${route}?` });
+});
 $("#switcher").addEventListener("click", () => send({ type: "shortcut", key: shortcut }));
 $("#open").addEventListener("click", () => send({ type: "open", url: id === "one" ? "/two/a" : "/one/a" }));
 
-// The switcher's chord never reaches the app.
+// The switcher's and the companion's chords never reach the app.
+const matches = (e, chord) => {
+  const parts = chord.split("+");
+  const code = parts.pop();
+  const mods = { Ctrl: e.ctrlKey, Alt: e.altKey, Shift: e.shiftKey, Meta: e.metaKey };
+  const want = Object.fromEntries(Object.keys(mods).map((k) => [k, parts.includes(k)]));
+  return e.code === code && !e.isComposing && Object.keys(mods).every((k) => mods[k] === want[k]);
+};
 window.addEventListener(
   "keydown",
   (e) => {
-    const parts = shortcut.split("+");
-    const code = parts.pop();
-    const mods = { Ctrl: e.ctrlKey, Alt: e.altKey, Shift: e.shiftKey, Meta: e.metaKey };
-    const want = Object.fromEntries(Object.keys(mods).map((k) => [k, parts.includes(k)]));
-    if (e.code === code && !e.isComposing && Object.keys(mods).every((k) => mods[k] === want[k])) {
+    const key = [shortcut, companion].find((c) => c !== null && matches(e, c));
+    if (key) {
       e.preventDefault();
       e.stopPropagation();
-      send({ type: "shortcut", key: shortcut });
+      send({ type: "shortcut", key });
     }
   },
   true,
