@@ -10,7 +10,8 @@
 #   USER       its system user (default frost<ID>): ^[a-z_][a-z0-9_-]{0,31}$
 #   KEY        its switcher key, one letter, or "" for none (default "")
 #   MODULE     its Go module path (default github.com/frostyard/<USER>)
-#   LODGE_REF  the lodge commit its web bundle pins lodge-client at
+#   LODGE_REF  the lodge-client release (client/vX.Y.Z, default client/v0.1.0)
+#              or the lodge commit its web bundle pins lodge-client at
 #
 # DEST must not exist, or be empty: render.sh never overwrites a file.
 set -eu
@@ -22,7 +23,7 @@ name=${3:?$usage}
 user=${4:-frost$id}
 key=${5:-}
 module=${6:-github.com/frostyard/$user}
-ref=${7:-5ee27a15e2fb0cc3dab3ddd489e1062b2d39c09f}
+ref=${7:-client/v0.1.0}
 here=$(cd "$(dirname "$0")" && pwd)
 
 fail() {
@@ -40,7 +41,8 @@ matches "$user" '[a-z_][a-z0-9_-]{0,31}' || fail "user $user must match ^[a-z_][
 case $user in root | lodge) fail "user $user may not run an app" ;; esac
 [ -z "$key" ] || matches "$key" '[a-z]' || fail "key $key must be one letter, a to z"
 matches "$module" '[A-Za-z0-9._/-]+' || fail "module $module is not a Go module path"
-matches "$ref" '[0-9a-f]{7,40}' || fail "lodge ref $ref is not a commit"
+matches "$ref" '[0-9a-f]{7,40}|client/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' ||
+  fail "lodge ref $ref is neither a client release (client/vX.Y.Z) nor a commit"
 if [ -e "$dest" ] && [ -n "$(ls -A -- "$dest")" ]; then
   fail "$dest is not empty; render into a new directory"
 fi

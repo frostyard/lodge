@@ -23,13 +23,18 @@ shell),
 Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/lodge-http.md](../specs/lodge-http.md),
 [specs/lodge-client.md](../specs/lodge-client.md),
-[specs/shell.md](../specs/shell.md).
+[specs/shell.md](../specs/shell.md),
+[specs/inference.md](../specs/inference.md).
 
-**Status: Phases 1 and 2 in review.** The kit and the client, and lodge
-v1 (the nodes, the gateway, the control socket, the shell, the development
-build and packaging), are built and tested; the deployment and the checks
-on the user's devices are not done. Inference (Phase 3) is planned. This
-document is rewritten as each phase lands.
+**Status: Phases 1 to 3 built (2026-10-19).**
+- The kit and the client are released as `kit/v0.1.0` and `client/v0.1.0`.
+- lodge v1 (the nodes, the gateway, the control socket, the shell, the
+  development build and packaging) and the inference layer are merged, and
+  run on lodge's first host.
+- The checks on the user's devices are not done, and the Copilot and Codex
+  providers are not built.
+
+This document is rewritten as each phase lands.
 
 ## Overview
 

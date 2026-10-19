@@ -149,7 +149,10 @@ The socket speaks HTTP/1.1.
 - **The caller.** Every request but `GET /health` MUST carry
   `Lodge-Caller`. An app MUST refuse a request without it, or with a kind
   the path does not admit, with 403. Each path admits exactly the one kind
-  above.
+  above, and a path outside this table admits none, so it is 403 too. A
+  path of the table that the app does not serve (its manifest leaves the
+  flag off, as notes does `/x/`) is 404 to the kind it admits. The kit's
+  `lodgeapp.Server` answers both.
 - **`/health`** answers 200 with `{"ok": true, "version": "…",
   "protocol": N}`. `version` is the app's, and `protocol` is the major of
   the app's own API (notes' is its RPC major). An app that is starting or
