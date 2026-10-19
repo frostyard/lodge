@@ -16,8 +16,9 @@ func TestOpenMigratesOnce(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		if n != 1 {
-			t.Errorf("schema_migrations has %d rows, want 1", n)
+		ms, _ := loadMigrations()
+		if n != len(ms) || n < 2 {
+			t.Errorf("schema_migrations has %d rows, want %d", n, len(ms))
 		}
 		db.Close()
 	}

@@ -195,7 +195,8 @@ home-screen app. No service worker is registered.
 ### Inference
 
 `internal/inference` serves the OpenAI-compatible socket
-([app-contract.md](../specs/app-contract.md#inference)).
+([app-contract.md](../specs/app-contract.md#inference);
+[inference.md](../specs/inference.md) pins lodge's side).
 
 - It maps the peer's uid to an app.
 - It resolves the request's alias to a provider and model from
