@@ -199,7 +199,9 @@ maild becomes lodge's `mail` app: one maild for every client. Implements
   [ADR-0014](https://github.com/frostyard/frostmail/blob/main/docs/adr/0014-images-embedded-in-the-reader-frame.md)
   has it.
 - **`/mcp/mail`,** with a scope grammar of frostmail's.
-- **Links between apps:** notes link to threads at `/mail/<route>`, and
+- **Links between apps:** notes link to mail at its permanent route,
+  `/mail/message/<Message-ID>` (the Message-ID percent-encoded as one
+  segment, which maild resolves; frostmail's plan 0011), and
   mail links back to notes.
 - **The new-app skill:** [`.agents/skills/new-lodge-app/`](../../.agents/skills/new-lodge-app/SKILL.md),
   a thin scaffold on the kit and the client, drawn from what notes and mail

@@ -170,7 +170,7 @@ lodge.apiURL();                       // "wss://LODGE/app/notes/api"
 lodge.contentURL("blobs/<mac>/<hash>.png"); // "https://CONTENT/notes/blobs/<mac>/<hash>.png"
 lodge.route("/1/Projects/Plan.md", "Plan");
 lodge.context({ kind: "note", ref: "notes/1/Projects/Plan.md", title: "Plan" });
-lodge.open("/mail/message/42");
+lodge.open("/mail/message/abc%40example.com"); // a mail by its Message-ID
 lodge.openSwitcher();
 lodge.storageKey("workspace");        // "notes:workspace"
 lodge.on("navigate", ({ route }) => {});
