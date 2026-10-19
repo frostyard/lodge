@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fake app</title>
+<link rel="stylesheet" href="/app/{{ID}}/style.css">
+<script type="module" src="/app/{{ID}}/app.js"></script>
+</head>
+<body>
+<header><h1 id="title">Fake app</h1><span id="state">waiting for init</span></header>
+<main>
+  <p>Route: <code id="route">/</code></p>
+  <p>
+    <button type="button" data-route="/">Home</button>
+    <button type="button" data-route="/a">Page A</button>
+    <button type="button" data-route="/b/c?x=1#frag">Page B</button>
+    <button type="button" id="switcher">Switcher</button>
+    <button type="button" id="open">Open the other app</button>
+  </p>
+  <p>Session: <code id="socket">closed</code> <button type="button" id="ping">rpc.ping</button></p>
+  <pre id="log"></pre>
+  <p id="content-wrap" hidden>Content frame:</p>
+  <iframe id="content" title="content" hidden></iframe>
+  <p><textarea id="text" rows="3" cols="40" placeholder="Type here; switch away and back: the text stays."></textarea></p>
+</main>
+</body>
+</html>

@@ -1,4 +1,4 @@
-.PHONY: help build fmt lint lint-version-check test race cross verify check ci clean
+.PHONY: help build e2e-build fmt lint lint-version-check test race cross verify check ci clean
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -19,11 +19,23 @@ help: ## List targets
 build: ## Build lodge into build/
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o build/ ./cmd/...
 
+# The development build (docs/specs/lodge-http.md, The development build):
+# loopback only, one fixed identity, no tailnet. Never install it.
+e2e-build: ## Build build/lodge-e2e (e2e tag), build/lodgectl and build/lodge-fakeapp
+	CGO_ENABLED=0 go build -trimpath -tags e2e -ldflags '$(LDFLAGS)' -o build/lodge-e2e ./cmd/lodge
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o build/lodgectl ./cmd/lodgectl
+	CGO_ENABLED=0 go build -trimpath -o build/lodge-fakeapp ./dev/fakeapp
+
 fmt: ## Format Go code
 	gofmt -w $(GO_FILES)
 
+# The development build's files carry the e2e tag, so they are linted,
+# vetted and tested with it as well.
+E2E_PKGS := ./cmd/lodge/... ./internal/e2eid/...
+
 lint: lint-version-check ## Run the pinned golangci-lint
 	$(call IN_MODULES,golangci-lint run)
+	golangci-lint run --build-tags e2e $(E2E_PKGS)
 
 lint-version-check:
 	@test -n "$(GOLANGCI_LINT_VERSION)" || { echo "mise.toml pins no golangci-lint"; exit 1; }
@@ -36,6 +48,7 @@ lint-version-check:
 # Every hermetic test runs, with no name filter (frostyard/core ADR-0038).
 test: ## Run the Go tests
 	$(call IN_MODULES,go test ./...)
+	go test -tags e2e ./internal/e2eid/...
 
 race: ## Run the Go tests under the race detector
 	$(call IN_MODULES,go test -race ./...)
@@ -51,6 +64,7 @@ cross: ## Build every package for linux/amd64 and linux/arm64
 verify: ## Tidy, vet, format, lint and tests
 	$(call IN_MODULES,go mod tidy -diff)
 	$(call IN_MODULES,go vet ./...)
+	go vet -tags e2e $(E2E_PKGS)
 	test -z "$$(gofmt -l $(GO_FILES))"
 	$(MAKE) --no-print-directory lint
 	$(MAKE) --no-print-directory test
