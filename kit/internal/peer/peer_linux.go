@@ -1,4 +1,6 @@
-package lodgeapp
+// Package peer checks a Unix socket peer's uid (SO_PEERCRED), for the
+// app socket and the private socket alike.
+package peer
 
 import (
 	"fmt"
@@ -6,8 +8,8 @@ import (
 	"syscall"
 )
 
-// checkPeer admits a connection only from uid (SO_PEERCRED).
-func checkPeer(nc *net.UnixConn, uid int) error {
+// Check admits a connection only from uid (SO_PEERCRED).
+func Check(nc *net.UnixConn, uid int) error {
 	raw, err := nc.SyscallConn()
 	if err != nil {
 		return err
@@ -23,7 +25,7 @@ func checkPeer(nc *net.UnixConn, uid int) error {
 		return fmt.Errorf("peer credentials: %w", credErr)
 	}
 	if int(cred.Uid) != uid {
-		return fmt.Errorf("peer uid %d is not lodge's (%d)", cred.Uid, uid)
+		return fmt.Errorf("peer uid %d is not %d", cred.Uid, uid)
 	}
 	return nil
 }
