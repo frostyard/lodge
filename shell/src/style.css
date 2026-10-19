@@ -1,0 +1,441 @@
+/* The shell's layout (docs/specs/shell.md, Layout): a 48 px rail from
+   600 CSS pixels up, a 36 px bar below, and frames that fill the rest,
+   inside the safe area. */
+
+:root {
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --chrome: #e9e4d8;
+  --fg: #1f2328;
+  --muted: #6a6f76;
+  --line: #d3ccbc;
+  --accent: #2f6f5e;
+  --amber: #c98a12;
+  --red: #c4372f;
+  --grey: #9aa0a6;
+  --panel: #fffdf8;
+  --shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+  font:
+    15px / 1.4 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1b1d1f;
+  --chrome: #232629;
+  --fg: #e8e6e1;
+  --muted: #9ba1a6;
+  --line: #34383c;
+  --accent: #6cc3a8;
+  --panel: #2a2d31;
+  --shadow: 0 8px 32px rgb(0 0 0 / 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--chrome);
+  color: var(--fg);
+  overflow: hidden;
+}
+
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.lodge {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  grid-template-rows: 1fr;
+  height: 100%;
+}
+
+.bar {
+  display: none;
+}
+
+.rail {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  background: var(--chrome);
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+
+.rail-apps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.rail-end,
+.bar-end {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rail-end {
+  flex-direction: column;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.app-button,
+.menu-button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app-button:hover,
+.menu-button:hover {
+  background: var(--line);
+}
+
+.app-button[aria-current="page"] {
+  background: var(--bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.app-button:focus-visible,
+.menu-button:focus-visible,
+.bar-app:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.app-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.app-letter {
+  border-radius: 6px;
+  background: var(--line);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.app-button:has(.mark[data-state="disabled"]) .app-icon {
+  opacity: 0.45;
+}
+
+/* The state mark: none for up, amber, red, grey. */
+.mark {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--chrome);
+}
+
+.mark[data-state="up"] {
+  display: none;
+}
+
+.mark[data-state="degraded"] {
+  background: var(--amber);
+}
+
+.mark[data-state="down"] {
+  background: var(--red);
+}
+
+.mark[data-state="disabled"] {
+  background: var(--grey);
+}
+
+.lodge-state {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  font-size: 0;
+}
+
+.lodge-state[data-unreachable] {
+  background: var(--red);
+}
+
+.views {
+  grid-column: 2;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+.frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
+.notice {
+  order: -1;
+  display: flex;
+  gap: 1em;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5em 1em;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.notice[hidden] {
+  display: none;
+}
+
+.notice p {
+  margin: 0;
+}
+
+/* A notice that replaces the frame: disabled, mismatched, not responding. */
+.notice[data-covering] {
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  border: 0;
+  background: var(--bg);
+  text-align: center;
+}
+
+.reload,
+.menu-buttons button {
+  padding: 0.3em 1em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+/* The switcher. */
+.switcher {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: max(12vh, env(safe-area-inset-top));
+  background: rgb(0 0 0 / 0.25);
+  z-index: 10;
+}
+
+.switcher[hidden],
+.menu[hidden] {
+  display: none;
+}
+
+.switcher-box {
+  width: min(420px, calc(100vw - 24px));
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.switcher-filter {
+  width: 100%;
+  padding: 0.75em 1em;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+
+.switcher-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.switcher-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr auto auto;
+  gap: 0.75em;
+  align-items: center;
+  padding: 0.5em 0.75em;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.switcher-item[aria-selected="true"] {
+  background: var(--chrome);
+}
+
+.switcher-item[data-current] .switcher-name::after {
+  content: " · current";
+  color: var(--muted);
+}
+
+.switcher-item .mark {
+  position: static;
+  border: 0;
+}
+
+.switcher-key {
+  min-width: 1.6em;
+  text-align: center;
+  color: var(--muted);
+  font:
+    12px ui-monospace,
+    monospace;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.switcher-key:empty {
+  visibility: hidden;
+}
+
+.switcher-empty {
+  padding: 0.5em 0.75em;
+  color: var(--muted);
+}
+
+/* The menu. */
+.menu {
+  position: fixed;
+  left: 56px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  width: 260px;
+  padding: 0.5em 1em;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 11;
+}
+
+.menu fieldset {
+  border: 0;
+  padding: 0.25em 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em 1em;
+}
+
+.menu legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 0.25em;
+}
+
+.menu-shortcut {
+  width: 100%;
+  padding: 0.3em 0.5em;
+  font:
+    13px ui-monospace,
+    monospace;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.menu-buttons {
+  display: flex;
+  gap: 0.5em;
+}
+
+.menu-why {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* The narrow layout: a bar at the top. */
+@media (max-width: 599.98px) {
+  .lodge {
+    grid-template-columns: 1fr;
+    grid-template-rows: 36px 1fr;
+  }
+
+  .rail {
+    display: none;
+  }
+
+  .bar {
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 6px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .bar-app {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    font-weight: 600;
+  }
+
+  .bar-app .mark {
+    position: static;
+    border: 0;
+  }
+
+  .views {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .menu {
+    left: auto;
+    right: max(8px, env(safe-area-inset-right));
+    top: calc(40px + env(safe-area-inset-top));
+    bottom: auto;
+  }
+}

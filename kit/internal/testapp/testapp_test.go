@@ -1,13 +1,13 @@
 package testapp_test
 
 import (
-	"bufio"
-	"io"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/frostyard/lodge/kit/internal/testapp"
+	"github.com/frostyard/lodge/kit/jsonrpc"
 	"github.com/frostyard/lodge/kit/kittest"
 )
 
@@ -22,26 +22,20 @@ func TestAPIRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer nc.Close()
-	// One frame without its newline, as the contract allows, then one with.
-	for _, msg := range []string{
-		`{"jsonrpc":"2.0","id":1,"method":"rpc.hello","params":{}}` + "\n",
-		`{"jsonrpc":"2.0","id":2,"method":"rpc.ping"}` + "\n",
-	} {
-		if _, err := io.WriteString(nc, msg); err != nil {
-			t.Fatal(err)
-		}
+	c := jsonrpc.NewClient[testapp.Code](nc)
+	defer c.Close()
+	if err := c.Call(t.Context(), "echo", map[string]string{"text": "early"}, nil); !errors.Is(err, &jsonrpc.Error[testapp.Code]{Code: jsonrpc.CodeNotReady}) {
+		t.Errorf("echo before hello = %v, want notReady", err)
 	}
-	r := bufio.NewReader(nc)
-	for _, want := range []string{`"method":"rpc.hello"`, `"method":"rpc.ping"`} {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(line, want) || !strings.Contains(line, `"node":"e2e"`) ||
-			!strings.Contains(line, `"session":"`+kittest.SessionID+`"`) {
-			t.Errorf("reply %q, want %s from node e2e in the session", line, want)
-		}
+	if err := c.Call(t.Context(), "rpc.hello", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := c.Call(t.Context(), "echo", map[string]string{"text": "hi"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["text"] != "hi" || got["node"] != kittest.NodeName || got["session"] != kittest.SessionID {
+		t.Errorf("echo = %v, want hi from node e2e in the session", got)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frostyard/lodge/kit/internal/peer"
 	"github.com/frostyard/lodge/kit/manifest"
 )
 
@@ -165,7 +166,7 @@ func (l *Listener) accept(log *slog.Logger) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := checkPeer(nc, l.uid); err != nil {
+		if err := peer.Check(nc, l.uid); err != nil {
 			if log != nil {
 				log.Warn("refused a connection", "err", err)
 			}

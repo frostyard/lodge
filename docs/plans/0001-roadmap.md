@@ -11,7 +11,11 @@ Status (2026-10-18): the founding documents are Proposed. They are
 reviewed and published together with core's ADR-0057 and frostnotes' M4
 rescope. Phase 1's new kit pieces and `client/` are built and in review
 (2026-10-19), with apps pinned to their commits; the extraction from the
-apps and the tags are still to come. No phase starts before the ADRs are accepted, and nothing
+apps and the tags are still to come. Phase 2's code is built and in review
+(2026-10-19): the nodes, the gateway with every check of lodge-http.md
+tested, the control socket and `lodgectl`, the shell, the development
+build and packaging. Its deployment, lodge's security review and the
+checks on the user's devices are still to come. No phase starts before the ADRs are accepted, and nothing
 changes on the user's machines without the user's go-ahead.
 
 ## Phase 1 — The kit
@@ -38,7 +42,10 @@ from what frostnotes and frostmail already share.
     rather than frostnotes' field per domain;
   - the contract generator (`tools/rpcgen`), if the two copies converge,
     and frostmail's Windows layer for the private socket, if frostmail's
-    local maild needs it from the kit. Both are decided while extracting.
+    local maild needs it from the kit. Both stay in the apps
+    ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)):
+    the generators differ in what a schema means, and the kit's runtime is
+    generic over each app's generated types, so neither generator changes.
 - **New in the kit,** each from
   [app-contract.md](../specs/app-contract.md):
   - the app-socket server: socket activation, the peer check, and

@@ -46,7 +46,7 @@ lodge's side when lodge v1 does (Phase 2).
 | What | Where | Owner and mode |
 | --- | --- | --- |
 | manifest | `/usr/share/lodge/apps/<id>/app.json` | root, 0644 |
-| web bundle | `/usr/share/lodge/apps/<id>/web/` | root; directories 0755, files 0644 |
+| web bundle | `/usr/share/lodge/apps/<id>/web/`; its scripts and stylesheets under `web/assets/` | root; directories 0755, files 0644 |
 | app socket | `/run/lodge/apps/<id>.sock` | the app's user, group `lodge`, 0660 |
 | inference socket | `/run/lodge/inference.sock` | `lodge`, group `lodge-apps`, 0660 |
 | control socket | `/run/lodge/control.sock` | `lodge`, 0600 |
@@ -163,8 +163,10 @@ The socket speaks HTTP/1.1.
   Frames are text, uncompressed, moved one to one, and lodge never
   parses them. When the browser leaves, lodge closes the app's side, and
   the app ends that connection's state.
-- **`/content/`** responses SHOULD name what they serve by an unguessable
-  key, such as a hash. They MAY carry `Content-Disposition: attachment` for
+- **`/content/`** responses MUST name what they serve by an unguessable
+  key, such as a MAC of its hash under a secret the app keeps; a bare hash
+  of the content is not unguessable
+  ([lodge-http.md](lodge-http.md#content-routes)). They MAY carry `Content-Disposition: attachment` for
   a download (notes' `?download=1`). lodge adds the sandbox policy
   ([lodge-http.md](lodge-http.md#content-routes)).
 - **`/mcp`** follows [MCP tokens and scope](#mcp-tokens-and-scope) below.
