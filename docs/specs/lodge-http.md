@@ -202,6 +202,28 @@ holds. Each failure is its own line:
 - Agent requests need checks a and b only. Device requests need none
   ([device routes](#device-routes)).
 
+### Native clients
+
+A native client on an allowed node, such as frostmail's desktop app through
+its bridge, uses the browser routes as the shell does. lodge tells it from
+a browser by nothing, and needs no code of its own for it.
+
+- It opens `wss://LODGE/app/<id>/api` with `Origin: https://LODGE`, which
+  an upgrade requires, and sends no `Sec-Fetch-*` header, which the
+  [browser checks](#browser-checks) check only when present.
+- **Identity is still WhoIs alone**, with the node and its login both on
+  the allow-lists. Any program on an allowed device that sets lodge's
+  `Origin` is signed in, as
+  [ADR-0005's consequences](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md#consequences)
+  accept.
+- It learns the content origin, `contentOrigin`, from `GET /lodge/apps`
+  ([shell routes](#shell-routes)), sent with the same `Origin`. Deriving
+  `CONTENT` from `LODGE` is only a fallback, since `--content-node` can
+  rename it.
+- Each of its windows may hold its own session, within the
+  [session bounds](#sessions): past a node's 8 per app, lodge closes the
+  least recently active, and that window reconnects.
+
 ### Headers
 
 Every browser response, errors included, carries these:

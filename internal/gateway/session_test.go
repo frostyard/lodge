@@ -331,3 +331,33 @@ func TestSessionRecheckAndEnd(t *testing.T) {
 		t.Errorf("close code %d, want 1008", code)
 	}
 }
+
+// A native client on an allowed node (D7; lodge-http.md, Native clients)
+// sends lodge's Origin and no Sec-Fetch-*: it reads /lodge/apps and opens
+// a session as the shell would, and its identity is still WhoIs's.
+func TestNativeClient(t *testing.T) {
+	h := newHarness(t)
+	native := map[string]string{"Origin": lodgeOrigin}
+	a := h.get("/lodge/apps", native)
+	if a.status != http.StatusOK || !strings.Contains(a.body, `"contentOrigin":"https://`+contentHost+`"`) {
+		t.Fatalf("/lodge/apps for a native client: %d %q", a.status, a.body)
+	}
+	c, _, err := h.wsDial("/app/notes/api", native)
+	if err != nil {
+		t.Fatalf("a native client's session: %v", err)
+	}
+	roundTrip(t, c)
+	if s := h.notes.last(t); s.Header.Get("Lodge-Login") != "alice@example.com" || s.Header.Get("Lodge-Node-Name") != "phone" {
+		t.Errorf("the app saw %v", s.Header)
+	}
+	// Without lodge's Origin, the upgrade fails; from a node that is not
+	// allowed, both fail.
+	if _, resp, err := h.wsDial("/app/notes/api", map[string]string{"Origin": ""}); err == nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("an upgrade without Origin: %v", err)
+	}
+	h.who.set(func(p *peer.Peer) { p.NodeID = "nOther" })
+	expect(t, h.get("/lodge/apps", native), http.StatusForbidden, "node phone (nOther) is not allowed")
+	if _, resp, err := h.wsDial("/app/notes/api", native); err == nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a native client on a node that is not allowed: %v", err)
+	}
+}
