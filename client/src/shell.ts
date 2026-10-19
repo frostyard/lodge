@@ -1,19 +1,23 @@
-// @frostyard/lodge-client/shell, the shell half: it keeps one port per app
-// frame, checks the origin and source of every message, answers `ready`
-// with `init`, and queues `navigate` until then
-// (docs/specs/lodge-client.md, Start).
+// @frostyard/lodge-client/shell, the shell half: it keeps one port per
+// frame, an app's own and the companion's, checks the origin and source of
+// every message, answers `ready` with `init`, and queues `navigate` until
+// then (docs/specs/lodge-client.md, Start). From the companion's frame it
+// takes ready, open and shortcut, and drops the rest (The companion).
 //
-//   const shell = createShell({ init: (app) => ({ contentOrigin, shortcut, theme }) });
+//   const shell = createShell({ init: (app, role) => ({ contentOrigin, shortcut, companion, theme }) });
 //   const port = shell.attach("notes", iframe);
+//   const side = shell.attach("porter", panelFrame, "companion");
 //   shell.on("route", ({ app, path, title, replace }) => ...);
 
 import {
   type AppContext,
   CONTRACT,
   parseAppMessage,
+  type Role,
   type ShellMessage,
   type Theme,
   validApp,
+  validPrompt,
   validRoute,
 } from "./messages.js";
 
@@ -44,12 +48,14 @@ export interface InitFields {
   /** https://CONTENT for an app whose manifest sets content, else null. */
   contentOrigin: string | null;
   shortcut: string;
+  /** The companion's chord, or null when no app is the companion. */
+  companion: string | null;
   theme: Theme;
 }
 
 export interface ShellOptions {
-  /** init returns what `init` tells app, when its frame sends `ready`. */
-  init(app: string): InitFields;
+  /** init returns what `init` tells app's frame of role, when it sends `ready`. */
+  init(app: string, role: Role): InitFields;
   /** The shell's window: the page's own by default. */
   window?: ShellWindow;
   /** How long a frame has, after its load event, to send `ready`: 10 s by default. */
@@ -63,35 +69,43 @@ export interface ShellOptions {
  */
 export type FrameState = "loading" | "ready" | "mismatched" | "unresponsive";
 
+/**
+ * The shell half's events. Each names the frame's app and role; route,
+ * context and ask come only from an app's own frame.
+ */
 export interface ShellEvents {
-  ready: { app: string };
-  mismatch: { app: string; contract: unknown };
-  unresponsive: { app: string };
+  ready: { app: string; role: Role };
+  mismatch: { app: string; role: Role; contract: unknown };
+  unresponsive: { app: string; role: Role };
   route: { app: string; path: string; title: string; replace: boolean };
   context: AppContext;
-  open: { app: string; url: string };
-  shortcut: { app: string; key: string };
+  ask: { app: string; prompt: string };
+  open: { app: string; role: Role; url: string };
+  shortcut: { app: string; role: Role; key: string };
 }
 
-/** One app frame's port. */
+/** One frame's port. */
 export interface FramePort {
   readonly app: string;
+  readonly role: Role;
   readonly state: FrameState;
   /** navigate sends the app to a route, after `init` if that has not gone. */
   navigate(route: string): void;
   /** visible tells the app whether its frame is shown; the latest value is sent after `init`. */
   visible(visible: boolean): void;
-  /** context forwards the current app's context to a frame opened as the companion. */
+  /** context forwards the current app's context to the companion's frame. */
   context(context: AppContext): void;
+  /** ask forwards the current app's ask to the companion's frame, after its context. */
+  ask(app: string, prompt: string): void;
   /** detach stops listening to the frame. */
   detach(): void;
 }
 
 export interface Shell {
-  /** attach starts a port for app's frame. Attach before the frame loads. */
-  attach(app: string, frame: FrameLike): FramePort;
-  /** port returns app's port, if attached. */
-  port(app: string): FramePort | undefined;
+  /** attach starts a port for app's frame of role [app]. Attach before the frame loads. */
+  attach(app: string, frame: FrameLike, role?: Role): FramePort;
+  /** port returns the port of app's frame of role [app], if attached. */
+  port(app: string, role?: Role): FramePort | undefined;
   /** theme sends `theme` to every ready frame. */
   theme(scheme: Theme): void;
   /** on calls `fn` for each event of `type`; it returns a function that stops it. */
@@ -106,13 +120,16 @@ type Listeners = { [T in keyof ShellEvents]: Set<(event: ShellEvents[T]) => void
 export function createShell(options: ShellOptions): Shell {
   const win = options.window ?? (globalThis.window as unknown as ShellWindow);
   const timeout = options.readyTimeout ?? 10_000;
+  // By role and app: an app's own frame, and the companion's.
   const ports = new Map<string, Port>();
+  const portKey = (app: string, role: Role) => `${role}:${app}`;
   const listeners: Listeners = {
     ready: new Set(),
     mismatch: new Set(),
     unresponsive: new Set(),
     route: new Set(),
     context: new Set(),
+    ask: new Set(),
     open: new Set(),
     shortcut: new Set(),
   };
@@ -122,6 +139,7 @@ export function createShell(options: ShellOptions): Shell {
 
   class Port implements FramePort {
     readonly app: string;
+    readonly role: Role;
     state: FrameState = "loading";
     #frame: FrameLike;
     #queue: string[] = [];
@@ -132,8 +150,9 @@ export function createShell(options: ShellOptions): Shell {
     // A ready came before its document's load event.
     #early = false;
 
-    constructor(app: string, frame: FrameLike) {
+    constructor(app: string, frame: FrameLike, role: Role) {
       this.app = app;
+      this.role = role;
       this.#frame = frame;
       frame.addEventListener("load", this.#onLoad);
     }
@@ -157,6 +176,11 @@ export function createShell(options: ShellOptions): Shell {
       if (this.state === "ready") this.#send({ lodge: CONTRACT, type: "context", ...c });
     }
 
+    ask(app: string, prompt: string): void {
+      if (!validApp(app) || !validPrompt(prompt)) return;
+      if (this.state === "ready") this.#send({ lodge: CONTRACT, type: "ask", app, prompt });
+    }
+
     theme(scheme: Theme): void {
       if (this.state === "ready") this.#send({ lodge: CONTRACT, type: "theme", scheme });
     }
@@ -164,7 +188,8 @@ export function createShell(options: ShellOptions): Shell {
     detach(): void {
       this.#frame.removeEventListener("load", this.#onLoad);
       this.#stopTimer();
-      if (ports.get(this.app) === this) ports.delete(this.app);
+      const k = portKey(this.app, this.role);
+      if (ports.get(k) === this) ports.delete(k);
     }
 
     receive(data: unknown): void {
@@ -175,18 +200,22 @@ export function createShell(options: ShellOptions): Shell {
       }
       if (this.state !== "ready") return;
       const m = parseAppMessage(data);
+      const own = this.role === "app";
       switch (m?.type) {
         case "route":
-          emit("route", { app: this.app, path: m.path, title: m.title, replace: m.replace === true });
+          if (own) emit("route", { app: this.app, path: m.path, title: m.title, replace: m.replace === true });
           break;
         case "context":
-          emit("context", { app: this.app, kind: m.kind, ref: m.ref, title: m.title });
+          if (own) emit("context", { app: this.app, kind: m.kind, ref: m.ref, title: m.title });
+          break;
+        case "ask":
+          if (own) emit("ask", { app: this.app, prompt: m.prompt });
           break;
         case "open":
-          emit("open", { app: this.app, url: m.url });
+          emit("open", { app: this.app, role: this.role, url: m.url });
           break;
         case "shortcut":
-          emit("shortcut", { app: this.app, key: m.key });
+          emit("shortcut", { app: this.app, role: this.role, key: m.key });
           break;
       }
     }
@@ -198,11 +227,11 @@ export function createShell(options: ShellOptions): Shell {
       if (contract !== CONTRACT) {
         this.state = "mismatched";
         this.#queue = [];
-        emit("mismatch", { app: this.app, contract });
+        emit("mismatch", { app: this.app, role: this.role, contract });
         return;
       }
       this.state = "ready";
-      const f = options.init(this.app);
+      const f = options.init(this.app, this.role);
       this.#send({
         lodge: CONTRACT,
         type: "init",
@@ -210,12 +239,14 @@ export function createShell(options: ShellOptions): Shell {
         contentOrigin: f.contentOrigin,
         shortcut: f.shortcut,
         theme: f.theme,
+        role: this.role,
+        companion: f.companion,
       });
       if (this.#visible !== null) this.#send({ lodge: CONTRACT, type: "visible", visible: this.#visible });
       const queue = this.#queue;
       this.#queue = [];
       for (const route of queue) this.#send({ lodge: CONTRACT, type: "navigate", route });
-      emit("ready", { app: this.app });
+      emit("ready", { app: this.app, role: this.role });
     }
 
     #onLoad = (): void => {
@@ -230,7 +261,7 @@ export function createShell(options: ShellOptions): Shell {
       this.#timer = setTimeout(() => {
         this.#timer = null;
         this.state = "unresponsive";
-        emit("unresponsive", { app: this.app });
+        emit("unresponsive", { app: this.app, role: this.role });
       }, timeout);
     };
 
@@ -257,14 +288,15 @@ export function createShell(options: ShellOptions): Shell {
   win.addEventListener("message", onMessage);
 
   return {
-    attach(app, frame) {
+    attach(app, frame, role = "app") {
       if (!validApp(app)) throw new TypeError(`lodge-client: ${JSON.stringify(app)} is not an app id`);
-      ports.get(app)?.detach();
-      const port = new Port(app, frame);
-      ports.set(app, port);
+      const k = portKey(app, role);
+      ports.get(k)?.detach();
+      const port = new Port(app, frame, role);
+      ports.set(k, port);
       return port;
     },
-    port: (app) => ports.get(app),
+    port: (app, role = "app") => ports.get(portKey(app, role)),
     theme(scheme) {
       for (const port of ports.values()) port.theme(scheme);
     },

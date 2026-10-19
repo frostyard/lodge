@@ -1,6 +1,6 @@
 import { parseChord } from "@frostyard/lodge-client/shell";
 import { describe, expect, it } from "vitest";
-import { checkShortcut, DEFAULT_SHORTCUT, label, normalize, RULED_OUT } from "../src/shortcut.js";
+import { checkShortcut, DEFAULT_COMPANION, DEFAULT_SHORTCUT, label, normalize, RULED_OUT } from "../src/shortcut.js";
 
 describe("the switcher's shortcut", () => {
   it("defaults to Ctrl+` and collides with none of the ruled-out keys", () => {
@@ -38,6 +38,24 @@ describe("the switcher's shortcut", () => {
 
   it("writes chords for people", () => {
     expect(label("Ctrl+Backquote")).toBe("Ctrl+`");
+    expect(label("Ctrl+Shift+Backquote")).toBe("Ctrl+Shift+`");
     expect(label("Ctrl+Alt+KeyJ")).toBe("Ctrl+Alt+J");
+  });
+});
+
+describe("the companion's chord", () => {
+  const switcher = [{ chord: DEFAULT_SHORTCUT, why: "the switcher's shortcut" }];
+  it("defaults to Ctrl+Shift+` and collides with none of the ruled-out keys, nor the switcher's", () => {
+    expect(DEFAULT_COMPANION).toBe("Ctrl+Shift+Backquote");
+    expect(checkShortcut(DEFAULT_COMPANION, switcher)).toBeNull();
+    for (const r of RULED_OUT) expect(normalize(r.chord)).not.toBe(normalize(DEFAULT_COMPANION));
+    expect(normalize(DEFAULT_COMPANION)).not.toBe(normalize(DEFAULT_SHORTCUT));
+  });
+
+  it("refuses the switcher's", () => {
+    expect(checkShortcut("Ctrl+Backquote", switcher)).toMatch(/the switcher's shortcut/);
+    expect(
+      checkShortcut("Shift+Ctrl+Backquote", [{ chord: DEFAULT_COMPANION, why: "the companion's shortcut" }]),
+    ).toMatch(/the companion's/);
   });
 });

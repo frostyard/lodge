@@ -58,7 +58,9 @@ type Manifest struct {
 	MCP bool `json:"mcp,omitzero"`
 	// RemoteImages: the app's frame may load any https: image.
 	RemoteImages bool `json:"remoteImages,omitzero"`
-	// Companion: the app can open as the side panel beside another app.
+	// Companion: the app is the companion, opened in a panel beside the
+	// current app and told its context (ADR-0013). lodge makes at most one
+	// app the companion: when two manifests set it, neither is.
 	Companion bool `json:"companion,omitzero"`
 }
 

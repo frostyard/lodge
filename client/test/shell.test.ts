@@ -3,13 +3,13 @@ import { connectLodge } from "../src/index.js";
 import { createShell, resolveOpen, type ShellEvents } from "../src/shell.js";
 import { CONTENT, FakeFrame, FakeShellWindow, key, ORIGIN, pair, settle } from "./harness.js";
 
-const fields = { contentOrigin: CONTENT, shortcut: "Ctrl+Backquote", theme: "light" as const };
+const fields = { contentOrigin: CONTENT, shortcut: "Ctrl+Backquote", companion: null, theme: "light" as const };
 
 function setup(url = `${ORIGIN}/app/notes/1/Plan.md`) {
   const p = pair(url);
   const host = createShell({ window: p.shell, init: () => fields });
   const events: [keyof ShellEvents, unknown][] = [];
-  for (const type of ["ready", "mismatch", "unresponsive", "route", "context", "open", "shortcut"] as const) {
+  for (const type of ["ready", "mismatch", "unresponsive", "route", "context", "ask", "open", "shortcut"] as const) {
     host.on(type, (e) => events.push([type, e]));
   }
   const port = host.attach("notes", p.frame);
@@ -36,13 +36,13 @@ describe("the shell half", () => {
     await settle();
     expect(p.port.state).toBe("ready");
     expect(p.sent.toApp.map((s) => s.data)).toEqual([
-      { lodge: 1, type: "init", contract: 1, ...fields },
+      { lodge: 1, type: "init", contract: 1, ...fields, role: "app" },
       { lodge: 1, type: "visible", visible: true },
       { lodge: 1, type: "navigate", route: "/1/A.md" },
       { lodge: 1, type: "navigate", route: "/1/B.md" },
     ]);
     expect(p.sent.toApp.every((s) => s.targetOrigin === ORIGIN)).toBe(true);
-    expect(p.events).toEqual([["ready", { app: "notes" }]]);
+    expect(p.events).toEqual([["ready", { app: "notes", role: "app" }]]);
   });
 
   it("reports a ready app's messages by its frame, and drops the rest", async () => {
@@ -63,12 +63,12 @@ describe("the shell half", () => {
     p.shell.deliver({ lodge: 1, type: "open", url: "/forged" }, ORIGIN, "https://evil.test", p.frameWindow);
     await settle();
     expect(p.events).toEqual([
-      ["ready", { app: "notes" }],
+      ["ready", { app: "notes", role: "app" }],
       ["route", { app: "notes", path: "/1/Plan.md", title: "Plan", replace: true }],
       ["route", { app: "notes", path: "/1/x", title: "t".repeat(200), replace: false }],
       ["context", { app: "notes", kind: "note", ref: "notes/1/Plan.md", title: "Plan" }],
-      ["open", { app: "notes", url: "/mail/thread/42" }],
-      ["shortcut", { app: "notes", key: "Ctrl+Backquote" }],
+      ["open", { app: "notes", role: "app", url: "/mail/thread/42" }],
+      ["shortcut", { app: "notes", role: "app", key: "Ctrl+Backquote" }],
     ]);
   });
 
@@ -80,7 +80,7 @@ describe("the shell half", () => {
     await settle();
     expect(p.port.state).toBe("mismatched");
     expect(p.sent.toApp).toEqual([]);
-    expect(p.events).toEqual([["mismatch", { app: "notes", contract: 2 }]]);
+    expect(p.events).toEqual([["mismatch", { app: "notes", role: "app", contract: 2 }]]);
   });
 
   it("shows a frame that sends no ready within 10 s of load as unresponsive", async () => {
@@ -155,7 +155,117 @@ describe("both halves", () => {
     await settle();
     expect(p.events.slice(1)).toEqual([
       ["route", { app: "notes", path: "/1/Deep.md", title: "Deep", replace: false }],
-      ["shortcut", { app: "notes", key: "Ctrl+Backquote" }],
+      ["shortcut", { app: "notes", role: "app", key: "Ctrl+Backquote" }],
+    ]);
+  });
+
+  it("connect a companion frame beside an app's, and carry its context and ask", async () => {
+    const p = setup(`${ORIGIN}/app/notes/1/Plan.md`);
+    const host = createShell({
+      window: p.shell,
+      init: (_app, role) => ({
+        ...fields,
+        companion: "Ctrl+Shift+Backquote",
+        contentOrigin: role === "app" ? CONTENT : null,
+      }),
+    });
+    const side = pair(`${ORIGIN}/app/porter/`, p.shell);
+    const port = host.attach("porter", side.frame, "companion");
+    const companion = await connectLodge({ app: "porter", window: side.app });
+    expect([companion.role, companion.companion, companion.contentOrigin]).toEqual([
+      "companion",
+      "Ctrl+Shift+Backquote",
+      null,
+    ]);
+    const got: unknown[] = [];
+    companion.on("context", (e) => got.push(["context", e]));
+    companion.on("ask", (e) => got.push(["ask", e]));
+    port.context({ app: "notes", kind: "note", ref: "notes/1/Plan.md", title: "Plan" });
+    port.ask("notes", "What is due here?");
+    await settle();
+    expect(got).toEqual([
+      ["context", { app: "notes", kind: "note", ref: "notes/1/Plan.md", title: "Plan" }],
+      ["ask", { app: "notes", prompt: "What is due here?" }],
+    ]);
+    // The companion's routes stay in its frame.
+    companion.history.push("/thread/2", "Thread");
+    await settle();
+    expect(companion.history.location.pathname).toBe("/thread/2");
+    expect(side.sent.toShell.map((s) => (s.data as { type: string }).type)).toEqual(["ready"]);
+    host.close();
+  });
+});
+
+describe("the companion's frame", () => {
+  function both() {
+    const p = setup(`${ORIGIN}/app/porter/`);
+    const side = pair(`${ORIGIN}/app/porter/`, p.shell);
+    const sidePort = p.host.attach("porter", side.frame, "companion");
+    const fromSide = (data: unknown) => side.parent.postMessage(data, ORIGIN);
+    return { p, side, sidePort, fromSide };
+  }
+
+  it("has its own port beside its app's, and its init says its role", async () => {
+    const { p, side, sidePort, fromSide } = both();
+    expect(p.host.port("porter", "companion")).toBe(sidePort);
+    expect(p.host.port("notes")).toBe(p.port);
+    expect(sidePort.role).toBe("companion");
+    fromSide({ lodge: 1, type: "ready", contract: 1 });
+    await settle();
+    expect(side.sent.toApp.map((s) => s.data)).toEqual([
+      { lodge: 1, type: "init", contract: 1, ...fields, role: "companion" },
+    ]);
+    expect(p.events).toEqual([["ready", { app: "porter", role: "companion" }]]);
+    expect(p.port.state).toBe("loading");
+  });
+
+  it("takes open and shortcut from it, and drops its route, context and ask", async () => {
+    const { p, fromSide } = both();
+    fromSide({ lodge: 1, type: "ready", contract: 1 });
+    fromSide({ lodge: 1, type: "route", path: "/thread/1", title: "x" });
+    fromSide({ lodge: 1, type: "context", kind: "thread", ref: "1", title: "x" });
+    fromSide({ lodge: 1, type: "ask", prompt: "hello" });
+    fromSide({ lodge: 1, type: "open", url: "/notes/1/A.md" });
+    fromSide({ lodge: 1, type: "shortcut", key: "Ctrl+Shift+Backquote" });
+    await settle();
+    expect(p.events).toEqual([
+      ["ready", { app: "porter", role: "companion" }],
+      ["open", { app: "porter", role: "companion", url: "/notes/1/A.md" }],
+      ["shortcut", { app: "porter", role: "companion", key: "Ctrl+Shift+Backquote" }],
+    ]);
+  });
+
+  it("sends context and ask only to a ready frame, and only well-formed", async () => {
+    const { side, sidePort, fromSide } = both();
+    sidePort.context({ app: "notes", kind: null, ref: "", title: "" });
+    sidePort.ask("notes", "early");
+    expect(side.sent.toApp).toEqual([]);
+    fromSide({ lodge: 1, type: "ready", contract: 1 });
+    await settle();
+    side.sent.toApp.length = 0;
+    sidePort.ask("notes", "");
+    sidePort.ask("notes", "x".repeat(4001));
+    sidePort.ask("Notes", "x");
+    sidePort.ask("notes", "x".repeat(4000));
+    expect(side.sent.toApp.map((s) => s.data)).toEqual([
+      { lodge: 1, type: "ask", app: "notes", prompt: "x".repeat(4000) },
+    ]);
+  });
+});
+
+describe("ask from an app's frame", () => {
+  it("is reported with its app, when the prompt is 1 to 4,000 characters", async () => {
+    const p = setup();
+    app(p, { lodge: 1, type: "ready", contract: 1 });
+    app(p, { lodge: 1, type: "ask", prompt: "What is due here?" });
+    app(p, { lodge: 1, type: "ask", prompt: "" });
+    app(p, { lodge: 1, type: "ask", prompt: "x".repeat(4001) });
+    app(p, { lodge: 1, type: "ask", prompt: 3 });
+    app(p, { lodge: 1, type: "ask", prompt: "😀".repeat(4000) });
+    await settle();
+    expect(p.events.filter((e) => e[0] === "ask")).toEqual([
+      ["ask", { app: "notes", prompt: "What is due here?" }],
+      ["ask", { app: "notes", prompt: "😀".repeat(4000) }],
     ]);
   });
 });

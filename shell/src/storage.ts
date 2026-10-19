@@ -8,7 +8,7 @@ export interface Store {
   removeItem(key: string): void;
 }
 
-export type SettingKey = "shortcut" | "theme" | "last";
+export type SettingKey = "shortcut" | "theme" | "last" | "companion" | "companionShortcut";
 
 export class Settings {
   readonly #store: Store | null;

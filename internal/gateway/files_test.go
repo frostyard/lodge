@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/frostyard/lodge/internal/apptest"
 )
 
 const (
@@ -190,5 +192,42 @@ func TestAppsList(t *testing.T) {
 		if x.ID == "off" && (x.State != "disabled" || !strings.Contains(x.Reason, "contract 9") || x.Icon != "") {
 			t.Errorf("off = %+v", x)
 		}
+	}
+}
+
+// /lodge/apps marks the companion: the one app whose manifest asks to be,
+// and none when two do (ADR-0013).
+func TestAppsListCompanion(t *testing.T) {
+	h := newHarness(t)
+	companions := func() []string {
+		t.Helper()
+		var got rail
+		if err := json.Unmarshal([]byte(h.get("/lodge/apps", nil).body), &got); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, x := range got.Apps {
+			if x.Companion {
+				ids = append(ids, x.ID)
+			}
+		}
+		return ids
+	}
+	if ids := companions(); len(ids) != 0 {
+		t.Errorf("companions %v before any asks", ids)
+	}
+	apptest.Install(t, h.root, "porter", map[string]any{"name": "Porter", "companion": true}, nil)
+	if err := h.apps.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if ids := companions(); len(ids) != 1 || ids[0] != "porter" {
+		t.Errorf("companions %v, want porter", ids)
+	}
+	apptest.Install(t, h.root, "aide", map[string]any{"name": "Aide", "companion": true}, nil)
+	if err := h.apps.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if ids := companions(); len(ids) != 0 {
+		t.Errorf("companions %v when two ask", ids)
 	}
 }

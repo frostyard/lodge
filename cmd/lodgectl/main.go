@@ -378,7 +378,8 @@ func showApps(o *out, raw []byte) error {
 			}
 		}
 		slices.Sort(flags)
-		rows = append(rows, []string{a.ID, m.Name, m.Version, cmp(a.Key, "-"), string(a.State), strings.Join(flags, ","), a.Reason})
+		why := slices.DeleteFunc(append([]string{a.Reason}, a.Notes...), func(s string) bool { return s == "" })
+		rows = append(rows, []string{a.ID, m.Name, m.Version, cmp(a.Key, "-"), string(a.State), strings.Join(flags, ","), strings.Join(why, "; ")})
 	}
 	table(o.stdout, "ID\tNAME\tVERSION\tKEY\tSTATE\tFLAGS\tREASON", rows)
 	return nil

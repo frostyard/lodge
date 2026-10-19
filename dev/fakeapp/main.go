@@ -6,6 +6,7 @@
 // installed. It is not shipped.
 //
 //	LODGE_ROOT=$ROOT lodge-fakeapp --id one --name One --key o
+//	LODGE_ROOT=$ROOT lodge-fakeapp --id helper --name Helper --key h --companion
 package main
 
 import (
@@ -51,6 +52,7 @@ func run() error {
 	flag.BoolVar(&m.ContentLinks, "content-links", false, "set contentLinks")
 	flag.BoolVar(&m.MCP, "mcp", true, "serve /mcp")
 	flag.BoolVar(&m.Device, "device", true, "serve /device/")
+	flag.BoolVar(&m.Companion, "companion", false, "ask to be the companion, beside the current app")
 	installOnly := flag.Bool("install", false, "install the manifest and bundle, then exit")
 	serveOnly := flag.Bool("serve-only", false, "serve the socket without installing (the bundle is root's)")
 	flag.Parse()

@@ -21,10 +21,9 @@ companion). Where it fits:
 library lands in the [roadmap's](../plans/0001-roadmap.md) Phase 1, and
 the shell's half in Phase 2. [The companion's](#the-companion) additions
 (`ask`, the shell's `context` to the companion, and `init`'s `role` and
-`companion`) were designed on 2026-10-19 and are not built: they bind,
-additively in major 1, when the roadmap's
-[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-builds them. The rows marked *(Phase 6)* below are those.
+`companion`) were made on 2026-10-19, additively in major 1, and built in
+the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 
 ## Interface
 
@@ -54,17 +53,17 @@ builds them. The rows marked *(Phase 6)* below are those.
 | Message | Direction | Fields | Meaning |
 | --- | --- | --- | --- |
 | `ready` | app → shell | `contract` (int) | the app's lodge-client is listening |
-| `init` | shell → app | `contract` (int), `contentOrigin` (string or null), `shortcut` (string), `theme` (`"light"` or `"dark"`); *(Phase 6)* `role` (`"app"` or `"companion"`), `companion` (string or null) | the answer to `ready`, on load |
+| `init` | shell → app | `contract` (int), `contentOrigin` (string or null), `shortcut` (string), `theme` (`"light"` or `"dark"`); `role` (`"app"` or `"companion"`), `companion` (string or null) | the answer to `ready`, on load |
 | `route` | app → shell | `path` (string), `title` (string), `replace` (bool, optional) | the app's route changed; the address bar and history follow it |
 | `context` | app → shell | `kind` (string or null), `ref` (string), `title` (string) | what is on screen, for the companion: `{kind: "note", ref: "notes/1/Projects/Plan.md", title: "Plan"}` |
 | `open` | app → shell | `url` (string) | open a URL, possibly in another app |
-| `shortcut` | app → shell | `key` (string) | the switcher's shortcut, or *(Phase 6)* the companion's, was pressed inside the frame, or the app asked for the switcher |
-| `ask` | app → shell | `prompt` (string) | *(Phase 6)* open the companion with a prompt about what is on screen: an app's "Ask about this" |
+| `shortcut` | app → shell | `key` (string) | the switcher's shortcut, or the companion's, was pressed inside the frame, or the app asked for the switcher |
+| `ask` | app → shell | `prompt` (string) | open the companion with a prompt about what is on screen: an app's "Ask about this" |
 | `navigate` | shell → app | `route` (string) | go to this route: a deep link, or history, into an app already loaded |
 | `visible` | shell → app | `visible` (bool) | the frame was shown or hidden |
 | `theme` | shell → app | `scheme` (`"light"` or `"dark"`) | the theme changed |
-| `context` | shell → companion | `app` (string), `kind`, `ref`, `title` | *(Phase 6)* the current app's context, for the frame opened as the companion |
-| `ask` | shell → companion | `app` (string), `prompt` (string) | *(Phase 6)* the current app's `ask`, after its `context` |
+| `context` | shell → companion | `app` (string), `kind`, `ref`, `title` | the current app's context, for the frame opened as the companion |
+| `ask` | shell → companion | `app` (string), `prompt` (string) | the current app's `ask`, after its `context` |
 
 ### Start
 
@@ -79,7 +78,7 @@ builds them. The rows marked *(Phase 6)* below are those.
    - `shortcut` is the switcher's chord, by default `Ctrl+Backquote`
      ([shell.md](shell.md#the-switcher)).
    - `theme` is the current scheme.
-   - *(Phase 6)* `role` is `"companion"` in the frame opened as the
+   - `role` is `"companion"` in the frame opened as the
      companion, else `"app"`. `companion` is the companion's chord, by
      default `Ctrl+Shift+Backquote`, or `null` when no app is the companion
      ([the companion](#the-companion)).
@@ -156,13 +155,13 @@ handler.
   chord}`. The app never sees the event.
 - An app MUST NOT bind the chord. `lodge.openSwitcher()` posts the same
   message, for an app's own menu or touch button.
-- *(Phase 6)* lodge-client catches `init.companion`'s chord the same way,
+- lodge-client catches `init.companion`'s chord the same way,
   and posts `shortcut {key: chord}` with it. The shell tells the two apart
   by `key`. An app MUST NOT bind it either.
 
 ### The companion
 
-**Designed, not built** (Phase 6). The companion is the one app whose
+The companion is the one app whose
 manifest sets `companion: true`, opened in a frame of its own beside the
 current app ([shell.md](shell.md#the-companion)).
 
@@ -231,7 +230,7 @@ lodge.on("visible", ({ visible }) => {});
 lodge.on("theme", ({ scheme }) => {});
 lodge.history;                        // location, push, replace, listen
 
-// Phase 6: the companion
+// The companion
 lodge.role;                           // "app" | "companion"
 lodge.companion;                      // "Ctrl+Shift+Backquote", or null without a companion
 lodge.ask("What is due here?");       // opens the companion with a prompt
@@ -252,7 +251,10 @@ lodge.on("ask", ({ app, prompt }) => {});               // in the companion
 - `history.push` and `history.replace` post `route`, and `navigate` moves
   `history.location` and calls its listeners.
 - The shell's half, `@frostyard/lodge-client/shell`, keeps the frames'
-  ports: it does the origin and source checks, and answers `ready`.
+  ports, one for each app's own frame and one for the companion's
+  (`attach(app, frame, "companion")`): it does the origin and source
+  checks, answers `ready` with the frame's role, and drops the companion
+  frame's `route`, `context` and `ask`.
 
 ## Rules
 
@@ -260,8 +262,8 @@ lodge.on("ask", ({ app, prompt }) => {});               // in the companion
   the rest.
 - No message is evaluated, or inserted as HTML.
 - An app in a frame never changes the top window's history or location.
-- The switcher's shortcut never reaches an app, nor, from Phase 6, the
-  companion's chord.
+- The switcher's shortcut never reaches an app, nor the companion's
+  chord.
 - A frame sends a context as a pointer, never another frame's content.
 - A contract-major mismatch stops one frame's messages, not the shell.
 - Unknown messages are dropped, so a major grows by addition only.
@@ -271,7 +273,7 @@ lodge.on("ask", ({ app, prompt }) => {});               // in the companion
 | Artifact | Derivation |
 | --- | --- |
 | `client/src/messages.ts` | the [messages](#messages) table, as TypeScript types |
-| the shell's frame handling (`shell/`) | [Start](#start), [routes](#routes), [`open`](#open), [the shortcut](#the-shortcut) and, from Phase 6, [the companion](#the-companion) |
+| the shell's frame handling (`shell/`) | [Start](#start), [routes](#routes), [`open`](#open), [the shortcut](#the-shortcut) and [the companion](#the-companion) |
 
 ## References
 

@@ -127,6 +127,49 @@ describe("Lodge", () => {
     expect([p.lodge.visible, p.lodge.theme]).toEqual([true, "dark"]);
   });
 
+  it("defaults role and companion for a shell that sends neither", async () => {
+    const p = await connected();
+    expect([p.lodge.role, p.lodge.companion]).toEqual(["app", null]);
+  });
+
+  it("posts ask, and refuses a prompt that is empty or over 4,000 characters", async () => {
+    const p = await connected(undefined, { ...init, role: "app", companion: "Ctrl+Shift+Backquote" });
+    p.lodge.ask("What is due here?");
+    expect(await sent(p)).toEqual([{ lodge: 1, type: "ask", prompt: "What is due here?" }]);
+    expect(() => p.lodge.ask("")).toThrow(TypeError);
+    expect(() => p.lodge.ask("x".repeat(4001))).toThrow(TypeError);
+  });
+
+  it("keeps a companion frame's history in memory, and hears context and ask", async () => {
+    const p = await connected(`${ORIGIN}/app/notes/`, {
+      ...init,
+      role: "companion",
+      companion: "Ctrl+Shift+Backquote",
+    });
+    expect(p.lodge.role).toBe("companion");
+    const updates: string[] = [];
+    p.lodge.history.listen((u) => updates.push(`${u.action} ${u.location.pathname}`));
+    p.lodge.history.push("/thread/1", "One");
+    p.lodge.history.replace("/thread/2", "Two");
+    p.lodge.route("/thread/3");
+    expect(updates).toEqual(["push /thread/1", "replace /thread/2"]);
+    expect(p.lodge.history.location.pathname).toBe("/thread/3");
+    const got: unknown[] = [];
+    p.lodge.on("context", (e) => got.push(e));
+    p.lodge.on("ask", (e) => got.push(e));
+    p.frameWindow.postMessage(
+      { lodge: 1, type: "context", app: "mail", kind: "thread", ref: "t1", title: "Re: Saturday" },
+      ORIGIN,
+    );
+    p.frameWindow.postMessage({ lodge: 1, type: "ask", app: "mail", prompt: "Draft a yes" }, ORIGIN);
+    p.frameWindow.postMessage({ lodge: 1, type: "ask", app: "mail", prompt: "" }, ORIGIN);
+    expect(await sent(p)).toEqual([]);
+    expect(got).toEqual([
+      { app: "mail", kind: "thread", ref: "t1", title: "Re: Saturday" },
+      { app: "mail", prompt: "Draft a yes" },
+    ]);
+  });
+
   it("keeps a history driven by route and navigate", async () => {
     const p = await connected();
     const { history } = p.lodge;
@@ -171,6 +214,19 @@ describe("the shortcut", () => {
       expect(await press(p.lodge, p.app, ev)).toEqual({ seen: true, prevented: false });
     }
     expect(await sent(p)).toEqual([]);
+  });
+
+  it("catches the companion's chord too, and posts it as the shortcut's key", async () => {
+    const p = await connected(undefined, { ...init, companion: "Ctrl+Shift+Backquote" });
+    expect(await press(p.lodge, p.app, key("Backquote", { ctrlKey: true, shiftKey: true }))).toEqual({
+      seen: false,
+      prevented: true,
+    });
+    expect(await press(p.lodge, p.app, key("Backquote", { ctrlKey: true }))).toEqual({ seen: false, prevented: true });
+    expect(await sent(p)).toEqual([
+      { lodge: 1, type: "shortcut", key: "Ctrl+Shift+Backquote" },
+      { lodge: 1, type: "shortcut", key: "Ctrl+Backquote" },
+    ]);
   });
 
   it("follows the chord init names, and stops on close", async () => {

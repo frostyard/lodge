@@ -1,11 +1,15 @@
-// The switcher's shortcut (docs/specs/shell.md, The switcher): Ctrl+` by
-// default, a shell setting kept in local storage, and never one of the
-// keys the apps or the browser already use.
+// The switcher's shortcut and the companion's chord (docs/specs/shell.md,
+// The switcher, The companion): Ctrl+` and Ctrl+Shift+` by default, shell
+// settings kept in local storage, never one of the keys the apps or the
+// browser already use, and never each other.
 
 import { parseChord } from "@frostyard/lodge-client/shell";
 
 /** The default: Ctrl with the key left of 1. */
 export const DEFAULT_SHORTCUT = "Ctrl+Backquote";
+
+/** The companion's default: the switcher's with Shift. */
+export const DEFAULT_COMPANION = "Ctrl+Shift+Backquote";
 
 /** A chord ruled out as the shortcut, and why. */
 export interface RuledOut {
@@ -61,15 +65,16 @@ export function normalize(s: string): string | null {
 }
 
 /**
- * checkShortcut returns why chord cannot be the shortcut, or null when it
- * can: it must parse, hold Ctrl, Alt or Meta, and not be ruled out.
+ * checkShortcut returns why chord cannot be a shortcut, or null when it
+ * can: it must parse, hold Ctrl, Alt or Meta, and be neither ruled out nor
+ * one of taken, the shell's other chords.
  */
-export function checkShortcut(chord: string): string | null {
+export function checkShortcut(chord: string, taken: readonly RuledOut[] = []): string | null {
   const c = parseChord(chord);
   if (!c) return "not a chord: modifiers joined by +, then a key code, such as Ctrl+Backquote";
   if (!c.ctrl && !c.alt && !c.meta) return "a shortcut needs Ctrl, Alt or Meta";
   const n = normalize(chord);
-  const hit = RULED_OUT.find((r) => normalize(r.chord) === n);
+  const hit = [...RULED_OUT, ...taken].find((r) => normalize(r.chord) === n);
   return hit ? `${hit.chord} is ${hit.why}` : null;
 }
 

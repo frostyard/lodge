@@ -30,7 +30,7 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/shell.md](../specs/shell.md),
 [specs/inference.md](../specs/inference.md).
 
-**Status: Phases 1 to 3 built (2026-10-19).**
+**Status: Phases 1 to 3 and 6 built (2026-10-19).**
 - The kit and the client are released as `kit/v0.1.0` and `client/v0.1.0`.
 - lodge v1 (the nodes, the gateway, the control socket, the shell, the
   development build and packaging) and the inference layer are merged, and
@@ -38,11 +38,11 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
   user's phone and Chrome's PDF viewer are not done, and the Copilot and
   Codex providers are not built.
-- The assistant, Porter, is designed (Phase 5). Of lodge's side of it,
-  the roadmap's
+- The assistant, Porter, is designed (Phase 5). lodge's side of it, the
+  roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
-  the agent socket is built and the companion is not. What this document
-  says of the companion is marked *(Phase 6)*.
+  is built: the agent socket and the companion. Its checks on the user's
+  devices wait for the deployment.
 
 This document is rewritten as each phase lands.
 
@@ -234,7 +234,7 @@ served for `/`, `/<id>` and `/<id>/<route>`.
   ([lodge-client.md](../specs/lodge-client.md)), keeps the address bar on
   canonical URLs, and owns history.
 
-**The companion** *(Phase 6)* is the one app whose manifest sets
+**The companion** is the one app whose manifest sets
 `companion: true`: Porter, whose chat is its main surface
 ([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md);
 [shell.md](../specs/shell.md#the-companion)).
@@ -249,6 +249,11 @@ served for `/`, `/<id>` and `/<id>/<route>`.
   through MCP with its own tokens. An app's "Ask about this" sends `ask`,
   which opens the companion with a prompt
   ([lodge-client.md](../specs/lodge-client.md#the-companion)).
+- `internal/apps` decides which app is the companion, and `/lodge/apps`
+  marks it. The client's shell half keeps a port for the companion's frame
+  beside the app's own, and drops what the companion may not send. The
+  development build's `dev/e2e.sh` runs a fake app, Helper, as the
+  companion.
 
 One web manifest, `/lodge/manifest.webmanifest`, makes lodge a single
 home-screen app. No service worker is registered.

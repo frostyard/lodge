@@ -33,9 +33,11 @@ Status (2026-10-19):
   both Proposed, with their specs written and marked not built. Porter's
   own ADRs and design doc are in frostyard/porter, which is not published
   yet.
-- **Phase 6:** the agent socket is built (2026-10-19), with tokens bound to
-  their route and the kit's client of it. The companion is not built
-  yet.
+- **Phase 6 is built** (2026-10-19): the agent socket, with tokens bound
+  to their route and the kit's client of it, and the companion, with the
+  shell's panel and sheet, its button and chord, `context` and `ask`, and a
+  fake companion in the development build. Its checks on the VM and the
+  user's devices wait for the deployment.
 
 Nothing changes on the user's machines without the user's go-ahead.
 

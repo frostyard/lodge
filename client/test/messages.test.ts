@@ -41,6 +41,9 @@ describe("parsing", () => {
       { lodge: 1, type: "context", kind: "x".repeat(33), ref: "", title: "" },
       { lodge: 1, type: "context", kind: "note", ref: "r".repeat(1025), title: "" },
       { lodge: 1, type: "open", url: 1 },
+      { lodge: 1, type: "ask", prompt: "" },
+      { lodge: 1, type: "ask", prompt: "x".repeat(4001) },
+      { lodge: 1, type: "ask" },
     ]) {
       expect(parseAppMessage(m)).toBeNull();
     }
@@ -50,6 +53,26 @@ describe("parsing", () => {
       { lodge: 1, type: "visible", visible: "true" },
       { lodge: 1, type: "theme", scheme: "sepia" },
       { lodge: 1, type: "context", app: "Lodge", kind: null, ref: "", title: "" },
+      {
+        lodge: 1,
+        type: "init",
+        contract: 1,
+        contentOrigin: null,
+        shortcut: "Ctrl+Backquote",
+        theme: "dark",
+        role: "panel",
+      },
+      {
+        lodge: 1,
+        type: "init",
+        contract: 1,
+        contentOrigin: null,
+        shortcut: "Ctrl+Backquote",
+        theme: "dark",
+        companion: 1,
+      },
+      { lodge: 1, type: "ask", app: "notes", prompt: "" },
+      { lodge: 1, type: "ask", app: "app", prompt: "x" },
     ]) {
       expect(parseShellMessage(m)).toBeNull();
     }

@@ -22,11 +22,13 @@ the canonical paths; keep content tool-agnostic.
 ## Status
 
 Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. Phases 1 to 3 are built:
+Proposed. Phases 1 to 3 and 6 are built:
 - the kit and the client, released as `kit/v0.1.0` and `client/v0.1.0`;
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
-- the inference layer.
+- the inference layer;
+- lodge's side of the assistant: the agent socket and the companion
+  (unreleased in the kit and the client until they are tagged).
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
@@ -86,7 +88,8 @@ Everything in the map is built.
   install script (`make dist`, `make install`) and an app's unit
   templates. `internal/packagecheck` tests them.
 - `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
-  build with two `dev/fakeapp` apps, for smoke tests in a browser).
+  build with three `dev/fakeapp` apps, one of them the companion, for
+  smoke tests in a browser).
 - `internal/repocheck`: tests of the repository's rules. Relative links
   resolve, every doc has an index line, no private host is named, and
   `kit/` keeps its import boundary.

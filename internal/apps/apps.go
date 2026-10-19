@@ -66,9 +66,14 @@ type App struct {
 	Manifest Manifest `json:"manifest"`
 	// Key is the switcher key in effect: the manifest's, unless another
 	// manifest claims it too.
-	Key    string `json:"key"`
-	State  State  `json:"state"`
-	Reason string `json:"reason"`
+	Key string `json:"key"`
+	// Companion is whether the app is the companion: its manifest says so,
+	// and no other enabled app's does (ADR-0013).
+	Companion bool   `json:"companion"`
+	State     State  `json:"state"`
+	Reason    string `json:"reason"`
+	// Notes say why an enabled app lost its key or the companion.
+	Notes []string `json:"notes,omitzero"`
 	// Version and Protocol are the last healthy /health answer's.
 	Version  string `json:"version,omitempty"`
 	Protocol int    `json:"protocol,omitempty"`
@@ -339,11 +344,13 @@ func regularFile(dir, rel string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// disableShared disables both apps of a shared user, and takes a shared
-// key from every app that claims it.
+// disableShared disables both apps of a shared user, takes a shared key
+// from every app that claims it, and makes the companion the one enabled
+// app whose manifest sets companion, or none when several do.
 func disableShared(apps map[string]App) {
 	users := map[string][]string{}
 	keys := map[string][]string{}
+	defer companion(apps)
 	for id, a := range apps {
 		if a.Manifest.User != "" && a.Enabled() {
 			users[a.Manifest.User] = append(users[a.Manifest.User], id)
@@ -362,15 +369,39 @@ func disableShared(apps map[string]App) {
 			apps[id] = a
 		}
 	}
-	for _, ids := range keys {
+	for key, ids := range keys {
 		if len(ids) < 2 {
 			continue
 		}
 		for _, id := range ids {
 			a := apps[id]
-			a.Key = ""
+			if a.Key == key {
+				a.Key = ""
+				a.Notes = append(a.Notes, fmt.Sprintf("key %s is claimed by more than one app", key))
+			}
 			apps[id] = a
 		}
+	}
+}
+
+// companion sets Companion on the one enabled app whose manifest asks for
+// it. When several ask, none is the companion, and each says why.
+func companion(apps map[string]App) {
+	var ids []string
+	for id, a := range apps {
+		if a.Enabled() && a.Manifest.Companion {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		a := apps[id]
+		if len(ids) == 1 {
+			a.Companion = true
+		} else {
+			a.Notes = append(a.Notes, "companion is claimed by more than one app: "+strings.Join(ids, ", "))
+		}
+		apps[id] = a
 	}
 }
 

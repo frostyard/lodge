@@ -146,6 +146,9 @@ func TestSharedKeyClearsBoth(t *testing.T) {
 		if !a.Enabled() || a.Key != want {
 			t.Errorf("%s: enabled %v, key %q; want enabled, key %q", id, a.Enabled(), a.Key, want)
 		}
+		if lost := want == ""; lost != (len(a.Notes) == 1 && a.Notes[0] == "key x is claimed by more than one app") {
+			t.Errorf("%s: notes %q", id, a.Notes)
+		}
 	}
 }
 
@@ -229,5 +232,34 @@ func TestReloadAddsAndRemoves(t *testing.T) {
 func TestNoAppsDirectory(t *testing.T) {
 	if got := load(t, t.TempDir()).List(); len(got) != 0 {
 		t.Errorf("List = %v", got)
+	}
+}
+
+// One enabled app whose manifest sets companion is the companion. When
+// two do, neither is, both stay enabled, and each says why (ADR-0013).
+func TestAtMostOneCompanion(t *testing.T) {
+	root := t.TempDir()
+	apptest.Install(t, root, "porter", map[string]any{"companion": true}, nil)
+	apptest.Install(t, root, "notes", nil, nil)
+	apptest.Install(t, root, "off", map[string]any{"companion": true, "contract": 9}, nil)
+	r := load(t, root)
+	if a, _ := r.Get("porter"); !a.Companion || len(a.Notes) != 0 {
+		t.Errorf("porter: companion %v, notes %q", a.Companion, a.Notes)
+	}
+	if a, _ := r.Get("notes"); a.Companion {
+		t.Error("notes is the companion")
+	}
+	if a, _ := r.Get("off"); a.Companion {
+		t.Error("a disabled app is the companion")
+	}
+	apptest.Install(t, root, "aide", map[string]any{"companion": true}, nil)
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"aide", "porter"} {
+		a, _ := r.Get(id)
+		if !a.Enabled() || a.Companion || len(a.Notes) != 1 || !strings.Contains(a.Notes[0], "companion is claimed by more than one app: aide, porter") {
+			t.Errorf("%s: enabled %v, companion %v, notes %q", id, a.Enabled(), a.Companion, a.Notes)
+		}
 	}
 }

@@ -1,14 +1,17 @@
 // The shell page (docs/specs/shell.md): the rail or the bar, one frame per
 // opened app that stays loaded, the switcher, the address bar and history,
-// app states, and the theme. It talks to frames only through
-// @frostyard/lodge-client's shell half.
+// app states, the theme, and the companion beside the current app. It
+// talks to frames only through @frostyard/lodge-client's shell half.
 
 import {
+  type AppContext,
   type Chord,
+  type Context,
   createShell,
   type FramePort,
   matchesChord,
   parseChord,
+  type Role,
   resolveOpen,
   type Shell,
   type Theme,
@@ -25,11 +28,21 @@ import {
   type RailApp,
   titleFor,
 } from "./model.js";
-import { checkShortcut, DEFAULT_SHORTCUT, label } from "./shortcut.js";
+import { checkShortcut, DEFAULT_COMPANION, DEFAULT_SHORTCUT, label, type RuledOut } from "./shortcut.js";
 import type { Settings } from "./storage.js";
 
 /** How often the rail is read while the page is visible. */
 export const POLL_EVERY = 15_000;
+
+/** The companion's panel width, and how far its sheet's handle is dragged to close it, in CSS pixels. */
+export const PANEL_WIDTH = 400;
+export const SHEET_CLOSE_DRAG = 80;
+
+/** The shell takes at most one ask in this many milliseconds. */
+export const ASK_EVERY = 1_000;
+
+/** The narrow layout's media query (style.css). */
+const NARROW = "(max-width: 599.98px)";
 
 export interface Deps {
   window: Window;
@@ -37,6 +50,16 @@ export interface Deps {
   settings: Settings;
   /** How long a frame has to send ready after its load: 10 s. */
   readyTimeout?: number;
+  /** The clock, in milliseconds: Date.now. */
+  now?: () => number;
+}
+
+/** The companion's frame, created the first time it opens. */
+interface Panel {
+  app: string;
+  frame: HTMLIFrameElement;
+  port: FramePort;
+  readies: number;
 }
 
 /** One opened app: its view, frame and port. */
@@ -85,6 +108,18 @@ export class LodgeShell {
   #timer: ReturnType<typeof setInterval> | null = null;
   #unlisten: (() => void)[] = [];
 
+  // The companion (shell.md, The companion).
+  #companionShortcut: string;
+  #companionChord: Chord;
+  /** Whether the user has the companion open; it shows beside any app but its own. */
+  #companionOpen: boolean;
+  #panel: Panel | null = null;
+  /** Each app's latest context. */
+  readonly #contexts = new Map<string, Context>();
+  #pendingAsk: { app: string; prompt: string } | null = null;
+  #lastAsk = Number.NEGATIVE_INFINITY;
+  readonly #narrow: MediaQueryList | undefined;
+
   // The page's parts.
   readonly root: HTMLElement;
   readonly #railApps: HTMLElement;
@@ -94,6 +129,11 @@ export class LodgeShell {
   readonly #filter: HTMLInputElement;
   readonly #list: HTMLElement;
   readonly #menu: HTMLElement;
+  readonly #rail: HTMLElement;
+  readonly #bar: HTMLElement;
+  readonly #companion: HTMLElement;
+  readonly #companionNotice: HTMLElement;
+  readonly #companionButtons: HTMLButtonElement[];
   #selected = 0;
   #shown: RailApp[] = [];
 
@@ -104,12 +144,22 @@ export class LodgeShell {
     const stored = deps.settings.get("shortcut");
     this.#shortcut = stored && checkShortcut(stored) === null ? stored : DEFAULT_SHORTCUT;
     this.#chord = parseChord(this.#shortcut) ?? (parseChord(DEFAULT_SHORTCUT) as Chord);
+    const storedCompanion = deps.settings.get("companionShortcut");
+    this.#companionShortcut =
+      storedCompanion && checkShortcut(storedCompanion, this.#taken("companion")) === null
+        ? storedCompanion
+        : DEFAULT_COMPANION;
+    this.#companionChord = parseChord(this.#companionShortcut) ?? (parseChord(DEFAULT_COMPANION) as Chord);
+    this.#narrow = this.#win.matchMedia?.(NARROW);
+    // It opens again on load from 600 pixels; a sheet starts closed.
+    this.#companionOpen = deps.settings.get("companion") === "open" && this.#narrow?.matches !== true;
     this.#shell = createShell({
       window: this.#win,
       readyTimeout: deps.readyTimeout ?? 10_000,
       init: (app) => ({
         contentOrigin: this.#apps.find((a) => a.id === app)?.content ? this.#contentOrigin : null,
         shortcut: this.#shortcut,
+        companion: this.#companionApp() ? this.#companionShortcut : null,
         theme: this.theme(),
       }),
     });
@@ -141,22 +191,45 @@ export class LodgeShell {
         { class: "menu-button", type: "button", "aria-label": "Lodge menu", "aria-haspopup": "dialog" },
         "⋯",
       );
+    const companionButton = () =>
+      h(d, "button", { class: "companion-button", type: "button", "aria-pressed": "false", hidden: "" });
+    this.#companionButtons = [companionButton(), companionButton()];
+    const [railCompanion, barCompanion] = this.#companionButtons as [HTMLButtonElement, HTMLButtonElement];
+    const handle = h(d, "button", { class: "companion-handle", type: "button", "aria-label": "Close the companion" });
+    this.#companionNotice = h(d, "div", { class: "notice", role: "alert", hidden: "" });
+    this.#companion = h(
+      d,
+      "aside",
+      { class: "companion", "aria-label": "Companion", hidden: "", inert: "" },
+      handle,
+      this.#companionNotice,
+    );
+    this.#rail = h(
+      d,
+      "nav",
+      { class: "rail", "aria-label": "Apps" },
+      this.#railApps,
+      h(d, "div", { class: "rail-end" }, railCompanion, state(), menuButton()),
+    );
+    this.#bar = h(
+      d,
+      "header",
+      { class: "bar" },
+      this.#barApp,
+      h(d, "div", { class: "bar-end" }, barCompanion, state(), menuButton()),
+    );
     this.root = h(
       d,
       "div",
       { class: "lodge" },
-      h(
-        d,
-        "nav",
-        { class: "rail", "aria-label": "Apps" },
-        this.#railApps,
-        h(d, "div", { class: "rail-end" }, state(), menuButton()),
-      ),
-      h(d, "header", { class: "bar" }, this.#barApp, h(d, "div", { class: "bar-end" }, state(), menuButton())),
+      this.#rail,
+      this.#bar,
       this.#views_,
+      this.#companion,
       this.#switcher,
       this.#menu,
     );
+    this.#wireHandle(handle);
     this.#wire();
   }
 
@@ -210,6 +283,7 @@ export class LodgeShell {
     this.#drawRail();
     for (const v of this.#views.values()) this.#drawNotice(v);
     if (!this.#switcher.hidden) this.#drawList();
+    this.#applyCompanion();
   }
 
   #setReachable(ok: boolean): void {
@@ -369,6 +443,7 @@ export class LodgeShell {
 
   #show(app: string): void {
     const prev = this.#current;
+    const panelWasShown = !this.#companion.hidden;
     if (prev !== app) {
       if (prev !== null) {
         this.#previous = prev;
@@ -394,6 +469,9 @@ export class LodgeShell {
     }
     this.#drawBar();
     this.#title();
+    this.#applyCompanion();
+    // Another app beside an open companion: tell it what that app shows.
+    if (panelWasShown && prev !== app) this.#sendContext();
     this.#focusFrame();
   }
 
@@ -463,6 +541,246 @@ export class LodgeShell {
     // browsing context, without opener or referrer.
     this.#win.open(t.url, "_blank", "noopener,noreferrer");
   };
+
+  // --- The companion ---
+
+  /** The companion: the one app /lodge/apps marks, unless it is disabled. */
+  #companionApp(): RailApp | undefined {
+    return this.#apps.find((a) => a.companion && a.state !== "disabled");
+  }
+
+  /** companionShown reports whether the companion is open beside the current app. */
+  get companionShown(): boolean {
+    const c = this.#companionApp();
+    return this.#companionOpen && c !== undefined && this.#current !== null && this.#current !== c.id;
+  }
+
+  get companionShortcut(): string {
+    return this.#companionShortcut;
+  }
+
+  /**
+   * toggleCompanion opens or closes the companion beside the current app.
+   * While the companion app itself is current, it opens the app shown
+   * before it, with the companion beside it.
+   */
+  toggleCompanion(): void {
+    const c = this.#companionApp();
+    if (!c) return;
+    if (this.#current === c.id) {
+      const enabled = (id: string | null) =>
+        this.#apps.some((a) => a.id === id && a.id !== c.id && a.state !== "disabled");
+      const back = enabled(this.#previous) ? this.#previous : this.#apps.find((a) => enabled(a.id))?.id;
+      if (!back) return;
+      this.#setCompanionOpen(true);
+      this.switchTo(back);
+      this.#focusPanel();
+      return;
+    }
+    const open = !this.companionShown;
+    this.#setCompanionOpen(open);
+    this.#applyCompanion();
+    if (open) this.#focusPanel();
+    else this.#focusFrame();
+  }
+
+  /** closeCompanion closes it, and focus returns to the current app. */
+  closeCompanion(): void {
+    if (!this.#companionOpen) return;
+    this.#setCompanionOpen(false);
+    this.#applyCompanion();
+    this.#focusFrame();
+  }
+
+  #setCompanionOpen(open: boolean): void {
+    this.#companionOpen = open;
+    this.#deps.settings.set("companion", open ? "open" : null);
+  }
+
+  /**
+   * applyCompanion shows or hides the panel as the user's choice, the
+   * current app and the rail say, creating its frame the first time, and
+   * draws the companion's buttons.
+   */
+  #applyCompanion(): void {
+    const c = this.#companionApp();
+    // Another app became the companion on a reload: the old one's panel goes.
+    if (this.#panel && this.#panel.app !== c?.id) {
+      this.#panel.port.detach();
+      this.#panel.frame.remove();
+      this.#panel = null;
+      this.#pendingAsk = null;
+    }
+    const shown = this.companionShown;
+    if (shown && c && !this.#panel) this.#createPanel(c);
+    const was = !this.#companion.hidden;
+    this.#companion.hidden = !shown;
+    this.#companion.inert = !shown;
+    this.root.toggleAttribute("data-companion", shown);
+    // A sheet covers the app and the bar, which stay loaded but inert.
+    const sheet = shown && this.#narrow?.matches === true;
+    this.#views_.inert = sheet;
+    this.#bar.inert = sheet;
+    if (this.#panel && was !== shown) {
+      this.#panel.port.visible(shown);
+      if (shown) this.#sendContext();
+    }
+    if (c) {
+      this.#companion.setAttribute("aria-label", c.name);
+      this.#panel?.frame.setAttribute("title", `${c.name} (companion)`);
+    }
+    for (const b of this.#companionButtons) {
+      b.hidden = !c;
+      b.setAttribute("aria-pressed", String(shown));
+      if (!c) continue;
+      const title = `${c.name} (${label(this.#companionShortcut)})`;
+      b.setAttribute("aria-label", title);
+      b.setAttribute("title", title);
+      b.replaceChildren(this.#icon(c));
+    }
+  }
+
+  #createPanel(c: RailApp): void {
+    const frame = h(this.#doc, "iframe", {
+      title: `${c.name} (companion)`,
+      referrerpolicy: "no-referrer",
+      class: "frame",
+    });
+    const port = this.#shell.attach(c.id, frame, "companion");
+    this.#panel = { app: c.id, frame, port, readies: 0 };
+    frame.src = frameURL(c.id, "/");
+    this.#companion.append(frame);
+  }
+
+  #focusPanel(): void {
+    const f = this.#panel?.frame;
+    if (!f || this.#companion.hidden) return;
+    f.focus();
+    try {
+      f.contentWindow?.focus();
+    } catch {
+      // A frame that is not loaded yet takes focus when it loads.
+    }
+  }
+
+  /** sendContext tells the companion the current app's latest context, or none. */
+  #sendContext(): void {
+    const app = this.#current;
+    if (!this.#panel || app === null || !this.companionShown) return;
+    const c = this.#contexts.get(app) ?? { kind: null, ref: "", title: "" };
+    this.#panel.port.context({ app, ...c });
+  }
+
+  #onContext = (c: AppContext): void => {
+    this.#contexts.set(c.app, { kind: c.kind, ref: c.ref, title: c.title });
+    if (c.app === this.#current) this.#sendContext();
+  };
+
+  /**
+   * onAsk takes an ask from the current app's frame, at most one a second:
+   * it opens the companion, which then has the current context, and sends
+   * it the ask.
+   */
+  #onAsk = ({ app, prompt }: { app: string; prompt: string }): void => {
+    const c = this.#companionApp();
+    if (!c || app !== this.#current || app === c.id) return;
+    const now = (this.#deps.now ?? Date.now)();
+    if (now - this.#lastAsk < ASK_EVERY) return;
+    this.#lastAsk = now;
+    // Opening sends the current context; an open companion has it already.
+    this.#setCompanionOpen(true);
+    this.#applyCompanion();
+    this.#focusPanel();
+    const port = this.#panel?.port;
+    if (port?.state === "ready") port.ask(app, prompt);
+    else this.#pendingAsk = { app, prompt };
+  };
+
+  #onPanelReady(): void {
+    const p = this.#panel;
+    if (!p) return;
+    p.readies++;
+    this.#companionNotice.hidden = true;
+    this.#companionNotice.replaceChildren();
+    this.#sendContext();
+    const ask = this.#pendingAsk;
+    this.#pendingAsk = null;
+    if (ask && ask.app === this.#current && this.companionShown) p.port.ask(ask.app, ask.prompt);
+  }
+
+  #panelProblem(problem: "unresponsive" | "mismatched"): void {
+    const c = this.#companionApp();
+    const d = this.#doc;
+    const name = c?.name ?? "The companion";
+    const b = h(d, "button", { type: "button", class: "reload" }, "Reload");
+    b.addEventListener("click", () => {
+      if (this.#panel) this.#panel.frame.src = frameURL(this.#panel.app, "/");
+      this.#companionNotice.hidden = true;
+    });
+    this.#companionNotice.replaceChildren(
+      h(
+        d,
+        "p",
+        {},
+        problem === "unresponsive"
+          ? `${name} is not responding.`
+          : `${name} speaks another version of lodge's protocol than this shell.`,
+      ),
+      ...(problem === "unresponsive" ? [b] : []),
+    );
+    this.#companionNotice.hidden = false;
+    this.#companionNotice.toggleAttribute("data-covering", true);
+  }
+
+  /** wireHandle closes the sheet on a tap on its handle, or a drag of it down past SHEET_CLOSE_DRAG. */
+  #wireHandle(handle: HTMLButtonElement): void {
+    let startY: number | null = null;
+    let dy = 0;
+    let dragged = false;
+    const reset = () => {
+      startY = null;
+      dy = 0;
+      this.#companion.style.transform = "";
+    };
+    handle.addEventListener("pointerdown", (e) => {
+      startY = e.clientY;
+      dy = 0;
+      dragged = false;
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch {
+        // A synthetic pointer has nothing to capture.
+      }
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (startY === null) return;
+      dy = Math.max(0, e.clientY - startY);
+      this.#companion.style.transform = dy > 0 ? `translateY(${dy}px)` : "";
+    });
+    handle.addEventListener("pointerup", () => {
+      if (startY === null) return;
+      const moved = dy;
+      reset();
+      dragged = moved > 4;
+      if (moved > SHEET_CLOSE_DRAG) this.closeCompanion();
+    });
+    handle.addEventListener("pointercancel", reset);
+    handle.addEventListener("click", () => {
+      // A drag ends in a click as well: only a tap closes here.
+      if (dragged) {
+        dragged = false;
+        return;
+      }
+      this.closeCompanion();
+    });
+  }
+
+  /** taken are the shell's chords one of them may not take: the other's. */
+  #taken(which: "switcher" | "companion"): RuledOut[] {
+    return which === "companion"
+      ? [{ chord: this.#shortcut, why: "the switcher's shortcut" }]
+      : [{ chord: this.#companionShortcut, why: "the companion's shortcut" }];
+  }
 
   // --- The switcher ---
 
@@ -546,6 +864,13 @@ export class LodgeShell {
       this.onShortcut();
       return;
     }
+    if (matchesChord(e, this.#companionChord)) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.closeSwitcher(false);
+      this.toggleCompanion();
+      return;
+    }
     switch (e.key) {
       case "Escape":
         e.preventDefault();
@@ -589,46 +914,68 @@ export class LodgeShell {
       });
       return h(d, "label", {}, input, ` ${t[0]?.toUpperCase()}${t.slice(1)}`);
     });
-    const shortcut = h(d, "input", { type: "text", class: "menu-shortcut", "aria-label": "Switcher shortcut" });
-    const why = h(d, "p", { class: "menu-why", role: "status" });
-    const save = h(d, "button", { type: "button" }, "Save");
-    const reset = h(d, "button", { type: "button" }, "Default");
-    save.addEventListener("click", () => {
-      const err = checkShortcut(shortcut.value.trim());
-      if (err) {
-        why.textContent = err;
-        return;
-      }
-      this.#setShortcut(shortcut.value.trim());
-      why.textContent = "Saved. Apps already open learn it when they next load.";
-    });
-    reset.addEventListener("click", () => {
-      this.#setShortcut(DEFAULT_SHORTCUT);
-      shortcut.value = DEFAULT_SHORTCUT;
-      why.textContent = "";
-    });
+    const field = (which: "switcher" | "companion", legend: string, def: string) => {
+      const input = h(d, "input", {
+        type: "text",
+        class: "menu-shortcut",
+        "data-for": which,
+        "aria-label": legend,
+      });
+      const why = h(d, "p", { class: "menu-why", role: "status" });
+      const save = h(d, "button", { type: "button" }, "Save");
+      const reset = h(d, "button", { type: "button" }, "Default");
+      save.addEventListener("click", () => {
+        const chord = input.value.trim();
+        const err = checkShortcut(chord, this.#taken(which));
+        if (err) {
+          why.textContent = err;
+          return;
+        }
+        this.#setChord(which, chord);
+        why.textContent = "Saved. Apps already open learn it when they next load.";
+      });
+      reset.addEventListener("click", () => {
+        const err = checkShortcut(def, this.#taken(which));
+        if (err) {
+          why.textContent = err;
+          return;
+        }
+        this.#setChord(which, def);
+        input.value = def;
+        why.textContent = "";
+      });
+      return h(
+        d,
+        "fieldset",
+        {},
+        h(d, "legend", {}, legend),
+        input,
+        h(d, "div", { class: "menu-buttons" }, save, reset),
+        why,
+      );
+    };
     const menu = h(
       d,
       "div",
       { class: "menu", role: "dialog", "aria-label": "Lodge", hidden: "" },
       h(d, "fieldset", {}, h(d, "legend", {}, "Theme"), ...themes),
-      h(
-        d,
-        "fieldset",
-        {},
-        h(d, "legend", {}, "Switcher shortcut"),
-        shortcut,
-        h(d, "div", { class: "menu-buttons" }, save, reset),
-        why,
-      ),
+      field("switcher", "Switcher shortcut", DEFAULT_SHORTCUT),
+      field("companion", "Companion shortcut", DEFAULT_COMPANION),
     );
     return menu;
   }
 
-  #setShortcut(chord: string): void {
-    this.#shortcut = chord;
-    this.#chord = parseChord(chord) ?? this.#chord;
-    this.#deps.settings.set("shortcut", chord === DEFAULT_SHORTCUT ? null : chord);
+  #setChord(which: "switcher" | "companion", chord: string): void {
+    if (which === "switcher") {
+      this.#shortcut = chord;
+      this.#chord = parseChord(chord) ?? this.#chord;
+      this.#deps.settings.set("shortcut", chord === DEFAULT_SHORTCUT ? null : chord);
+      return;
+    }
+    this.#companionShortcut = chord;
+    this.#companionChord = parseChord(chord) ?? this.#companionChord;
+    this.#deps.settings.set("companionShortcut", chord === DEFAULT_COMPANION ? null : chord);
+    this.#applyCompanion();
   }
 
   get shortcut(): string {
@@ -642,8 +989,9 @@ export class LodgeShell {
     }
     const setting = this.#deps.settings.get("theme") ?? "system";
     for (const r of this.#menu.querySelectorAll<HTMLInputElement>("input[type=radio]")) r.checked = r.value === setting;
-    const s = this.#menu.querySelector<HTMLInputElement>(".menu-shortcut");
-    if (s) s.value = this.#shortcut;
+    for (const s of this.#menu.querySelectorAll<HTMLInputElement>(".menu-shortcut")) {
+      s.value = s.dataset.for === "companion" ? this.#companionShortcut : this.#shortcut;
+    }
     this.#menu.hidden = false;
     this.#menu.querySelector<HTMLElement>("input")?.focus();
   }
@@ -670,8 +1018,19 @@ export class LodgeShell {
   #wire(): void {
     this.#shell.on("route", this.#onRoute);
     this.#shell.on("open", this.#onOpen);
-    this.#shell.on("shortcut", () => this.onShortcut());
-    this.#shell.on("ready", ({ app }) => {
+    this.#shell.on("context", this.#onContext);
+    this.#shell.on("ask", this.#onAsk);
+    // A frame's lodge-client posts the chord pressed in it: the companion's
+    // toggles it, and anything else is the switcher's.
+    this.#shell.on("shortcut", ({ key }) => {
+      if (key === this.#companionShortcut) this.toggleCompanion();
+      else this.onShortcut();
+    });
+    this.#shell.on("ready", ({ app, role }) => {
+      if (role === "companion") {
+        this.#onPanelReady();
+        return;
+      }
       const v = this.#views.get(app);
       // A frame that loads again, discarded by the browser or reloaded,
       // goes back to its last route.
@@ -682,8 +1041,15 @@ export class LodgeShell {
       }
       if (app === this.#current) this.#focusFrame();
     });
-    this.#shell.on("unresponsive", ({ app }) => this.#problem(app, "unresponsive"));
-    this.#shell.on("mismatch", ({ app }) => this.#problem(app, "mismatched"));
+    const problem =
+      (p: "unresponsive" | "mismatched") =>
+      ({ app, role }: { app: string; role: Role }) => {
+        if (role === "companion") this.#panelProblem(p);
+        else this.#problem(app, p);
+      };
+    this.#shell.on("unresponsive", problem("unresponsive"));
+    this.#shell.on("mismatch", problem("mismatched"));
+    for (const b of this.#companionButtons) b.addEventListener("click", () => this.toggleCompanion());
     this.#filter.addEventListener("keydown", this.#onFilterKey);
     this.#filter.addEventListener("input", () => this.#drawList());
     this.#switcher.addEventListener("click", (e) => {
@@ -703,12 +1069,19 @@ export class LodgeShell {
     };
     listen(this.#win, "keydown", (e) => {
       const k = e as KeyboardEvent;
-      if (!this.switcherOpen && matchesChord(k, this.#chord)) {
+      if (this.switcherOpen) return;
+      if (matchesChord(k, this.#chord)) {
         k.preventDefault();
         k.stopPropagation();
         this.onShortcut();
+      } else if (matchesChord(k, this.#companionChord)) {
+        k.preventDefault();
+        k.stopPropagation();
+        this.toggleCompanion();
       }
     });
+    // Crossing 600 pixels turns the panel into a sheet, or back.
+    listen(this.#narrow, "change", () => this.#applyCompanion());
     listen(this.#win, "popstate", (e) => this.#onPop(e as PopStateEvent));
     listen(this.#doc, "visibilitychange", () => {
       if (this.#doc.visibilityState === "visible") void this.poll();
