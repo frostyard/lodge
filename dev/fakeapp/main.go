@@ -51,6 +51,7 @@ func run() error {
 	flag.BoolVar(&m.MCP, "mcp", true, "serve /mcp")
 	flag.BoolVar(&m.Device, "device", true, "serve /device/")
 	installOnly := flag.Bool("install", false, "install the manifest and bundle, then exit")
+	serveOnly := flag.Bool("serve-only", false, "serve the socket without installing (the bundle is root's)")
 	flag.Parse()
 	m.User = "fake" + m.ID
 	if err := m.Validate(); err != nil {
@@ -63,8 +64,10 @@ func run() error {
 	if env.Root == "" {
 		return errors.New("set LODGE_ROOT: the fake app is for the development build only")
 	}
-	if err := install(env, m); err != nil {
-		return err
+	if !*serveOnly {
+		if err := install(env, m); err != nil {
+			return err
+		}
 	}
 	if *installOnly {
 		return nil

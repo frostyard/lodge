@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt shell-check shell-fmt shell-build
+.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt shell-check shell-fmt shell-build
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -25,6 +25,27 @@ e2e-build: ## Build build/lodge-e2e (e2e tag), build/lodgectl and build/lodge-fa
 	CGO_ENABLED=0 go build -trimpath -tags e2e -ldflags '$(LDFLAGS)' -o build/lodge-e2e ./cmd/lodge
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o build/lodgectl ./cmd/lodgectl
 	CGO_ENABLED=0 go build -trimpath -o build/lodge-fakeapp ./dev/fakeapp
+
+# A tarball to install on a host (packaging/install.sh), for linux/DIST_ARCH:
+# the binaries, the shell's bundle and the packaging. The shell builds in
+# the nsl machine first (make shell-build).
+DIST_ARCH ?= amd64
+DIST_NAME = lodge-$(VERSION)-linux-$(DIST_ARCH)
+
+dist: ## Package lodge for linux/DIST_ARCH (amd64) into dist/, after make shell-build
+	@test -f shell/dist/index.html || { echo "shell/dist is not built: run make shell-build (nsl)"; exit 1; }
+	rm -rf dist/$(DIST_NAME) dist/$(DIST_NAME).tar.gz
+	mkdir -p dist/$(DIST_NAME)/bin dist/$(DIST_NAME)/packaging
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_ARCH) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(DIST_NAME)/bin/ ./cmd/lodge ./cmd/lodgectl
+	cp -R shell/dist dist/$(DIST_NAME)/shell
+	cp -R packaging/install.sh packaging/systemd packaging/sysusers.d packaging/tmpfiles.d packaging/app-template dist/$(DIST_NAME)/packaging/
+	tar -C dist -czf dist/$(DIST_NAME).tar.gz $(DIST_NAME)
+	@echo "dist/$(DIST_NAME).tar.gz: unpack it on the host and run sudo ./$(DIST_NAME)/packaging/install.sh"
+
+# make install DESTDIR=… PREFIX=… (see packaging/install.sh), from build/
+# and shell/dist/.
+install: build ## Install lodge from build/ and shell/dist/ (DESTDIR, PREFIX, BINDIR)
+	packaging/install.sh DESTDIR="$(DESTDIR)" PREFIX="$(PREFIX)" BINDIR="$(BINDIR)"
 
 fmt: ## Format Go code
 	gofmt -w $(GO_FILES)
