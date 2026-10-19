@@ -249,8 +249,9 @@ client sent, then sets these:
     `Lodge-Scope`.
   - It MUST answer 404 to a request for that session under another token
     name or scope.
-  - It MUST bound live sessions per token name, evicting the least recently
-    used. Notes keeps 8.
+  - It MUST bound live sessions per token name. Past the bound it evicts an
+    idle session (no request or stream in flight) first, else the least
+    recently used. Notes keeps 8.
   - It SHOULD end a session idle for an hour.
   - The kit provides the helper.
 - **Revocation is lodge's.** lodge refuses a revoked token, and closes

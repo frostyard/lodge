@@ -31,8 +31,9 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - lodge v1 (the nodes, the gateway, the control socket, the shell, the
   development build and packaging) and the inference layer are merged, and
   run on lodge's first host.
-- The checks on the user's devices are not done, and the Copilot and Codex
-  providers are not built.
+- Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
+  user's phone and Chrome's PDF viewer are not done, and the Copilot and
+  Codex providers are not built.
 
 This document is rewritten as each phase lands.
 

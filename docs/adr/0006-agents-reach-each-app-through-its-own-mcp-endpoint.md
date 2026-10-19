@@ -84,8 +84,11 @@ M4's review found that:
   - An app binds each session, at `initialize`, to the token name and
     scope that opened it. A request for that session with another token,
     or under a changed scope, is 404 (MCP's answer for an unknown session).
-  - At its limit, an app evicts the least recently used session (review
-    finding 11). Notes caps sessions at 8 per token name.
+  - At its limit, an app evicts an idle session first (no request or
+    stream in flight), else the least recently used one (review finding
+    11). Notes caps sessions at 8 per token name. A connected client that
+    holds its stream open is therefore evicted only when every other
+    session of its token is busy too.
   - `lodge/kit` provides the helper, so no app writes it twice.
 - **lodge owns revocation.** It refuses a revoked token's next request, and
   at once closes every request and stream it is proxying for that token.
@@ -122,7 +125,12 @@ what an app must do.
   tokens, through the kit's helper.
 - Two facts are checked in the roadmap's Phase 2 live run: whether Claude
   Code sends an `Origin`, and whether it opens a new session after a 404.
-  If it sends an `Origin`, this ADR changes before Phase 2 ends.
+  If it sends an `Origin`, this ADR changes before Phase 2 ends. **Both held
+  on 2026-10-19** with Claude Code 2.1.300 against `/mcp/notes` and
+  `/mcp/mail`:
+  - It sends no `Origin`, so the no-`Origin` check stands.
+  - After a 404 for its evicted session, it initializes a new session and
+    retries the tool.
 
 ## Alternatives considered
 

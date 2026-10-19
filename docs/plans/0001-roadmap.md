@@ -18,8 +18,9 @@ Status (2026-10-19):
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
   Lodge's security review ran on 2026-10-19, and each of its lodge findings
   is fixed with a test. Its report is not in this repository, and the
-  inference layer and the kit's later pieces landed after it. The checks on
-  the user's devices are still to come.
+  inference layer and the kit's later pieces landed after it. Claude Code's
+  two checks passed on 2026-10-19; the other checks on the user's devices
+  are still to come.
 - **Phase 3 is merged,** and the `local` provider is reachable from lodge's
   host. The Copilot and Codex adapters are not built until their terms are
   checked.
@@ -122,7 +123,14 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
   - whether WebKit on iOS sends `Sec-Fetch-Site` on a WebSocket handshake
     (M4 review M3);
   - that Claude Code sends no `Origin` to `/mcp/notes` (L10), and opens a
-    new session after a 404 (L11);
+    new session after a 404 (L11). **Both held on 2026-10-19,** with Claude
+    Code 2.1.300 against `/mcp/notes` and `/mcp/mail`:
+    - It sends no `Origin` and no `Sec-Fetch-*`.
+    - When its session was evicted, its stream and its next POST got 404.
+      It then initialized a new session and retried the tool, which
+      succeeded.
+    - It first probes MCP 2026-07-28's `server/discover`. The kit answers
+      that 400, and Claude Code falls back to `initialize`;
   - Chrome's viewer with a sandboxed PDF in a new tab (review item 12), and
     images and media in a new tab. The PDF exception in lodge-http.md is
     decided here;
