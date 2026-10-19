@@ -41,6 +41,7 @@ frostyard/core's
 - [lodge's HTTP surface](specs/lodge-http.md) — listeners, routes by kind, browser, content, agent and device checks, headers, sessions, tokens and allow-lists, `lodgectl`
 - [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, and the library's API
 - [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history
+- [The inference layer](specs/inference.md) — lodge's side of the inference socket: the caller, providers, aliases and allow-lists, the queue, credentials, availability and the usage log
 
 ### Plans
 

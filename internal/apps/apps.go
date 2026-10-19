@@ -382,6 +382,25 @@ func (r *Registry) Get(id string) (App, bool) {
 	return a, ok
 }
 
+// AppForUID is the enabled app whose manifest's user has uid, for the
+// inference socket's caller.
+func (r *Registry) AppForUID(uid int) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for id, a := range r.apps {
+		if a.Enabled() && a.uid >= 0 && a.uid == uid {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// AppEnabled reports whether id is an enabled app.
+func (r *Registry) AppEnabled(id string) bool {
+	a, ok := r.Get(id)
+	return ok && a.Enabled()
+}
+
 // List returns every app, ordered by name.
 func (r *Registry) List() []App {
 	r.mu.RLock()

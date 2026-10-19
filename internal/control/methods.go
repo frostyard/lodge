@@ -5,9 +5,11 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/tokens"
@@ -15,9 +17,12 @@ import (
 
 // Status is lodge.status's answer.
 type Status struct {
-	Nodes    []Node      `json:"nodes"`
-	Apps     []AppStatus `json:"apps"`
-	Sessions int         `json:"sessions"`
+	Nodes     []Node                     `json:"nodes"`
+	Apps      []AppStatus                `json:"apps"`
+	Sessions  int                        `json:"sessions"`
+	Providers []inference.ProviderStatus `json:"providers"`
+	// InferenceRefused is why the inference configuration was refused.
+	InferenceRefused string `json:"inferenceRefused,omitzero"`
 }
 
 // AppStatus is one app in lodge.status.
@@ -97,7 +102,9 @@ func (s *Server) call(ctx context.Context, method string, p jsontext.Value) (any
 	case "lodge.endSession":
 		return s.endSession(p)
 	case "lodge.usage":
-		return nil, errorf(CodeMethodNotFound, "lodge.usage comes with the inference layer (the roadmap's Phase 3)")
+		return s.usage(ctx, p)
+	case "lodge.providerKey":
+		return s.providerKey(ctx, p)
 	}
 	return nil, errorf(CodeMethodNotFound, "no method %q", method)
 }
@@ -106,7 +113,10 @@ func (s *Server) status(ctx context.Context, p jsontext.Value) (any, error) {
 	if err := params(p, &struct{}{}); err != nil {
 		return nil, err
 	}
-	st := Status{Nodes: []Node{}, Apps: []AppStatus{}, Sessions: s.d.Sessions.Count()}
+	st := Status{Nodes: []Node{}, Apps: []AppStatus{}, Sessions: s.d.Sessions.Count(), Providers: []inference.ProviderStatus{}}
+	if s.d.Inference != nil {
+		st.Providers, st.InferenceRefused = s.d.Inference.Status()
+	}
 	if s.d.Nodes != nil {
 		st.Nodes = append(st.Nodes, s.d.Nodes(ctx)...)
 	}
@@ -314,4 +324,67 @@ func (s *Server) endSession(p jsontext.Value) (any, error) {
 		return nil, errorf(CodeNotFound, "no session %s", in.ID)
 	}
 	return Closed{1}, nil
+}
+
+// usage sums the inference log per app and alias, since a day (UTC).
+func (s *Server) usage(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Since string `json:"since,omitzero"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	var since time.Time
+	if in.Since != "" {
+		t, err := time.Parse(time.DateOnly, in.Since)
+		if err != nil {
+			return nil, errorf(CodeInvalidParams, "since must be a day, YYYY-MM-DD")
+		}
+		since = t
+	}
+	if s.d.Inference == nil {
+		return []inference.Sum{}, nil
+	}
+	return s.d.Inference.Usage(ctx, since)
+}
+
+// validKey reports whether a provider key is 1 to 4096 visible ASCII
+// characters, without spaces.
+func validKey(k string) bool {
+	if k == "" || len(k) > 4096 {
+		return false
+	}
+	for i := range len(k) {
+		if k[i] < '!' || k[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// providerKey sets or, given an empty key, removes a provider's key.
+func (s *Server) providerKey(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Provider string `json:"provider"`
+		Key      string `json:"key"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	if in.Key != "" && !validKey(in.Key) {
+		return nil, errorf(CodeInvalidParams, "a key is 1 to 4096 visible ASCII characters")
+	}
+	if s.d.Inference == nil {
+		return nil, errorf(CodeNotFound, "no provider %q", in.Provider)
+	}
+	switch err := s.d.Inference.SetKey(ctx, in.Provider, in.Key); {
+	case errors.Is(err, inference.ErrNoProvider):
+		return nil, errorf(CodeNotFound, "no provider %q in lodge's configuration", in.Provider)
+	case err != nil:
+		return nil, err
+	}
+	s.d.Log.Info("provider key changed", "provider", in.Provider, "removed", in.Key == "")
+	return struct {
+		Removed bool `json:"removed"`
+	}{in.Key == ""}, nil
 }

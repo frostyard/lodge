@@ -13,6 +13,7 @@ import (
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/store"
@@ -31,6 +32,11 @@ type fixture struct {
 
 func newFixture(t *testing.T, peers []peer.Peer) *fixture {
 	t.Helper()
+	return newFixtureWith(t, peers, nil)
+}
+
+func newFixtureWith(t *testing.T, peers []peer.Peer, edit func(*Deps)) *fixture {
+	t.Helper()
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(root, "lodge.db"))
 	if err != nil {
@@ -42,14 +48,18 @@ func newFixture(t *testing.T, peers []peer.Peer) *fixture {
 	reg := apps.New(root, nil)
 	reg.Load()
 	f := &fixture{allow: allow.New(db, nil), tokens: tokens.New(db, nil), sessions: sessions.NewRegistry()}
-	srv := New(Deps{
+	deps := Deps{
 		Allow: f.allow, Tokens: f.tokens, Sessions: f.sessions, Apps: reg,
 		EndToken: func(id int64) int { f.ended = append(f.ended, id); return 2 },
 		Peers:    func(context.Context) ([]peer.Peer, error) { return peers, nil },
 		Nodes:    func(context.Context) []Node { return []Node{{Name: "lodge", DNSName: "lodge.example", Up: true}} },
 		Reload:   func() error { f.reloads++; return reg.Load() },
 		MCPURL:   func(id string) string { return "https://lodge.example/mcp/" + id },
-	})
+	}
+	if edit != nil {
+		edit(&deps)
+	}
+	srv := New(deps)
 	f.sock = filepath.Join(root, "run/lodge/control.sock")
 	ln, err := Listen(f.sock)
 	if err != nil {
@@ -247,8 +257,9 @@ func TestStatusAppsSessionsReload(t *testing.T) {
 	if err := f.c.Call(ctx, "lodge.nope", nil, nil); code(err) != CodeMethodNotFound {
 		t.Errorf("an unknown method: %v", err)
 	}
-	if err := f.c.Call(ctx, "lodge.usage", nil, nil); code(err) != CodeMethodNotFound {
-		t.Errorf("lodge.usage: %v", err)
+	var sums []inference.Sum
+	if err := f.c.Call(ctx, "lodge.usage", nil, &sums); err != nil || len(sums) != 0 {
+		t.Errorf("lodge.usage without inference: %+v %v", sums, err)
 	}
 }
 
@@ -272,5 +283,59 @@ func TestMalformedRequests(t *testing.T) {
 		if err != nil || !strings.Contains(string(buf[:n]), want) {
 			t.Errorf("%q: %q %v, want %s", line, buf[:n], err, want)
 		}
+	}
+}
+
+type fakeInference struct {
+	since time.Time
+	keys  map[string]string
+}
+
+func (f *fakeInference) Status() ([]inference.ProviderStatus, string) {
+	return []inference.ProviderStatus{{Name: "home", Type: "openai", Available: true, Slots: 4}}, "a refusal"
+}
+
+func (f *fakeInference) Usage(_ context.Context, since time.Time) ([]inference.Sum, error) {
+	f.since = since
+	return []inference.Sum{{App: "mail", Alias: "local", Requests: 2, Input: 10, Output: 4}}, nil
+}
+
+func (f *fakeInference) SetKey(_ context.Context, provider, key string) error {
+	if provider != "home" {
+		return inference.ErrNoProvider
+	}
+	f.keys[provider] = key
+	return nil
+}
+
+func TestInferenceMethods(t *testing.T) {
+	inf := &fakeInference{keys: map[string]string{}}
+	f := newFixtureWith(t, nil, func(d *Deps) { d.Inference = inf })
+	ctx := t.Context()
+	var st Status
+	if err := f.c.Call(ctx, "lodge.status", nil, &st); err != nil || len(st.Providers) != 1 || st.InferenceRefused != "a refusal" {
+		t.Errorf("status = %+v %v", st, err)
+	}
+	var sums []inference.Sum
+	if err := f.c.Call(ctx, "lodge.usage", map[string]string{"since": "2026-10-01"}, &sums); err != nil || len(sums) != 1 {
+		t.Errorf("usage = %+v %v", sums, err)
+	}
+	if !inf.since.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("since = %v", inf.since)
+	}
+	if err := f.c.Call(ctx, "lodge.usage", map[string]string{"since": "yesterday"}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("a bad since: %v", err)
+	}
+	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "home", "key": "sk-1"}, nil); err != nil || inf.keys["home"] != "sk-1" {
+		t.Errorf("set a key: %v %v", err, inf.keys)
+	}
+	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "home", "key": ""}, nil); err != nil || inf.keys["home"] != "" {
+		t.Errorf("remove a key: %v %v", err, inf.keys)
+	}
+	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "nosuch", "key": "k"}, nil); code(err) != CodeNotFound {
+		t.Errorf("an unknown provider: %v", err)
+	}
+	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "home", "key": "two words"}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("a key with a space: %v", err)
 	}
 }

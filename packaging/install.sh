@@ -72,7 +72,7 @@ for f in "$BIN_SRC/lodge" "$BIN_SRC/lodgectl"; do
 	[ -x "$f" ] || die "$f is missing: run make build (or make dist)"
 done
 [ -f "$SHELL_SRC/index.html" ] || die "$SHELL_SRC/index.html is missing: run make shell-build (in the nsl machine)"
-for f in systemd/lodge.service sysusers.d/lodge.conf tmpfiles.d/lodge.conf; do
+for f in systemd/lodge.service sysusers.d/lodge.conf tmpfiles.d/lodge.conf config.example.json; do
 	[ -f "$PACKAGING_SRC/$f" ] || die "$PACKAGING_SRC/$f is missing"
 done
 case $BINDIR in /*) ;; *) die "BINDIR must be absolute: $BINDIR" ;; esac
@@ -91,6 +91,11 @@ chmod 0644 "$DESTDIR$UNITDIR/.lodge.service.new"
 mv -f "$DESTDIR$UNITDIR/.lodge.service.new" "$DESTDIR$UNITDIR/lodge.service"
 install -m 0644 "$PACKAGING_SRC/sysusers.d/lodge.conf" "$DESTDIR$SYSUSERSDIR/lodge.conf"
 install -m 0644 "$PACKAGING_SRC/tmpfiles.d/lodge.conf" "$DESTDIR$TMPFILESDIR/lodge.conf"
+
+# An example configuration, beside the real one, which the owner writes
+# (docs/specs/inference.md, Configuration).
+install -d -m 0755 "$DESTDIR/etc/lodge"
+install -m 0644 "$PACKAGING_SRC/config.example.json" "$DESTDIR/etc/lodge/config.example.json"
 
 # The shell's bundle, root's and read-only to lodge, replaced whole.
 share=$DESTDIR/usr/share/lodge
@@ -122,4 +127,7 @@ install.sh: done. Next, on this host:
   3. sudo lodgectl allow login <your login>; sudo lodgectl allow node <your device>
   4. Install each app under /usr/share/lodge/apps/<id>/ with its socket
      unit (packaging/app-template/), then: sudo lodgectl reload
+  5. For inference, write /etc/lodge/config.json from config.example.json,
+     set any provider key with: sudo lodgectl provider key NAME (stdin),
+     then: sudo lodgectl reload
 EOF

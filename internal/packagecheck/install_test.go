@@ -68,6 +68,7 @@ func TestInstallLayout(t *testing.T) {
 		"usr/share/lodge/shell/assets/app-1.js":      0o644,
 		"usr/share/lodge/shell/manifest.webmanifest": 0o644,
 		"usr/share/lodge/apps":                       0o755,
+		"etc/lodge/config.example.json":              0o644,
 		"etc/lodge":                                  0o755,
 	}
 	for p, m := range want {
@@ -151,7 +152,7 @@ func TestUnitAndEntries(t *testing.T) {
 		}
 	}
 	users := read("sysusers.d/lodge.conf")
-	for _, line := range []string{"u lodge - ", "g lodge-apps -"} {
+	for _, line := range []string{"u lodge - ", "g lodge-apps -", "m lodge lodge-apps"} {
 		if !strings.Contains(users, "\n"+line) {
 			t.Errorf("sysusers.d lacks %q", line)
 		}

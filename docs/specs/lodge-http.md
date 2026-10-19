@@ -545,7 +545,8 @@ and allowed while the nodes wait for their login.
 | `lodgectl token revoke NAME` | `lodge.revokeToken` | revokes it and closes its streams; `notFound` if absent |
 | `lodgectl sessions` | `lodge.sessions` | live sessions: ID, app, login, node name, start, `seenAt` |
 | `lodgectl session end ID` | `lodge.endSession` | closes one; `notFound` if absent |
-| `lodgectl usage [--since DATE]` | `lodge.usage` | inference usage per app and alias (Phase 3) |
+| `lodgectl usage [--since DATE]` | `lodge.usage` | inference usage per app and alias ([inference.md](inference.md#the-usage-log)) |
+| `lodgectl provider key NAME` | `lodge.providerKey` | sets or removes an inference provider's key, read from stdin; `notFound` for no such provider ([inference.md](inference.md#credentials)) |
 
 The hint on stderr is
 `claude mcp add --transport http <id> https://LODGE/mcp/<id> --header "Authorization: Bearer <token>"`.
