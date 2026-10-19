@@ -76,9 +76,9 @@ func New(cfg Config) *Gateway {
 		DialContext:         cfg.Apps.DialContext,
 		MaxIdleConnsPerHost: 8,
 		// Requests past this many open connections to one app wait for one.
-		MaxConnsPerHost: MaxConnsPerApp,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  true,
+		MaxConnsPerHost:    MaxConnsPerApp,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true,
 	}
 	return &Gateway{
 		cfg:       cfg,
