@@ -1,0 +1,14 @@
+/build/
+/lodge
+/lodgectl
+/dist/
+*.test
+/coverage.out
+/coverage.html
+/.worktrees/
+/.env
+/.envrc
+/.mcp.json
+node_modules/
+/client/dist/
+/shell/dist/
