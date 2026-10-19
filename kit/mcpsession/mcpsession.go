@@ -8,7 +8,9 @@
 //     answers 404, as does one for a session it does not know;
 //   - each token name keeps at most Max live sessions, and opening one
 //     more ends the least recently used;
-//   - a session idle for Idle ends.
+//   - a session idle for Idle ends: Sessions sweeps on every request and
+//     every Every until Close, so an idle session ends, and frees what the
+//     app holds for it, even when no other request comes.
 //
 // The binding keeps sessions apart; the scope itself is enforced by the
 // app's engine, on the connection its tools use.
@@ -26,8 +28,9 @@ import (
 
 // The defaults of Options.
 const (
-	DefaultMax  = 8
-	DefaultIdle = time.Hour
+	DefaultMax   = 8
+	DefaultIdle  = time.Hour
+	DefaultEvery = time.Minute
 )
 
 // Header is MCP Streamable HTTP's session header.
@@ -44,10 +47,16 @@ type Options struct {
 	// the contract requires for a scope the app cannot parse. Nil admits
 	// every scope.
 	CheckScope func(scope string) error
+	// Every is how often idle sessions are swept between requests:
+	// DefaultEvery when 0.
+	Every time.Duration
 	// Now is the clock, for tests: time.Now when nil.
 	Now func() time.Time
 	// Logger receives ended sessions. Nil discards them.
 	Logger *slog.Logger
+
+	// ticks replaces the sweep's ticker, for tests.
+	ticks <-chan time.Time
 }
 
 // Sessions is an http.Handler that binds next's MCP sessions.
@@ -57,6 +66,10 @@ type Sessions struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
+
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type session struct {
@@ -67,7 +80,7 @@ type session struct {
 	removed bool
 }
 
-// New returns Sessions over next.
+// New returns Sessions over next, and starts its sweeps; Close stops them.
 func New(next http.Handler, opts Options) *Sessions {
 	if opts.Max <= 0 {
 		opts.Max = DefaultMax
@@ -78,10 +91,44 @@ func New(next http.Handler, opts Options) *Sessions {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Every <= 0 {
+		opts.Every = DefaultEvery
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
-	return &Sessions{next: next, opts: opts, sessions: map[string]*session{}}
+	s := &Sessions{next: next, opts: opts, sessions: map[string]*session{},
+		stop: make(chan struct{}), done: make(chan struct{})}
+	go s.janitor()
+	return s
+}
+
+// janitor sweeps every Every until Close.
+func (s *Sessions) janitor() {
+	defer close(s.done)
+	ticks := s.opts.ticks
+	if ticks == nil {
+		t := time.NewTicker(s.opts.Every)
+		defer t.Stop()
+		ticks = t.C
+	}
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticks:
+			s.sweep(context.Background())
+		}
+	}
+}
+
+// Close stops the sweeps between requests, and waits for one under way.
+// Live sessions stay, and requests still pass; an app closes Sessions as
+// it stops serving.
+func (s *Sessions) Close() error {
+	s.closeOnce.Do(func() { close(s.stop) })
+	<-s.done
+	return nil
 }
 
 // ServeHTTP implements http.Handler.

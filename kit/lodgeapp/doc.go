@@ -6,6 +6,8 @@
 //
 //	env, err := lodgeapp.LoadEnv() // LODGE_ROOT, LODGE_UID, or user lodge
 //	ln, err := env.Listen("notes") // socket activation, or /run/lodge/apps/notes.sock
+//	mcp := mcpsession.New(mcpHandler, mcpsession.Options{})
+//	defer mcp.Close()
 //	srv := &lodgeapp.Server{
 //		Health: func(context.Context) lodgeapp.Health {
 //			return lodgeapp.Health{OK: true, Version: version, Protocol: api.Protocol}
@@ -13,7 +15,7 @@
 //		API: func(ctx context.Context, nc net.Conn, c lodgeapp.Caller) {
 //			rpc.ServeConn(ctx, nc, router, api.CallerSession)
 //		},
-//		MCP: mcpsession.New(mcpHandler, mcpsession.Options{}),
+//		MCP: mcp,
 //	}
 //	err = srv.Serve(ctx, ln)
 //
