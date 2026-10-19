@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
@@ -193,7 +194,7 @@ func TestTokens(t *testing.T) {
 	if !strings.HasPrefix(out.Token, "lgm_") || out.URL != "https://lodge.example/mcp/notes" {
 		t.Errorf("issued %+v", out)
 	}
-	if _, err := f.tokens.Check(ctx, out.Token, "notes"); err != nil {
+	if _, err := f.tokens.Check(ctx, out.Token, "notes", ""); err != nil {
 		t.Errorf("the issued token does not check: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -337,5 +338,54 @@ func TestInferenceMethods(t *testing.T) {
 	}
 	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "home", "key": "two words"}, nil); code(err) != CodeInvalidParams {
 		t.Errorf("a key with a space: %v", err)
+	}
+}
+
+// fakeAgents lists frostporter.
+type fakeAgents struct{}
+
+func (fakeAgents) Listed(name string) bool { return name == "frostporter" }
+func (fakeAgents) Status() agents.Status {
+	return agents.Status{Path: "/run/lodge/agent.sock", Agents: []string{"frostporter"}, Skipped: []string{"ghost"}, Listening: true}
+}
+
+// A token for an agent is issued only for a listed agent, and the answer
+// names the socket rather than the tailnet's URL (ADR-0014).
+func TestAgentTokens(t *testing.T) {
+	ctx := t.Context()
+	f := newFixtureWith(t, nil, func(d *Deps) { d.Agents = fakeAgents{} })
+	var out Issued
+	if err := f.c.Call(ctx, "lodge.issueToken", map[string]string{"name": "porter", "app": "notes", "scope": "vault=1", "agent": "frostporter"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Agent != "frostporter" || out.Socket != "/run/lodge/agent.sock" || out.URL != "/mcp/notes" {
+		t.Errorf("issued %+v", out)
+	}
+	if _, err := f.tokens.Check(ctx, out.Token, "notes", "frostporter"); err != nil {
+		t.Errorf("the token does not check on the agent socket: %v", err)
+	}
+	if _, err := f.tokens.Check(ctx, out.Token, "notes", ""); err == nil {
+		t.Error("the agent's token checks on the tailnet")
+	}
+	if err := f.c.Call(ctx, "lodge.issueToken", map[string]string{"name": "x", "app": "notes", "scope": "x", "agent": "ghost"}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("an unlisted agent: %v", err)
+	}
+	var list []tokens.Token
+	if err := f.c.Call(ctx, "lodge.tokens", nil, &list); err != nil || len(list) != 1 || list[0].Agent != "frostporter" {
+		t.Errorf("tokens = %+v %v", list, err)
+	}
+	var st Status
+	if err := f.c.Call(ctx, "lodge.status", nil, &st); err != nil || st.AgentSocket == nil || !st.AgentSocket.Listening ||
+		st.AgentSocket.Agents[0] != "frostporter" {
+		t.Errorf("status = %+v %v", st.AgentSocket, err)
+	}
+	// Without an agent socket, no agent's token is issued.
+	g := newFixture(t, nil)
+	if err := g.c.Call(ctx, "lodge.issueToken", map[string]string{"name": "porter", "app": "notes", "scope": "x", "agent": "frostporter"}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("no agent socket: %v", err)
+	}
+	var none Status
+	if err := g.c.Call(ctx, "lodge.status", nil, &none); err != nil || none.AgentSocket != nil {
+		t.Errorf("status without agents = %+v %v", none.AgentSocket, err)
 	}
 }

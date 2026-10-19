@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -448,7 +449,8 @@ func TestControlWhileNodesNeedLogin(t *testing.T) {
 				waiting++
 			}
 		}
-		if len(st.Nodes) == 2 && waiting == 2 {
+		// The agent socket, which names no node, is served while they wait.
+		if len(st.Nodes) == 2 && waiting == 2 && st.AgentSocket != nil && st.AgentSocket.Listening {
 			if st.Nodes[0].Name != "lodge" || st.Nodes[1].Name != "lodge-content" {
 				t.Errorf("nodes = %+v", st.Nodes)
 			}
@@ -558,5 +560,74 @@ func TestDevelopmentBuildInference(t *testing.T) {
 	}
 	if err := c.Call(t.Context(), "lodge.usage", nil, &sums); err != nil || len(sums) != 1 || sums[0].App != "fake" || sums[0].Input != 3 {
 		t.Errorf("usage = %+v %v", sums, err)
+	}
+}
+
+// The development build serves the agent socket, where the developer's
+// uid passes as an agent: a token issued for the developer reaches the
+// app's /mcp as caller agent, and a tailnet token does not.
+func TestDevelopmentBuildAgentSocket(t *testing.T) {
+	_, e2e := binaries(t)
+	l := startLodge(t, e2e, func(root string) {
+		apptest.Install(t, root, "fake", map[string]any{"name": "Fake", "mcp": true}, nil)
+		serveKitApp(t, root, "fake")
+	}, "--listen", "127.0.0.1:0", "--content-listen", "127.0.0.1:0")
+	c, err := control.Dial(t.Context(), filepath.Join(l.root, "run/lodge/control.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st control.Status
+	if err := c.Call(t.Context(), "lodge.status", nil, &st); err != nil || st.AgentSocket == nil || !st.AgentSocket.Listening ||
+		st.AgentSocket.Path != filepath.Join(l.root, "run/lodge/agent.sock") {
+		t.Fatalf("status = %+v %v", st.AgentSocket, err)
+	}
+	if err := c.Call(t.Context(), "lodge.reload", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var agentTok, tailnetTok control.Issued
+	if err := c.Call(t.Context(), "lodge.issueToken", map[string]string{"name": "dev-agent", "app": "fake", "scope": "x", "agent": me.Username}, &agentTok); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Call(t.Context(), "lodge.issueToken", map[string]string{"name": "laptop", "app": "fake", "scope": "x"}, &tailnetTok); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(l.root, "run/lodge/agent.sock")
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}}
+	post := func(token string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, "http://lodge/mcp/fake", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := post(agentTok.Token); code != http.StatusOK || body != "agent dev-agent   /mcp" {
+		t.Errorf("the agent's token: %d %q", code, body)
+	}
+	if code, _ := post(tailnetTok.Token); code != http.StatusUnauthorized {
+		t.Errorf("a tailnet token on the agent socket: %d", code)
+	}
+	// And the agent's token is refused on the loopback listener, which
+	// stands for the tailnet here.
+	req, _ := http.NewRequest(http.MethodPost, "http://"+l.lodge+"/mcp/fake", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+agentTok.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the agent's token on the tailnet route: %d", resp.StatusCode)
 	}
 }

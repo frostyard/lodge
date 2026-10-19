@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/inference"
@@ -85,7 +86,16 @@ type Deps struct {
 	MCPURL func(id string) string
 	// Inference is the inference layer; nil without one.
 	Inference Inference
-	Log       *slog.Logger
+	// Agents are the agents on lodge's host; nil without an agent socket.
+	Agents Agents
+	Log    *slog.Logger
+}
+
+// Agents is what the control socket asks of the agents on lodge's host.
+type Agents interface {
+	// Listed reports whether a token may be issued for the user.
+	Listed(name string) bool
+	Status() agents.Status
 }
 
 // Inference is what the control socket asks of the inference layer.

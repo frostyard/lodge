@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/inference"
@@ -23,6 +24,8 @@ type Status struct {
 	Providers []inference.ProviderStatus `json:"providers"`
 	// InferenceRefused is why the inference configuration was refused.
 	InferenceRefused string `json:"inferenceRefused,omitzero"`
+	// AgentSocket is the agent socket and its agents.
+	AgentSocket *agents.Status `json:"agentSocket,omitzero"`
 }
 
 // AppStatus is one app in lodge.status.
@@ -37,6 +40,9 @@ type Issued struct {
 	Token string `json:"token"`
 	App   string `json:"app"`
 	URL   string `json:"url"`
+	// Agent is the user the token is for, on the agent socket at Socket.
+	Agent  string `json:"agent,omitzero"`
+	Socket string `json:"socket,omitzero"`
 }
 
 // Closed is how many sessions or streams a command closed.
@@ -119,6 +125,10 @@ func (s *Server) status(ctx context.Context, p jsontext.Value) (any, error) {
 	}
 	if s.d.Nodes != nil {
 		st.Nodes = append(st.Nodes, s.d.Nodes(ctx)...)
+	}
+	if s.d.Agents != nil {
+		as := s.d.Agents.Status()
+		st.AgentSocket = &as
 	}
 	for _, a := range s.d.Apps.List() {
 		st.Apps = append(st.Apps, AppStatus{ID: a.ID, State: a.State, Reason: a.Reason})
@@ -266,6 +276,7 @@ func (s *Server) issueToken(ctx context.Context, p jsontext.Value) (any, error) 
 		Name  string `json:"name"`
 		App   string `json:"app"`
 		Scope string `json:"scope"`
+		Agent string `json:"agent,omitzero"`
 	}
 	if err := params(p, &in); err != nil {
 		return nil, err
@@ -274,7 +285,10 @@ func (s *Server) issueToken(ctx context.Context, p jsontext.Value) (any, error) 
 	if !ok || !a.Enabled() || !a.Manifest.MCP {
 		return nil, errorf(CodeNotFound, "no enabled app %q serves MCP", in.App)
 	}
-	secret, err := s.d.Tokens.Issue(ctx, in.Name, in.App, in.Scope)
+	if in.Agent != "" && (s.d.Agents == nil || !s.d.Agents.Listed(in.Agent)) {
+		return nil, errorf(CodeInvalidParams, "%s is not an agent: list the user in agents in /etc/lodge/config.json, then lodgectl reload", in.Agent)
+	}
+	secret, err := s.d.Tokens.Issue(ctx, in.Name, in.App, in.Scope, in.Agent)
 	switch {
 	case errors.Is(err, tokens.ErrInvalid):
 		return nil, errorf(CodeInvalidParams, "%v: a name is 1 to 64 of [A-Za-z0-9@._-], a scope 1 to 256 visible ASCII characters", err)
@@ -283,7 +297,10 @@ func (s *Server) issueToken(ctx context.Context, p jsontext.Value) (any, error) 
 	case err != nil:
 		return nil, err
 	}
-	s.d.Log.Info("token issued", "token", in.Name, "app", in.App)
+	s.d.Log.Info("token issued", "token", in.Name, "app", in.App, "agent", in.Agent)
+	if in.Agent != "" {
+		return Issued{Token: secret, App: in.App, URL: "/mcp/" + in.App, Agent: in.Agent, Socket: s.d.Agents.Status().Path}, nil
+	}
 	url := ""
 	if s.d.MCPURL != nil {
 		url = s.d.MCPURL(in.App)

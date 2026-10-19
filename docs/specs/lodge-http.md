@@ -28,10 +28,8 @@ fixes from M4's review.
 **Status:** written on 2026-10-18 for the
 [roadmap's](../plans/0001-roadmap.md) Phase 2, which binds every route as
 it lands. [The agent socket](#the-agent-socket) and the binding of tokens
-to their route were designed on 2026-10-19 and are not built. They are
-marked *(Phase 6)*, and bind when the roadmap's
-[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-builds them.
+to their route were added on 2026-10-19, and built in the roadmap's
+[Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 
 ## Interface
 
@@ -45,7 +43,7 @@ builds them.
 | plain HTTP on a loopback address | `--content-listen ADDR` | the content routes, refused likewise |
 | `/run/lodge/control.sock` | — | `lodgectl` ([below](#the-control-socket-and-lodgectl)) |
 | `/run/lodge/inference.sock` | — | app daemons ([app-contract.md](app-contract.md#inference)) |
-| `/run/lodge/agent.sock` *(Phase 6)* | — | `/mcp/<id>` for the agents on lodge's host that its configuration names ([below](#the-agent-socket)) |
+| `/run/lodge/agent.sock` | — | `/mcp/<id>` for the agents on lodge's host that its configuration names ([below](#the-agent-socket)) |
 
 - `LODGE` is the `lodge` node's full DNS name, the first of `tsnet`'s
   `CertDomains` (`lodge.<tailnet>.ts.net`). `CONTENT` is the
@@ -230,7 +228,7 @@ holds. Each failure is its own line:
   connection for at most 60 s. Checks d and e run on every request against
   the current lists, so a `lodgectl` change applies to the next request.
 - Agent requests need checks a and b only. Device requests need none
-  ([device routes](#device-routes)). *(Phase 6)* Requests on the agent
+  ([device routes](#device-routes)). Requests on the agent
   socket need none: the peer's uid stands in for WhoIs
   ([the agent socket](#the-agent-socket)).
 
@@ -439,7 +437,7 @@ The checks, in order:
 5. **Token:** `Authorization: Bearer <token>` names a live token issued
    for app `<id>`. Otherwise, whether the token is missing, malformed,
    unknown, revoked or for another app, the answer is 401 with
-   `WWW-Authenticate: Bearer` and no detail. *(Phase 6)* A token issued
+   `WWW-Authenticate: Bearer` and no detail. A token issued
    for the agent socket (`--agent`) is refused here the same way.
 6. **App:** an app that is disabled, or has no `mcp: true`, is 503 or 404.
 
@@ -462,7 +460,7 @@ lodge then proxies to the app's `/mcp`:
 
 ### The agent socket
 
-**Designed, not built** (Phase 6). `/run/lodge/agent.sock` serves
+`/run/lodge/agent.sock` serves
 `/mcp/<id>` to agents on lodge's own host, such as Porter, with the
 tailnet's token rules, and the peer's uid in place of `Host`, WhoIs and
 the address check.
@@ -557,7 +555,7 @@ For every kind, before a request goes to an app's socket:
 
 | Credential | Form | Kept by lodge |
 | --- | --- | --- |
-| MCP token | `lgm_` + 43 base64url characters (32 random bytes from `crypto/rand`) | SHA-256, hex, with its name, app, scope, creation, last use and revocation; *(Phase 6)* the agent user it is bound to, or none |
+| MCP token | `lgm_` + 43 base64url characters (32 random bytes from `crypto/rand`) | SHA-256, hex, with its name, app, scope, creation, last use and revocation; the agent user it is bound to, or none |
 | allowed login | a tailnet login, 1 to 256 bytes of UTF-8 without control characters | as given, with when it was added |
 | allowed node | a StableNodeID | the ID, the node's name when it was allowed, and when |
 
@@ -566,7 +564,7 @@ For every kind, before a request goes to an app's socket:
   may be reused.
 - A token's scope is 1 to 256 visible ASCII characters, which lodge does
   not interpret.
-- *(Phase 6)* **A token works on one route.** One issued with `--agent
+- **A token works on one route.** One issued with `--agent
   USER` works only on [the agent socket](#the-agent-socket), from `USER`.
   One issued without it works only on the tailnet's `/mcp/<id>`.
 - A token is shown once, when it is issued, and never again: not by
@@ -595,8 +593,8 @@ and allowed while the nodes wait for their login.
 | `lodgectl nodes` | `lodge.nodes` | the allowed nodes |
 | `lodgectl allow node NODE` | `lodge.allowNode` | adds one; `conflict` if listed; `notFound` or `invalidParams` for a name that matches no peer or several |
 | `lodgectl disallow node NODE` | `lodge.disallowNode` | removes it and closes its sessions |
-| `lodgectl tokens` | `lodge.tokens` | the tokens: name, app, scope, creation, last use, revocation; *(Phase 6)* the agent user |
-| `lodgectl token issue NAME --app ID --scope SCOPE [--agent USER]` | `lodge.issueToken` | prints the token alone on stdout, and on stderr how to add it to Claude Code; `conflict` for a live name, `notFound` for an app without MCP. *(Phase 6)* `--agent` binds it to the agent socket and that user, and `invalidParams` answers a user the configuration does not list; the hint on stderr then names the socket |
+| `lodgectl tokens` | `lodge.tokens` | the tokens: name, app, scope, creation, last use, revocation; the agent user |
+| `lodgectl token issue NAME --app ID --scope SCOPE [--agent USER]` | `lodge.issueToken` | prints the token alone on stdout, and on stderr how to add it to Claude Code; `conflict` for a live name, `notFound` for an app without MCP. `--agent` binds it to the agent socket and that user, and `invalidParams` answers a user the configuration does not list; the hint on stderr then names the socket |
 | `lodgectl token revoke NAME` | `lodge.revokeToken` | revokes it and closes its streams; `notFound` if absent |
 | `lodgectl sessions` | `lodge.sessions` | live sessions: ID, app, login, node name, start, `seenAt` |
 | `lodgectl session end ID` | `lodge.endSession` | closes one; `notFound` if absent |
@@ -621,7 +619,7 @@ repository.
   A test sends each.
 - Issuing a token and allowing a login or a node happen only on the
   control socket.
-- *(Phase 6)* Only the agents lodge's configuration names connect to the
+- Only the agents lodge's configuration names connect to the
   agent socket, and a token works only on the route it was issued for.
   Each has a test that fails it.
 - No response, log line or state file holds an MCP token.

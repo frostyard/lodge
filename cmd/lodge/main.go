@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/control"
@@ -181,12 +182,20 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	configPath := o.layout(o.config)
 	inf.Load(inference.LoadConfig(configPath))
 
+	// The agents on lodge's host (docs/specs/lodge-http.md, The agent
+	// socket). Under --root the developer's uid passes as well.
+	agentSock := o.layout("/run/lodge/agent.sock")
+	ag := agents.New(agents.Options{Path: agentSock, DevUID: devUID, PerUID: gateway.PerPeerConns, Total: gateway.MaxConns,
+		Log: log.With("part", "agents")})
+	ag.Load(agents.LoadConfig(configPath))
+
 	reload := func() error {
 		if err := reg.Load(); err != nil {
 			return err
 		}
 		reg.Poll(ctx)
 		inf.Load(inference.LoadConfig(configPath))
+		ag.Load(agents.LoadConfig(configPath))
 		return nil
 	}
 
@@ -203,20 +212,16 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		defer contentNode.Close()
 	}
 
-	// The gateway exists once the nodes have names; until then nothing it
-	// serves can be open.
-	var gw atomic.Pointer[gateway.Gateway]
+	// The gateway exists before the nodes join, for the agent socket, which
+	// names no node; the nodes' listeners start, and its names are set,
+	// once they have joined.
+	g := gateway.New(gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log})
 	var mcpBase atomic.Value
 	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
-		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log, Inference: inf,
-		EndToken: func(id int64) int {
-			if g := gw.Load(); g != nil {
-				return g.EndToken(id)
-			}
-			return 0
-		},
-		MCPURL: func(id string) string { return mcpBase.Load().(string) + "/mcp/" + id },
+		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log, Inference: inf, Agents: ag,
+		EndToken: g.EndToken,
+		MCPURL:   func(id string) string { return mcpBase.Load().(string) + "/mcp/" + id },
 		Nodes: func(ctx context.Context) []control.Node {
 			var out []control.Node
 			for _, n := range []*tailnet.Node{lodgeNode, contentNode} {
@@ -257,6 +262,7 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		wg.Wait()
 	}()
 	wg.Go(func() { reg.Run(ctx) })
+	wg.Go(func() { g.Run(ctx) })
 	wg.Go(func() {
 		if err := control.New(deps).Serve(ctx, ctlLn); err != nil {
 			errs <- err
@@ -299,6 +305,33 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		log.Info("inference socket ready", "path", o.layout("/run/lodge/inference.sock"))
 	}
 
+	// The agent socket is in group lodge-agents, which lodge is in; under
+	// --root, it stays the developer's.
+	agentGroup := "lodge-agents"
+	if o.root != "" {
+		agentGroup = ""
+	}
+	if agentLn, err := agents.Listen(agentSock, agentGroup); err != nil {
+		log.Error("no agent socket", "err", err)
+	} else {
+		srv := gateway.Server(g.Agent())
+		perConn := srv.ConnContext
+		srv.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+			return agents.ConnContext(perConn(ctx, c), c)
+		}
+		srv.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelDebug)
+		serversMu.Lock()
+		servers = append(servers, srv)
+		serversMu.Unlock()
+		ln := ag.Listener(agentLn)
+		wg.Go(func() {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errs <- fmt.Errorf("agent socket: %w", err)
+			}
+		})
+		log.Info("agent socket ready", "path", agentSock)
+	}
+
 	if lodgeNode != nil {
 		if err := upNodes(ctx, lodgeNode, contentNode); err != nil {
 			if ctx.Err() != nil {
@@ -307,11 +340,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 			return err
 		}
 		names = gateway.TailnetNames(lodgeNode.DNSName(), contentNode.DNSName())
+		g.SetNames(names)
 		mcpBase.Store(names.LodgeOrigin)
 	}
-	g := gateway.New(gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log})
-	gw.Store(g)
-	wg.Go(func() { g.Run(ctx) })
 
 	type listener struct {
 		name string
