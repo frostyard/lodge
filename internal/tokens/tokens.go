@@ -41,6 +41,8 @@ const TouchEvery = time.Minute
 
 // Token is what lodge keeps of one token, without the secret.
 type Token struct {
+	// ID is the token's row: names are reused, rows are not.
+	ID       int64     `json:"-"`
 	Name     string    `json:"name"`
 	App      string    `json:"app"`
 	Scope    string    `json:"scope"`
@@ -115,8 +117,8 @@ func (s *Store) Check(ctx context.Context, secret, app string) (Token, error) {
 	hash := Hash(secret)
 	var t Token
 	var gotHash, created string
-	err := s.db.QueryRowContext(ctx, `SELECT name, app, scope, hash, created_at FROM tokens
-		WHERE hash = ? AND revoked_at IS NULL`, hash).Scan(&t.Name, &t.App, &t.Scope, &gotHash, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, app, scope, hash, created_at FROM tokens
+		WHERE hash = ? AND revoked_at IS NULL`, hash).Scan(&t.ID, &t.Name, &t.App, &t.Scope, &gotHash, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, ErrUnauthorized
 	}
@@ -128,19 +130,6 @@ func (s *Store) Check(ctx context.Context, secret, app string) (Token, error) {
 	}
 	t.Created = parseTime(created)
 	return t, nil
-}
-
-// Live reports whether a live token has name, for a re-check after a
-// request registers its stream.
-func (s *Store) Live(ctx context.Context, name string) (bool, error) {
-	var one int
-	switch err := s.db.QueryRowContext(ctx, `SELECT 1 FROM tokens WHERE name = ? AND revoked_at IS NULL`, name).Scan(&one); {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("check a token: %w", err)
-	}
-	return true, nil
 }
 
 // Touch records the token's use, at most once per TouchEvery.
@@ -161,21 +150,21 @@ func (s *Store) Touch(ctx context.Context, name string) error {
 	return nil
 }
 
-// Revoke revokes the live token with name.
-func (s *Store) Revoke(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE tokens SET revoked_at = ? WHERE name = ? AND revoked_at IS NULL`, s.stamp(s.now()), name)
-	if err != nil {
-		return fmt.Errorf("revoke a token: %w", err)
+// Revoke revokes the live token with name, and returns its row.
+func (s *Store) Revoke(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `UPDATE tokens SET revoked_at = ? WHERE name = ? AND revoked_at IS NULL RETURNING id`,
+		s.stamp(s.now()), name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("revoke a token: %w", err)
-	} else if n == 0 {
-		return ErrNotFound
+	if err != nil {
+		return 0, fmt.Errorf("revoke a token: %w", err)
 	}
 	s.mu.Lock()
 	delete(s.touched, name)
 	s.mu.Unlock()
-	return nil
+	return id, nil
 }
 
 // List returns every token, live and revoked, oldest first.

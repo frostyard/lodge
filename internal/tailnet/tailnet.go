@@ -81,7 +81,7 @@ func New(cfg Config) (*Node, error) {
 		ControlURL: cfg.ControlURL,
 		Logf:       func(format string, args ...any) { log.Debug(fmt.Sprintf(format, args...)) },
 		// The login URL, when there is no auth key, comes this way, every
-		// 5 s: it is logged once per URL and kept for Status.
+		// 5 s: it is kept for Status, and only its need is logged.
 		UserLogf: n.userLog,
 	}
 	if err := srv.Start(); err != nil {
@@ -99,8 +99,8 @@ func New(cfg Config) (*Node, error) {
 // loginLine is how tsnet announces the login URL.
 const loginLine = "go to: "
 
-// userLog logs tsnet's messages for people, but the login URL only when it
-// changes.
+// userLog logs tsnet's messages for people. The login URL is kept for
+// Status, never logged; that a login is needed is logged once per URL.
 func (n *Node) userLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	if _, url, ok := strings.Cut(msg, loginLine); ok {
@@ -109,8 +109,10 @@ func (n *Node) userLog(format string, args ...any) {
 		seen := n.loginURL == url
 		n.loginURL = url
 		n.mu.Unlock()
+		// The URL claims the node for whoever opens it first, so it goes
+		// to lodgectl status (root's), not to the journal.
 		if !seen {
-			n.log.Warn("the tailnet node needs a login: open the URL, or restart with an auth key", "url", url)
+			n.log.Warn("the tailnet node needs a login: sudo lodgectl status shows its URL; an auth key avoids it")
 		}
 		return
 	}

@@ -116,24 +116,30 @@ func TestRevokeAndReuseName(t *testing.T) {
 	if _, err := s.Issue(ctx, "agent", "notes", "vault=2"); !errors.Is(err, ErrConflict) {
 		t.Errorf("a second live token named agent: %v, want ErrConflict", err)
 	}
-	if err := s.Revoke(ctx, "agent"); err != nil {
+	oldTok, _ := s.Check(ctx, old, "notes")
+	id, err := s.Revoke(ctx, "agent")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if live, _ := s.Live(ctx, "agent"); live {
-		t.Error("a revoked token is live")
+	if id != oldTok.ID || id == 0 {
+		t.Errorf("Revoke returned row %d, want %d", id, oldTok.ID)
 	}
 	if _, err := s.Check(ctx, old, "notes"); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("a revoked token checks: %v", err)
 	}
-	if err := s.Revoke(ctx, "agent"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Revoke(ctx, "agent"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("revoking twice: %v, want ErrNotFound", err)
 	}
 	fresh, err := s.Issue(ctx, "agent", "notes", "vault=2")
 	if err != nil {
 		t.Fatalf("reusing a revoked name: %v", err)
 	}
-	if tok, err := s.Check(ctx, fresh, "notes"); err != nil || tok.Scope != "vault=2" {
+	if tok, err := s.Check(ctx, fresh, "notes"); err != nil || tok.Scope != "vault=2" || tok.ID == oldTok.ID {
 		t.Errorf("the new token: %+v, %v", tok, err)
+	}
+	// The old secret stays revoked though its name is live again.
+	if _, err := s.Check(ctx, old, "notes"); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("the revoked secret checks after its name was reused: %v", err)
 	}
 	list, _ := s.List(ctx)
 	if len(list) != 2 || list[0].Revoked.IsZero() || !list[1].Revoked.IsZero() {

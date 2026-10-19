@@ -24,7 +24,7 @@ type fixture struct {
 	allow    *allow.Lists
 	tokens   *tokens.Store
 	sessions *sessions.Registry
-	ended    []string
+	ended    []int64
 	reloads  int
 	sock     string
 }
@@ -44,7 +44,7 @@ func newFixture(t *testing.T, peers []peer.Peer) *fixture {
 	f := &fixture{allow: allow.New(db, nil), tokens: tokens.New(db, nil), sessions: sessions.NewRegistry()}
 	srv := New(Deps{
 		Allow: f.allow, Tokens: f.tokens, Sessions: f.sessions, Apps: reg,
-		EndToken: func(name string) int { f.ended = append(f.ended, name); return 2 },
+		EndToken: func(id int64) int { f.ended = append(f.ended, id); return 2 },
 		Peers:    func(context.Context) ([]peer.Peer, error) { return peers, nil },
 		Nodes:    func(context.Context) []Node { return []Node{{Name: "lodge", DNSName: "lodge.example", Up: true}} },
 		Reload:   func() error { f.reloads++; return reg.Load() },
@@ -209,7 +209,7 @@ func TestTokens(t *testing.T) {
 	if err := f.c.Call(ctx, "lodge.revokeToken", map[string]string{"name": "agent"}, &closed); err != nil || closed.Closed != 2 {
 		t.Errorf("revoke: %+v %v", closed, err)
 	}
-	if len(f.ended) != 1 || f.ended[0] != "agent" {
+	if len(f.ended) != 1 || f.ended[0] == 0 {
 		t.Errorf("streams ended for %v", f.ended)
 	}
 	if err := f.c.Call(ctx, "lodge.revokeToken", map[string]string{"name": "agent"}, nil); code(err) != CodeNotFound {

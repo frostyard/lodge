@@ -83,7 +83,7 @@ func (h *harness) contentGet(path string, hdr map[string]string) answer {
 	return h.do(h.reqTo(h.content, contentHost, http.MethodGet, path, hdr))
 }
 
-const notesContentPolicy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox; frame-ancestors https://lodge.example"
+const notesContentPolicy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'; sandbox; frame-ancestors https://lodge.example"
 
 func TestContentChecks(t *testing.T) {
 	h := newHarness(t)
@@ -199,7 +199,7 @@ func TestContentLinksPolicy(t *testing.T) {
 		t.Errorf("notes' policy = %q", plain)
 	}
 	links := h.contentGet("/mail/m/1", nil)
-	want := "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors https://lodge.example"
+	want := "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors https://lodge.example"
 	if got := links.header.Values("Content-Security-Policy"); len(got) != 1 || got[0] != want {
 		t.Errorf("mail's policy = %q", got)
 	}
@@ -359,13 +359,15 @@ func TestMCPStreamAndRevocation(t *testing.T) {
 	if err != nil || line != "data: first\n" {
 		t.Fatalf("the first event arrived as %q, %v", line, err)
 	}
-	if n := h.g.streams.count("agent"); n != 1 {
+	tok, _ := h.tokens.Check(t.Context(), secret, "notes")
+	if n := h.g.streams.count(tok.ID); n != 1 {
 		t.Fatalf("%d streams for the token, want 1", n)
 	}
-	if err := h.tokens.Revoke(t.Context(), "agent"); err != nil {
+	id, err := h.tokens.Revoke(t.Context(), "agent")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if n := h.g.EndToken("agent"); n != 1 {
+	if n := h.g.EndToken(id); n != 1 {
 		t.Errorf("EndToken closed %d", n)
 	}
 	done := make(chan error, 1)
@@ -424,17 +426,25 @@ func TestDevice(t *testing.T) {
 		a.header.Get("Cross-Origin-Resource-Policy") != "same-origin" || a.header.Get("X-App") != "kept" {
 		t.Errorf("device response headers: %v", a.header)
 	}
-	// Any method; no identity checks: a tagged, unlisted, forwarding node
-	// reaches the app, with the peer for display only.
-	h.who.set(func(p *peer.Peer) {
-		p.Tagged, p.Login, p.NodeID, p.Addrs = true, "tagged-devices", "nCI", []netip.Addr{netip.MustParseAddr("192.0.2.7")}
-	})
+	// Any method; no identity checks: a tagged, unlisted node reaches the
+	// app, with the peer for display only, and without its login.
+	h.who.set(func(p *peer.Peer) { p.Tagged, p.Login, p.NodeID = true, "tagged-devices", "nCI" })
 	if a := h.do(h.req(http.MethodPut, "/device/notes/x", nil)); a.status != http.StatusCreated {
 		t.Errorf("a tagged device: %d", a.status)
 	}
 	s = h.notes.last(t)
 	if s.Header.Get("Lodge-Node-Id") != "nCI" || s.Header.Get("Lodge-Login") != "" {
 		t.Errorf("a tagged device: node %q login %q", s.Header.Get("Lodge-Node-Id"), s.Header.Get("Lodge-Login"))
+	}
+	// A node forwarding for others reaches the app too, but is not named
+	// (N3): its address is not one of its own.
+	h.who.set(func(p *peer.Peer) { p.Tagged, p.Addrs = false, []netip.Addr{netip.MustParseAddr("192.0.2.7")} })
+	if a := h.do(h.req(http.MethodPut, "/device/notes/x", nil)); a.status != http.StatusCreated {
+		t.Errorf("a forwarded device: %d", a.status)
+	}
+	s = h.notes.last(t)
+	if s.Header.Get("Lodge-Node-Id") != "" || s.Header.Get("Lodge-Node-Name") != "" || s.Header.Get("Lodge-Login") != "" {
+		t.Errorf("a forwarded device was named: %v", s.Header)
 	}
 	h.who.fail(peer.ErrUnknown)
 	if a := h.do(h.req(http.MethodDelete, "/device/notes", nil)); a.status != http.StatusCreated {
@@ -486,5 +496,101 @@ func TestDeviceWebSocket(t *testing.T) {
 	}
 	if code := closeCode(t, c); code != websocket.StatusUnsupportedData {
 		t.Errorf("a binary frame: close %d, want 1003", code)
+	}
+}
+
+// A revoked token's row is not its name: ending its streams leaves a new
+// token of the same name alone, and its old secret stays refused (N1).
+func TestMCPRevocationIsByRow(t *testing.T) {
+	h := newHarness(t)
+	old := h.issue("agent", "notes", "vault=1")
+	oldTok, _ := h.tokens.Check(t.Context(), old, "notes")
+	if _, err := h.tokens.Revoke(t.Context(), "agent"); err != nil {
+		t.Fatal(err)
+	}
+	fresh := h.issue("agent", "notes", "vault=1")
+	release := make(chan struct{})
+	h.notes.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: x\n\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+		return true
+	}
+	defer close(release)
+	resp, err := http.DefaultTransport.RoundTrip(h.mcpReq(http.MethodGet, "notes", fresh, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.g.EndToken(oldTok.ID); n != 0 {
+		t.Errorf("ending the revoked row closed %d of the new token's streams", n)
+	}
+	freshTok, _ := h.tokens.Check(t.Context(), fresh, "notes")
+	if n := h.g.streams.count(freshTok.ID); n != 1 {
+		t.Errorf("the new token holds %d streams, want 1", n)
+	}
+	expect(t, h.do(h.mcpReq(http.MethodPost, "notes", old, nil)), http.StatusUnauthorized, "")
+}
+
+// Device and agent responses are confined if a browser loads them on the
+// lodge origin (L1): no script, no framing.
+func TestDeviceAndAgentResponsesAreConfined(t *testing.T) {
+	h := newHarness(t)
+	h.notes.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<script>alert(1)</script>"))
+		return true
+	}
+	secret := h.issue("agent", "notes", "vault=1")
+	for name, a := range map[string]answer{
+		"device":       h.get("/device/notes/x", nil),
+		"device error": h.get("/device/mail/x", nil),
+		"agent":        h.do(h.mcpReq(http.MethodPost, "notes", secret, nil)),
+		"agent error":  h.do(h.mcpReq(http.MethodPost, "notes", "", nil)),
+	} {
+		csp := a.header.Values("Content-Security-Policy")
+		if len(csp) == 0 || csp[len(csp)-1] != "default-src 'none'; sandbox; frame-ancestors 'none'" {
+			t.Errorf("%s: CSP %q", name, csp)
+		}
+		for k, v := range map[string]string{"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Cross-Origin-Opener-Policy": "same-origin"} {
+			if got := a.header.Get(k); got != v {
+				t.Errorf("%s: %s = %q, want %q", name, k, got, v)
+			}
+		}
+	}
+}
+
+// Only sessions and device routes take an upgrade (L2): x/, content and
+// MCP refuse one before the app sees it.
+func TestUpgradesRefusedOutsideSessionsAndDevices(t *testing.T) {
+	h := newHarness(t)
+	h.notes.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("Upgrade") != "" {
+			t.Errorf("the app saw an upgrade on %s", r.URL.Path)
+		}
+		return false
+	}
+	up := map[string]string{"Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="}
+	secret := h.issue("agent", "notes", "vault=1")
+	mcp := h.mcpReq(http.MethodGet, "notes", secret, up)
+	upWithOrigin := map[string]string{"Origin": lodgeOrigin}
+	for k, v := range up {
+		upWithOrigin[k] = v
+	}
+	for name, a := range map[string]answer{
+		"x/":      h.get("/app/notes/x/a", upWithOrigin),
+		"content": h.contentGet("/notes/b", up),
+		"mcp":     h.do(mcp),
+	} {
+		if a.status != http.StatusBadRequest || !strings.Contains(a.body, "no upgrade") {
+			t.Errorf("%s: %d %q, want 400", name, a.status, a.body)
+		}
 	}
 }

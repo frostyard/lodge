@@ -56,9 +56,12 @@ type frameFlags struct {
 	content, remoteImages bool
 }
 
-// AppPolicy is app id's frame Content-Security-Policy.
+// AppPolicy is app id's frame Content-Security-Policy. Scripts and
+// styles come only from the app's bundle, under assets/, so no byte the
+// app's daemon serves (its x/ reads, its socket) can run as script.
 func (n Names) AppPolicy(id string, content, remoteImages bool) string {
 	base := n.LodgeOrigin + "/app/" + id + "/"
+	assets := base + "assets/"
 	img, media, frame := "'self' data:", "'self'", base
 	if content {
 		img += " " + n.ContentOrigin
@@ -68,7 +71,7 @@ func (n Names) AppPolicy(id string, content, remoteImages bool) string {
 	if remoteImages {
 		img += " https:"
 	}
-	return "default-src 'none'; script-src " + base + "; style-src " + base + " 'unsafe-inline'; img-src " + img + "; " +
+	return "default-src 'none'; script-src " + assets + "; style-src " + assets + " 'unsafe-inline'; img-src " + img + "; " +
 		"media-src " + media + "; font-src " + base + " data:; connect-src " + base + " " + n.LodgeWS + "/app/" + id + "/api; " +
 		"frame-src " + frame + "; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; " +
 		"form-action 'none'; frame-ancestors 'self'"
@@ -82,8 +85,8 @@ func (n Names) ContentPolicy(links bool) string {
 	if links {
 		sandbox = "sandbox allow-popups allow-popups-to-escape-sandbox"
 	}
-	return "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; " + sandbox +
-		"; frame-ancestors " + n.LodgeOrigin
+	return "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; " +
+		"form-action 'none'; " + sandbox + "; frame-ancestors " + n.LodgeOrigin
 }
 
 const permissionsPolicy = "camera=(), microphone=(), geolocation=()"
@@ -123,14 +126,26 @@ func (g *Gateway) contentHeaders(links bool) func(http.Header) {
 	}
 }
 
-func deviceHeaders(h http.Header) {
+// apartPolicy confines a device or agent response a browser might load on
+// the lodge origin: it runs nothing and frames nowhere. Devices and agents
+// ignore it.
+const apartPolicy = "default-src 'none'; sandbox; frame-ancestors 'none'"
+
+func apartHeaders(h http.Header) {
+	h.Add("Content-Security-Policy", apartPolicy)
+	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+}
+
+func deviceHeaders(h http.Header) {
+	apartHeaders(h)
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Del("Set-Cookie")
 }
 
 func agentHeaders(h http.Header) {
-	h.Set("X-Content-Type-Options", "nosniff")
+	apartHeaders(h)
 }
 
 // dropCredentialsAndCORS removes Set-Cookie and every Access-Control-*

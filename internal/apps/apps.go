@@ -16,12 +16,17 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/frostyard/lodge/kit/manifest"
 )
@@ -67,6 +72,9 @@ type App struct {
 	// Version and Protocol are the last healthy /health answer's.
 	Version  string `json:"version,omitempty"`
 	Protocol int    `json:"protocol,omitempty"`
+	// uid is the manifest user's, which must serve the app's socket; -1
+	// when the user does not exist.
+	uid int
 }
 
 // Enabled reports whether the app is served.
@@ -77,6 +85,9 @@ type Registry struct {
 	root string
 	log  *slog.Logger
 	http *http.Client
+	// devUID may serve any app's socket as well as its own user: lodge's
+	// own uid under a layout root (development and tests), else -1.
+	devUID int
 
 	mu   sync.RWMutex
 	apps map[string]App
@@ -88,7 +99,10 @@ func New(root string, log *slog.Logger) *Registry {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	r := &Registry{root: root, log: log, apps: map[string]App{}}
+	r := &Registry{root: root, log: log, apps: map[string]App{}, devUID: -1}
+	if root != "" {
+		r.devUID = os.Getuid()
+	}
 	r.http = &http.Client{Transport: &http.Transport{DialContext: r.DialContext, DisableKeepAlives: true}, Timeout: PollTimeout}
 	return r
 }
@@ -115,7 +129,106 @@ func (r *Registry) DialContext(ctx context.Context, _, addr string) (net.Conn, e
 		return nil, fmt.Errorf("dial app %q: not an app ID", host)
 	}
 	var d net.Dialer
-	return d.DialContext(ctx, "unix", r.SocketPath(host))
+	c, err := d.DialContext(ctx, "unix", r.SocketPath(host))
+	if err != nil {
+		return nil, err
+	}
+	if err := r.checkPeer(host, c); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// PeerError is a socket served, or owned, by another user than the
+// manifest's.
+type PeerError struct {
+	App, User string
+	UID       int
+	// File is whether the socket's file, not its peer, is the wrong one's.
+	File bool
+}
+
+func (e *PeerError) Error() string {
+	if e.File {
+		return fmt.Sprintf("its socket file is owned by uid %d, not by user %s", e.UID, e.User)
+	}
+	return fmt.Sprintf("its socket is served by uid %d, not by user %s", e.UID, e.User)
+}
+
+// checkPeer requires app id's socket to be the manifest user's: its file
+// owned by that user, and its peer (SO_PEERCRED) that user or root. A
+// socket that systemd made and passed to the app reports root, which
+// called listen(); another app's user can be neither. Under a layout root
+// devUID passes both checks.
+func (r *Registry) checkPeer(id string, c net.Conn) error {
+	a, _ := r.Get(id)
+	ok := func(uid int) bool { return (a.uid >= 0 && uid == a.uid) || (r.devUID >= 0 && uid == r.devUID) }
+	fi, err := os.Stat(r.SocketPath(id))
+	if err != nil {
+		return fmt.Errorf("app %s: %w", id, err)
+	}
+	if st, isStat := fi.Sys().(*syscall.Stat_t); !isStat || !ok(int(st.Uid)) {
+		uid := -1
+		if isStat {
+			uid = int(st.Uid)
+		}
+		return &PeerError{App: id, User: a.Manifest.User, UID: uid, File: true}
+	}
+	uc, isUnix := c.(*net.UnixConn)
+	if !isUnix {
+		return fmt.Errorf("app %s: not a Unix socket", id)
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var cred *unix.Ucred
+	var credErr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return err
+	}
+	if credErr != nil {
+		return fmt.Errorf("app %s: peer credentials: %w", id, credErr)
+	}
+	if uid := int(cred.Uid); uid != 0 && !ok(uid) {
+		return &PeerError{App: id, User: a.Manifest.User, UID: uid}
+	}
+	return nil
+}
+
+// CheckSocketDir refuses the apps' socket directory unless only root can
+// write it: an app that could replace another's socket would receive its
+// sessions. Under a layout root it may be the developer's, and may be
+// missing.
+func (r *Registry) CheckSocketDir() error {
+	return checkSocketDir(filepath.Join(r.root, "/run/lodge/apps"), r.root == "")
+}
+
+// checkSocketDir checks dir; strict also requires it to exist and be
+// root's.
+func checkSocketDir(dir string, strict bool) error {
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist) && !strict:
+		return nil
+	case err != nil:
+		return fmt.Errorf("the apps' socket directory: %w (systemd-tmpfiles --create makes it)", err)
+	case !fi.IsDir():
+		return fmt.Errorf("the apps' socket directory %s is not a directory", dir)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("the apps' socket directory %s is writable by others than its owner (%v)", dir, fi.Mode().Perm())
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("the apps' socket directory %s: no owner", dir)
+	}
+	if strict && st.Uid != 0 {
+		return fmt.Errorf("the apps' socket directory %s is owned by uid %d, not root", dir, st.Uid)
+	}
+	return nil
 }
 
 // Load reads every manifest, replacing the registry's apps. An app that
@@ -155,7 +268,7 @@ func (r *Registry) Load() error {
 // lodge adds: a contract major it speaks, and an index and icon it will
 // serve (no symbolic link on the way, no hidden segment).
 func (r *Registry) loadOne(id string) App {
-	a := App{ID: id, State: Disabled}
+	a := App{ID: id, State: Disabled, uid: -1}
 	dir := r.AppDir(id)
 	m, err := manifest.Load(dir)
 	if err != nil {
@@ -164,8 +277,16 @@ func (r *Registry) loadOne(id string) App {
 		return a
 	}
 	a.Manifest = m
+	a.uid = -1
+	if u, err := user.Lookup(m.User); err == nil {
+		if uid, err := strconv.Atoi(u.Uid); err == nil {
+			a.uid = uid
+		}
+	}
 	web := filepath.Join(dir, "web")
 	switch {
+	case a.uid < 0 && r.devUID < 0:
+		a.Reason = fmt.Sprintf("system user %s does not exist", m.User)
 	case !slices.Contains(Contracts, m.Contract):
 		a.Reason = fmt.Sprintf("contract %d is not one this lodge speaks (%v)", m.Contract, Contracts)
 	case !regularFile(web, "index.html"):
@@ -286,6 +407,9 @@ func (r *Registry) Poll(ctx context.Context) {
 				r.log.Info("app state", "app", a.ID, "state", h.State, "reason", h.Reason)
 			}
 			cur.State, cur.Reason = h.State, h.Reason
+			if h.State == Disabled {
+				r.log.Warn("app disabled", "app", a.ID, "reason", h.Reason)
+			}
 			if h.State == Up {
 				cur.Version, cur.Protocol = h.Version, h.Protocol
 			}
@@ -325,6 +449,10 @@ func (r *Registry) health(ctx context.Context, id string) App {
 		return App{State: Down, Reason: err.Error()}
 	}
 	resp, err := r.http.Do(req)
+	var pe *PeerError
+	if errors.As(err, &pe) {
+		return App{State: Disabled, Reason: pe.Error()}
+	}
 	if err != nil {
 		return App{State: Down, Reason: "its socket does not answer"}
 	}

@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -60,6 +62,9 @@ func (g *Gateway) Content(who peer.WhoIs) http.Handler {
 			fail(w, http.StatusNotFound, "not found", headers)
 			return
 		}
+		if refuseUpgrade(w, r, headers) {
+			return
+		}
 		g.proxy(w, r, proxyReq{app: a, kind: kindContent, peer: p, escapedPath: "/content" + rest(escaped, 1),
 			headers: headers, modify: contentModify(headers)})
 	})
@@ -81,14 +86,40 @@ func (g *Gateway) device(w http.ResponseWriter, r *http.Request, who peer.WhoIs,
 		fail(w, http.StatusServiceUnavailable, "app "+id+" is disabled: "+a.Reason, deviceHeaders)
 		return
 	}
+	// The peer is named for display only, and only from one of its own
+	// addresses, as for every other kind.
 	p, err := g.whoIs(r, who)
-	req := proxyReq{app: a, kind: kindDevice, peer: p, named: err == nil, escapedPath: "/device" + sub,
+	named := err == nil
+	if ip, ok := remoteIP(r.RemoteAddr); named && (!ok || !p.Owns(ip)) {
+		named = false
+	}
+	req := proxyReq{app: a, kind: kindDevice, peer: p, named: named, escapedPath: "/device" + sub,
 		headers: deviceHeaders, modify: deviceHeaders}
 	if isWebSocket(r) {
 		g.deviceSocket(w, r, req)
 		return
 	}
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = &deadlineBody{ReadCloser: r.Body, rc: http.NewResponseController(w), timeout: g.cfg.BodyTimeout}
+	}
 	g.proxy(w, r, req)
+}
+
+// deadlineBody gives each read of a request body its own deadline, so a
+// body may be long but not stalled. The deadline is lifted at its end.
+type deadlineBody struct {
+	io.ReadCloser
+	rc      *http.ResponseController
+	timeout time.Duration
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	_ = b.rc.SetReadDeadline(time.Now().Add(b.timeout))
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		_ = b.rc.SetReadDeadline(time.Time{})
+	}
+	return n, err
 }
 
 // deviceSocket relays a device's WebSocket to the app as a session's is,
@@ -133,18 +164,18 @@ func (g *Gateway) deviceSocket(w http.ResponseWriter, r *http.Request, p proxyRe
 	relay(r.Context(), browser, app, nil, false)
 }
 
-// streams are the requests lodge is proxying for each MCP token, so that
-// revoking it closes them at once.
+// streams are the requests lodge is proxying for each MCP token, by the
+// token's row, so that revoking it closes them at once.
 type streams struct {
 	mu      sync.Mutex
-	byToken map[string]map[*context.CancelFunc]struct{}
+	byToken map[int64]map[*context.CancelFunc]struct{}
 }
 
 func newStreams() *streams {
-	return &streams{byToken: map[string]map[*context.CancelFunc]struct{}{}}
+	return &streams{byToken: map[int64]map[*context.CancelFunc]struct{}{}}
 }
 
-func (s *streams) add(name string, cancel context.CancelFunc) (remove func()) {
+func (s *streams) add(name int64, cancel context.CancelFunc) (remove func()) {
 	key := &cancel
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,7 +193,7 @@ func (s *streams) add(name string, cancel context.CancelFunc) (remove func()) {
 	}
 }
 
-func (s *streams) end(name string) int {
+func (s *streams) end(name int64) int {
 	s.mu.Lock()
 	cancels := s.byToken[name]
 	delete(s.byToken, name)
@@ -173,16 +204,26 @@ func (s *streams) end(name string) int {
 	return len(cancels)
 }
 
-// count is the number of requests in flight for name.
-func (s *streams) count(name string) int {
+// count is the number of requests in flight for the token.
+func (s *streams) count(name int64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.byToken[name])
 }
 
 // EndToken closes every request and stream lodge is proxying for the
-// token name, after it is revoked.
-func (g *Gateway) EndToken(name string) int { return g.streams.end(name) }
+// token with row id, after it is revoked.
+func (g *Gateway) EndToken(id int64) int { return g.streams.end(id) }
+
+// refuseUpgrade answers 400 to an upgrade on a route that takes none:
+// only sessions and device routes relay WebSockets.
+func refuseUpgrade(w http.ResponseWriter, r *http.Request, headers func(http.Header)) bool {
+	if r.Header.Get("Upgrade") == "" && !headerHasToken(r.Header, "Connection", "upgrade") {
+		return false
+	}
+	fail(w, http.StatusBadRequest, "this route takes no upgrade", headers)
+	return true
+}
 
 // statusWriter records the status an MCP response sends, for the log.
 type statusWriter struct {
@@ -260,12 +301,16 @@ func (g *Gateway) mcp(w http.ResponseWriter, r *http.Request, who peer.WhoIs, id
 		fail(w, http.StatusServiceUnavailable, "app "+id+" is disabled: "+a.Reason, agentHeaders)
 		return
 	}
-	// Register the stream, then check the token again: a revocation either
-	// sees this request or is seen by it.
+	if refuseUpgrade(w, r, agentHeaders) {
+		return
+	}
+	// Register the stream under the token's row, then check the secret
+	// again: a revocation either sees this request or is seen by it, even
+	// when a new token takes the revoked one's name in between.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	defer g.streams.add(tok.Name, cancel)()
-	if live, err := g.cfg.Tokens.Live(ctx, tok.Name); err != nil || !live {
+	defer g.streams.add(tok.ID, cancel)()
+	if again, err := g.cfg.Tokens.Check(ctx, tokens.Bearer(r.Header.Get("Authorization")), id); err != nil || again.ID != tok.ID {
 		unauthorized()
 		return
 	}

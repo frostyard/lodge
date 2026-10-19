@@ -28,6 +28,15 @@ import (
 // Contract is the contract major the shell speaks, sent in /lodge/apps.
 const Contract = 1
 
+// Connection limits (docs/specs/lodge-http.md, Connections).
+const (
+	// MaxHeaderBytes bounds a request's header.
+	MaxHeaderBytes = 64 << 10
+	// MaxConnsPerApp bounds lodge's open HTTP connections to one app's
+	// socket; sessions and device sockets are bounded apart.
+	MaxConnsPerApp = 128
+)
+
 // Config is what the gateway needs.
 type Config struct {
 	Names    Names
@@ -38,6 +47,9 @@ type Config struct {
 	Sessions *sessions.Registry
 	Log      *slog.Logger     // [discard]
 	Now      func() time.Time // [time.Now]
+	// BodyTimeout bounds each read of a device request's body, so a peer
+	// that stalls a body cannot hold a connection to an app [30 s].
+	BodyTimeout time.Duration
 }
 
 // Gateway serves lodge's routes.
@@ -57,9 +69,14 @@ func New(cfg Config) *Gateway {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.BodyTimeout == 0 {
+		cfg.BodyTimeout = 30 * time.Second
+	}
 	tr := &http.Transport{
 		DialContext:         cfg.Apps.DialContext,
 		MaxIdleConnsPerHost: 8,
+		// Requests past this many open connections to one app wait for one.
+		MaxConnsPerHost: MaxConnsPerApp,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true,
 	}
@@ -82,6 +99,7 @@ func Server(h http.Handler) *http.Server {
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    MaxHeaderBytes,
 		ConnContext:       connContext,
 		// An empty, non-nil map keeps HTTP/2 off on TLS connections.
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
@@ -116,6 +134,12 @@ func fail(w http.ResponseWriter, status int, line string, setHeaders func(http.H
 	h := w.Header()
 	if setHeaders != nil {
 		setHeaders(h)
+	}
+	// A refused request does not keep its connection.
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed,
+		http.StatusUpgradeRequired, http.StatusTooManyRequests, http.StatusBadRequest:
+		h.Set("Connection", "close")
 	}
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
@@ -304,6 +328,9 @@ func (g *Gateway) appRoute(w http.ResponseWriter, r *http.Request, who peer.WhoI
 	case isAPI:
 		g.session(w, r, who, a, p, headers)
 	case sub == "/x" || strings.HasPrefix(sub, "/x/"):
+		if refuseUpgrade(w, r, headers) {
+			return
+		}
 		g.proxy(w, r, proxyReq{app: a, kind: kindSession, peer: p, escapedPath: sub, headers: headers, modify: headers})
 	default:
 		headers(w.Header())

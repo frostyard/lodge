@@ -107,6 +107,9 @@ func install(env lodgeapp.Env, m manifest.Manifest) error {
 		}
 		// The bundle's paths are absolute (base-uri is 'none').
 		data = bytes.ReplaceAll(data, []byte("{{ID}}"), []byte(m.ID))
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755); err != nil {
+			return err
+		}
 		return os.WriteFile(filepath.Join(dir, p), data, 0o644)
 	})
 }

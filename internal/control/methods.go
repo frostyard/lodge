@@ -288,7 +288,8 @@ func (s *Server) revokeToken(ctx context.Context, p jsontext.Value) (any, error)
 	if err := params(p, &in); err != nil {
 		return nil, err
 	}
-	switch err := s.d.Tokens.Revoke(ctx, in.Name); {
+	id, err := s.d.Tokens.Revoke(ctx, in.Name)
+	switch {
 	case errors.Is(err, tokens.ErrNotFound):
 		return nil, errorf(CodeNotFound, "no live token is named %s", in.Name)
 	case err != nil:
@@ -296,7 +297,7 @@ func (s *Server) revokeToken(ctx context.Context, p jsontext.Value) (any, error)
 	}
 	n := 0
 	if s.d.EndToken != nil {
-		n = s.d.EndToken(in.Name)
+		n = s.d.EndToken(id)
 	}
 	s.d.Log.Info("token revoked", "token", in.Name, "streams closed", n)
 	return Closed{n}, nil

@@ -71,8 +71,8 @@ type Deps struct {
 	Tokens   *tokens.Store
 	Sessions *sessions.Registry
 	Apps     *apps.Registry
-	// EndToken closes a revoked token's streams (the gateway's).
-	EndToken func(name string) int
+	// EndToken closes a revoked token's streams, by its row (the gateway's).
+	EndToken func(id int64) int
 	// Peers lists the lodge node's peers; nil without a tailnet.
 	Peers func(ctx context.Context) ([]peer.Peer, error)
 	// Nodes reports lodge's tailnet nodes.

@@ -140,6 +140,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	defer db.Close()
 
 	reg := apps.New(o.root, log)
+	if err := reg.CheckSocketDir(); err != nil {
+		return err
+	}
 	if err := reg.Load(); err != nil {
 		return err
 	}
@@ -192,9 +195,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
 		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log,
-		EndToken: func(name string) int {
+		EndToken: func(id int64) int {
 			if g := gw.Load(); g != nil {
-				return g.EndToken(name)
+				return g.EndToken(id)
 			}
 			return 0
 		},
@@ -301,6 +304,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		lns = append(lns, listener{"plain content", plainContentLn, plainContent(g.Content(plainWhoIs()))})
 	}
 	for _, l := range lns {
+		// Every listener caps its connections per peer and in all
+		// (lodge-http.md, Connections).
+		l.ln = gateway.Limit(l.ln, gateway.PerPeerConns, gateway.MaxConns)
 		srv := gateway.Server(l.h)
 		srv.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelDebug)
 		serversMu.Lock()

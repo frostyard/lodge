@@ -107,8 +107,15 @@ development build uses a fixed one on loopback.
 both nodes without waiting for them. It then serves the control socket
 and polls the apps' health, and only then waits for the nodes to join the
 tailnet before the gateway listens. So on a first start without an auth
-key, `lodgectl status` already answers, and shows each node's login URL,
-which lodge logs once per URL.
+key, `lodgectl status` already answers, and shows each node's login URL.
+The journal says only that a login is needed: the URL claims the node for
+whoever opens it first.
+
+**Connections.** Each listener caps connections per remote address and in
+all, refused requests close their connections, and device bodies have a
+deadline per read, since device routes run before any identity is known
+([lodge-http.md](../specs/lodge-http.md#connections)). Before each request,
+lodge checks that an app's socket belongs to the manifest's user.
 
 ### The gateway
 

@@ -30,12 +30,14 @@ import (
 )
 
 var builds struct {
-	once     sync.Once
-	dir      string
-	release  string
-	e2e      string
-	err      error
-	messages string
+	once        sync.Once
+	dir         string
+	release     string
+	e2e         string
+	stripped    string // as make build ships it: -s -w
+	strippedE2E string
+	err         error
+	messages    string
 }
 
 func TestMain(m *testing.M) {
@@ -61,10 +63,18 @@ func binaries(t *testing.T) (release, e2e string) {
 		}
 		builds.release = filepath.Join(builds.dir, "lodge")
 		builds.e2e = filepath.Join(builds.dir, "lodge-e2e")
-		for _, b := range []struct{ out, tags string }{{builds.release, ""}, {builds.e2e, "e2e"}} {
+		builds.stripped = filepath.Join(builds.dir, "lodge-stripped")
+		builds.strippedE2E = filepath.Join(builds.dir, "lodge-e2e-stripped")
+		for _, b := range []struct {
+			out, tags string
+			strip     bool
+		}{{builds.release, "", false}, {builds.e2e, "e2e", false}, {builds.stripped, "", true}, {builds.strippedE2E, "e2e", true}} {
 			args := []string{"build", "-trimpath", "-o", b.out}
 			if b.tags != "" {
 				args = append(args, "-tags", b.tags)
+			}
+			if b.strip {
+				args = append(args, "-ldflags", "-s -w")
 			}
 			cmd := exec.Command(gobin, append(args, ".")...)
 			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
@@ -109,6 +119,33 @@ func TestReleaseBuildHoldsNoE2EIdentity(t *testing.T) {
 	}
 	if bytes.Contains(b, []byte("e2e@example.com")) {
 		t.Error("the release build holds the e2e login")
+	}
+}
+
+// The binary make build ships is stripped (-s -w), so go tool nm sees
+// nothing in it; its bytes are checked instead (N8). Function names stay
+// in a stripped Go binary, so the development build's still show.
+func TestShippedBuildHoldsNoE2EIdentity(t *testing.T) {
+	binaries(t)
+	read := func(p string) []byte {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	marks := []string{"frostyard/lodge/internal/e2eid", "e2e@example.com"}
+	dev := read(builds.strippedE2E)
+	for _, m := range marks {
+		if !bytes.Contains(dev, []byte(m)) {
+			t.Fatalf("the stripped development build lacks %q; the check cannot see it", m)
+		}
+	}
+	shipped := read(builds.stripped)
+	for _, m := range marks {
+		if bytes.Contains(shipped, []byte(m)) {
+			t.Errorf("the stripped release build holds %q", m)
+		}
 	}
 }
 

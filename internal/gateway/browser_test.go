@@ -158,11 +158,11 @@ func TestIdentity(t *testing.T) {
 }
 
 // The allow-lists are read on every request, even on a connection whose
-// WhoIs answer is cached.
+// WhoIs answer is cached; a refusal then closes the connection (M2).
 func TestAllowListsReadEveryRequest(t *testing.T) {
 	h := newHarness(t)
 	c := &http.Client{Transport: &http.Transport{}}
-	get := func() int {
+	get := func() *http.Response {
 		r := h.req(http.MethodGet, "/app/notes/", nil)
 		r.Close = false
 		resp, err := c.Do(r)
@@ -171,28 +171,35 @@ func TestAllowListsReadEveryRequest(t *testing.T) {
 		}
 		io.Copy(io.Discard, resp.Body) // a drained body keeps the connection
 		resp.Body.Close()
-		return resp.StatusCode
+		return resp
 	}
-	if s := get(); s != http.StatusOK {
-		t.Fatalf("first request: %d", s)
+	if resp := get(); resp.StatusCode != http.StatusOK || resp.Close {
+		t.Fatalf("first request: %d, close %v", resp.StatusCode, resp.Close)
 	}
 	if err := h.allow.DisallowLogin(t.Context(), "alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if s := get(); s != http.StatusForbidden {
-		t.Errorf("after disallow: %d, want 403", s)
+	resp := get()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("after disallow: %d, want 403", resp.StatusCode)
+	}
+	if n := h.who.calls.Load(); n != 1 {
+		t.Errorf("WhoIs was asked %d times on one connection, want 1", n)
+	}
+	if !resp.Close {
+		t.Error("a refused request kept its connection")
 	}
 	if err := h.allow.AllowLogin(t.Context(), "alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
+	if resp := get(); resp.StatusCode != http.StatusOK {
+		t.Errorf("allowed again: %d", resp.StatusCode)
+	}
 	if err := h.allow.DisallowNode(t.Context(), "nPhone1CNTRL"); err != nil {
 		t.Fatal(err)
 	}
-	if s := get(); s != http.StatusForbidden {
-		t.Errorf("after disallowing the node: %d, want 403", s)
-	}
-	if n := h.who.calls.Load(); n != 1 {
-		t.Errorf("WhoIs was asked %d times on one connection, want 1", n)
+	if resp := get(); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("after disallowing the node: %d, want 403", resp.StatusCode)
 	}
 }
 
