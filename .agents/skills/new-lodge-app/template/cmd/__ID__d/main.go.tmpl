@@ -60,7 +60,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	var private net.Listener
 	if *socket != "" {
-		if private, err = jsonrpc.Listen(*socket, log); err != nil {
+		if private, err = jsonrpc.ListenWith(*socket, jsonrpc.ListenOptions{Name: "__ID__d", Logger: log}); err != nil {
 			return err
 		}
 	}

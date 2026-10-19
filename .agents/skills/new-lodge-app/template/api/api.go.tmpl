@@ -89,7 +89,9 @@ type Client struct {
 
 // NewClient starts a client on an established connection: lodge's /api
 // WebSocket, or the private socket. The caller calls rpc.hello first.
-func NewClient(conn net.Conn) *Client { return &Client{jsonrpc.NewClient[ErrorCode](conn)} }
+func NewClient(conn net.Conn) *Client {
+	return &Client{jsonrpc.NewClientWith[ErrorCode](conn, jsonrpc.ClientOptions{Name: "__ID__d"})}
+}
 
 // Dial connects to __ID__d's private socket and completes rpc.hello.
 func Dial(ctx context.Context, socket, client string) (*Client, *Hello, error) {
