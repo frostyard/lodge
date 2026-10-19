@@ -203,8 +203,16 @@ func (r *Registry) checkPeer(id string, c net.Conn) error {
 // write it: an app that could replace another's socket would receive its
 // sessions. Under a layout root it may be the developer's, and may be
 // missing.
+//
+// Under a layout root the directory is the developer's sandbox, whose
+// umask may well leave it group-writable: lodge only warns there.
 func (r *Registry) CheckSocketDir() error {
-	return checkSocketDir(filepath.Join(r.root, "/run/lodge/apps"), r.root == "")
+	err := checkSocketDir(filepath.Join(r.root, "/run/lodge/apps"), r.root == "")
+	if err != nil && r.root != "" {
+		r.log.Warn("the apps' socket directory would be refused in production", "err", err)
+		return nil
+	}
+	return err
 }
 
 // checkSocketDir checks dir; strict also requires it to exist and be

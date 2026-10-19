@@ -498,7 +498,8 @@ For every kind, before a request goes to an app's socket:
   Under `--root`, lodge's own uid passes too.
 - **At start, lodge refuses to run** unless `/run/lodge/apps` is a
   directory owned by root that no one else can write, since whoever can
-  write it could replace an app's socket.
+  write it could replace an app's socket. Under `--root`, which is the
+  developer's own, it only warns.
 
 ### Tokens, logins and nodes
 

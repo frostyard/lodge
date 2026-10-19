@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/frostyard/lodge/internal/apptest"
@@ -40,10 +41,13 @@ func TestSocketPeerMustBeTheManifestUser(t *testing.T) {
 	root := t.TempDir()
 	apptest.Install(t, root, "mine", map[string]any{"user": me.Username}, nil)
 	apptest.Install(t, root, "theirs", map[string]any{"user": "nobody"}, nil)
+	var mu sync.Mutex
 	var asked []string
 	for _, id := range []string{"mine", "theirs"} {
 		apptest.Serve(t, root, id, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
 			asked = append(asked, id)
+			mu.Unlock()
 			apptest.Healthy("1")(w, r)
 		}))
 	}
@@ -56,11 +60,13 @@ func TestSocketPeerMustBeTheManifestUser(t *testing.T) {
 	if a.State != Disabled || !strings.Contains(a.Reason, "socket file is owned by uid "+me.Uid+", not by user nobody") {
 		t.Errorf("an app served by another user is %s: %q", a.State, a.Reason)
 	}
+	mu.Lock()
 	for _, id := range asked {
 		if id == "theirs" {
 			t.Error("lodge sent a request to a socket served by the wrong user")
 		}
 	}
+	mu.Unlock()
 	_, err = r.DialContext(t.Context(), "unix", "theirs:80")
 	var pe *PeerError
 	if !errors.As(err, &pe) {
@@ -104,15 +110,19 @@ func TestCheckSocketDir(t *testing.T) {
 	}
 	for _, mode := range []os.FileMode{0o775, 0o757, 0o777} {
 		os.Chmod(dir, mode)
-		if err := New(root, nil).CheckSocketDir(); err == nil || !strings.Contains(err.Error(), "writable") {
+		if err := checkSocketDir(dir, false); err == nil || !strings.Contains(err.Error(), "writable") {
 			t.Errorf("mode %v: %v", mode, err)
+		}
+		// Under a layout root, the developer's umask is only warned about.
+		if err := New(root, nil).CheckSocketDir(); err != nil {
+			t.Errorf("mode %v under a layout root: %v", mode, err)
 		}
 	}
 	os.Chmod(dir, 0o755)
 	other := t.TempDir()
 	os.MkdirAll(filepath.Join(other, "run/lodge"), 0o755)
 	os.Symlink(dir, filepath.Join(other, "run/lodge/apps"))
-	if err := New(other, nil).CheckSocketDir(); err == nil {
+	if err := checkSocketDir(filepath.Join(other, "run/lodge/apps"), false); err == nil {
 		t.Error("a symbolic link was accepted")
 	}
 }

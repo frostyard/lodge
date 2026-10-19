@@ -22,7 +22,8 @@ for b in lodge-e2e lodgectl lodge-fakeapp; do
 done
 
 shell=$root/usr/share/lodge/shell
-mkdir -p "$shell" "$root/usr/share/lodge/apps" "$root/run/lodge/apps"
+mkdir -p "$shell" "$root/usr/share/lodge/apps"
+install -d -m 0755 "$root/run/lodge" "$root/run/lodge/apps"
 if [ -f "$repo/shell/dist/index.html" ]; then
 	cp -R "$repo/shell/dist/." "$shell/"
 elif [ ! -f "$shell/index.html" ]; then
