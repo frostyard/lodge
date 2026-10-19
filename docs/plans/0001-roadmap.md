@@ -176,9 +176,15 @@ maild becomes lodge's `mail` app: one maild for every client. Implements
 - **`/mcp/mail`,** with a scope grammar of frostmail's.
 - **Links between apps:** notes link to threads at `/mail/<route>`, and
   mail links back to notes.
-- **The new-app skill:** `.agents/skills/new-lodge-app/`, a thin scaffold
-  on the kit and the client, drawn from what notes and mail needed
-  (ADR-0057).
+- **The new-app skill:** [`.agents/skills/new-lodge-app/`](../../.agents/skills/new-lodge-app/SKILL.md),
+  a thin scaffold on the kit and the client, drawn from what notes and mail
+  needed (ADR-0057). Built on 2026-10-19, ahead of the phase. Its
+  daemon is on `kit/lodgeapp` and `kit/jsonrpc`, its bundle on
+  `@frostyard/lodge-client`, and its staging is frostmail's. Its JSON-RPC
+  methods are written by hand until the app adopts a generator
+  ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
+  `internal/scaffoldcheck` renders it and runs the contract's socket rules
+  on the result.
 - **The narrow layout's bar** is settled, now that there are two apps to
   switch between.
 - **Done when:**

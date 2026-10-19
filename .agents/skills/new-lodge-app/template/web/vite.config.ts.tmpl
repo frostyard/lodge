@@ -1,0 +1,8 @@
+// The bundle lodge serves from /usr/share/lodge/apps/__ID__/web/ at
+// /app/__ID__/ (lodge's app-contract.md, Public URLs).
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  base: "/app/__ID__/",
+  build: { target: "es2022" },
+});

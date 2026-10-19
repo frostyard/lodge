@@ -33,7 +33,7 @@ step names.
 
 ## Map
 
-Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
+Everything but `cmd/lodge`, `kit/`, `client/`, the new-lodge-app skill and the three check packages is planned.
 
 - `cmd/lodge`: the daemon. Today it only prints its version.
   `cmd/lodgectl`: the CLI, over lodge's control socket.
@@ -70,7 +70,9 @@ Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
 - `internal/repocheck`: tests of the repository's rules. Relative links
   resolve, every doc has an index line, no private host is named, and
   `kit/` keeps its import boundary.
-  `internal/workflowcheck`: tests that actions are SHA-pinned with least
+  `internal/scaffoldcheck`: tests that the new-lodge-app scaffold renders,
+  builds on this checkout's kit, passes the socket rules and stages
+  safely. `internal/workflowcheck`: tests that actions are SHA-pinned with least
   privilege.
 
 ## Gates
@@ -120,7 +122,10 @@ These are the app contract's rules
 Step-by-step procedures live in [.agents/skills/](.agents/skills/); follow
 them rather than improvising, whichever agent you are:
 
-- *(none yet. The new-app scaffold skill comes in the roadmap's Phase 4.)*
+- [new-lodge-app](.agents/skills/new-lodge-app/SKILL.md): scaffold a new
+  app behind lodge, in a new repository. It has a daemon on the kit that
+  passes the contract's socket rules, a JSON-RPC API, a web bundle on
+  lodge-client, and the manifest, units and staging.
 
 ## Go conventions (binding from the first line; frostnotes')
 
