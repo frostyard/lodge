@@ -47,9 +47,39 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type clock struct{ t time.Time }
+// clock is a fake clock, safe to read from the sweep's goroutine.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *clock) now() time.Time { return c.t }
+func newClock() *clock { return &clock{t: time.Unix(1e9, 0)} }
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func (f *fake) ended() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.deleted)
+}
+
+// sessions returns Sessions over next, closed when the test ends.
+func sessions(t *testing.T, next http.Handler, opts Options) *Sessions {
+	t.Helper()
+	s := New(next, opts)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
 
 func do(t *testing.T, h http.Handler, method, id string, c lodgeapp.Caller) *httptest.ResponseRecorder {
 	t.Helper()
@@ -77,7 +107,7 @@ func open(t *testing.T, s *Sessions, c lodgeapp.Caller) string {
 }
 
 func TestASessionIsBoundToItsTokenAndScope(t *testing.T) {
-	s := New(&fake{}, Options{})
+	s := sessions(t, &fake{}, Options{})
 	a := agent("laptop", "vault=1;write")
 	id := open(t, s, a)
 	if w := do(t, s, http.MethodPost, id, a); w.Code != http.StatusAccepted {
@@ -101,21 +131,21 @@ func TestASessionIsBoundToItsTokenAndScope(t *testing.T) {
 
 func TestTheLeastRecentlyUsedSessionIsEvicted(t *testing.T) {
 	f := &fake{}
-	clk := &clock{t: time.Unix(1e9, 0)}
-	s := New(f, Options{Max: 3, Now: clk.now})
+	clk := newClock()
+	s := sessions(t, f, Options{Max: 3, Now: clk.now})
 	a := agent("laptop", "s")
 	var ids []string
 	for range 3 {
-		clk.t = clk.t.Add(time.Minute)
+		clk.advance(time.Minute)
 		ids = append(ids, open(t, s, a))
 	}
-	clk.t = clk.t.Add(time.Minute)
+	clk.advance(time.Minute)
 	do(t, s, http.MethodPost, ids[0], a) // s1 is now the most recent
 	other := open(t, s, agent("phone", "s"))
 	if s.Len() != 4 {
 		t.Fatalf("another token's session evicted one: %d live", s.Len())
 	}
-	clk.t = clk.t.Add(time.Minute)
+	clk.advance(time.Minute)
 	fourth := open(t, s, a)
 	if !slices.Equal(f.deleted, []string{ids[1]}) {
 		t.Errorf("evicted %v, want [%s], the least recently used", f.deleted, ids[1])
@@ -135,7 +165,7 @@ func TestTheLeastRecentlyUsedSessionIsEvicted(t *testing.T) {
 
 func TestTheDefaultBoundIsEight(t *testing.T) {
 	f := &fake{}
-	s := New(f, Options{})
+	s := sessions(t, f, Options{})
 	for range 9 {
 		open(t, s, agent("laptop", "s"))
 	}
@@ -146,15 +176,15 @@ func TestTheDefaultBoundIsEight(t *testing.T) {
 
 func TestAnIdleSessionEnds(t *testing.T) {
 	f := &fake{}
-	clk := &clock{t: time.Unix(1e9, 0)}
-	s := New(f, Options{Now: clk.now})
+	clk := newClock()
+	s := sessions(t, f, Options{Now: clk.now})
 	a := agent("laptop", "s")
 	id := open(t, s, a)
-	clk.t = clk.t.Add(time.Hour - time.Second)
+	clk.advance(time.Hour - time.Second)
 	if w := do(t, s, http.MethodPost, id, a); w.Code != http.StatusAccepted {
 		t.Fatalf("before the hour = %d", w.Code)
 	}
-	clk.t = clk.t.Add(time.Hour)
+	clk.advance(time.Hour)
 	if w := do(t, s, http.MethodPost, id, a); w.Code != http.StatusNotFound {
 		t.Errorf("after an idle hour = %d, want 404", w.Code)
 	}
@@ -164,7 +194,7 @@ func TestAnIdleSessionEnds(t *testing.T) {
 }
 
 func TestScopesAndCallers(t *testing.T) {
-	s := New(&fake{}, Options{CheckScope: func(scope string) error {
+	s := sessions(t, &fake{}, Options{CheckScope: func(scope string) error {
 		if scope != "vault=1" {
 			return errors.New("want vault=<id>")
 		}
@@ -181,7 +211,7 @@ func TestScopesAndCallers(t *testing.T) {
 
 func TestTheHandlersOwnNotFoundForgetsTheSession(t *testing.T) {
 	f := &fake{}
-	s := New(f, Options{})
+	s := sessions(t, f, Options{})
 	a := agent("laptop", "s")
 	id := open(t, s, a)
 	f.mu.Lock()
@@ -189,5 +219,64 @@ func TestTheHandlersOwnNotFoundForgetsTheSession(t *testing.T) {
 	f.mu.Unlock()
 	if w := do(t, s, http.MethodPost, id, a); w.Code != http.StatusNotFound || s.Len() != 0 {
 		t.Errorf("= %d with %d live, want 404 and none", w.Code, s.Len())
+	}
+}
+
+func TestTheSweepEndsAnIdleSessionWithoutARequest(t *testing.T) {
+	f := &fake{}
+	clk := newClock()
+	ticks := make(chan time.Time)
+	s := sessions(t, f, Options{Now: clk.now, ticks: ticks})
+	idle := open(t, s, agent("laptop", "s"))
+	clk.advance(30 * time.Minute)
+	busy := open(t, s, agent("phone", "s"))
+	// tick sends a tick, and a second one, which the sweep takes only once
+	// the first sweep is done.
+	tick := func() {
+		ticks <- clk.now()
+		ticks <- clk.now()
+	}
+	tick()
+	if got := f.ended(); len(got) != 0 {
+		t.Fatalf("ended %v before an idle hour", got)
+	}
+	clk.advance(30 * time.Minute)
+	tick()
+	if got := f.ended(); !slices.Equal(got, []string{idle}) || s.Len() != 1 {
+		t.Errorf("ended %v with %d live; want [%s], with no request since", got, s.Len(), idle)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("a second Close: %v", err)
+	}
+	select {
+	case ticks <- clk.now():
+		t.Error("a sweep ran after Close")
+	default:
+	}
+	clk.advance(time.Hour)
+	if w := do(t, s, http.MethodPost, busy, agent("phone", "s")); w.Code != http.StatusNotFound {
+		t.Errorf("after Close, a request still sweeps: %d, want 404", w.Code)
+	}
+}
+
+func TestTheSweepRunsOnItsOwn(t *testing.T) {
+	f := &fake{}
+	gone := make(chan string, 1)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.ServeHTTP(w, r)
+		if r.Method == http.MethodDelete {
+			gone <- r.Header.Get(Header)
+		}
+	})
+	clk := newClock()
+	s := sessions(t, next, Options{Now: clk.now, Every: time.Millisecond})
+	id := open(t, s, agent("laptop", "s"))
+	clk.advance(time.Hour)
+	// The real ticker fires on its own: wait for its DELETE, not for time.
+	if got := <-gone; got != id || s.Len() != 0 {
+		t.Errorf("the sweep ended %q with %d live; want %q and none", got, s.Len(), id)
 	}
 }
