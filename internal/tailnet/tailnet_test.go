@@ -187,6 +187,36 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
+// Without an auth key, a node starts without waiting, reports that it
+// needs a login with the URL, and logs the URL.
+func TestStatusWhileNeedsLogin(t *testing.T) {
+	control, _ := startControl(t, func(c *testcontrol.Server) { c.RequireAuth = true })
+	n, err := New(Config{Hostname: "lodge", Dir: t.TempDir(), ControlURL: control})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	for {
+		st := n.Status(ctx)
+		if st.State == "NeedsLogin" && strings.HasPrefix(st.LoginURL, control) {
+			if st.Hostname != "lodge" || st.DNSName != "" {
+				t.Errorf("status = %+v", st)
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("no login URL in the status: %+v", st)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if _, err := n.ListenTLS(); err == nil {
+		t.Error("a node that is not up listened")
+	}
+}
+
 // Without an auth key, the node logs Tailscale's login URL and waits.
 func TestLoginURLLoggedWithoutKey(t *testing.T) {
 	control, _ := startControl(t, func(c *testcontrol.Server) { c.RequireAuth = true })

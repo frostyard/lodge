@@ -251,7 +251,11 @@ func showStatus(o *out, raw []byte) error {
 	}
 	var rows [][]string
 	for _, n := range st.Nodes {
-		rows = append(rows, []string{"node", n.Name, map[bool]string{true: "up", false: "down"}[n.Up], n.DNSName})
+		detail := n.DNSName
+		if n.LoginURL != "" {
+			detail = "log in at " + n.LoginURL
+		}
+		rows = append(rows, []string{"node", n.Name, cmp(n.State, map[bool]string{true: "up", false: "down"}[n.Up]), detail})
 	}
 	for _, a := range st.Apps {
 		rows = append(rows, []string{"app", a.ID, string(a.State), a.Reason})

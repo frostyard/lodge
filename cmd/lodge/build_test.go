@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/integration"
+	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/logger"
 
 	"github.com/frostyard/lodge/internal/apptest"
 	"github.com/frostyard/lodge/internal/control"
@@ -320,4 +325,117 @@ func serveKitApp(t *testing.T, root, id string) {
 	done := make(chan struct{})
 	go func() { srv.Serve(ctx, ln); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
+}
+
+// The control socket and the health polls run while the nodes wait for a
+// login, and lodge.status shows each node's login URL: the first start
+// without an auth key is approve the nodes, then lodgectl allow.
+func TestControlWhileNodesNeedLogin(t *testing.T) {
+	release, _ := binaries(t)
+	controlURL := startTestControl(t)
+	root := t.TempDir()
+	cmd := exec.Command(release, "--root", root)
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "TS_") {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(env, "TS_CONTROL_URL="+controlURL)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var logs syncBuffer
+	ready := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		once := sync.Once{}
+		for sc.Scan() {
+			logs.Write([]byte(sc.Text() + "\n"))
+			if strings.Contains(sc.Text(), "control socket ready") {
+				once.Do(func() { close(ready) })
+			}
+		}
+	}()
+	defer func() {
+		cmd.Process.Signal(syscall.SIGTERM)
+		if err := cmd.Wait(); err != nil {
+			t.Errorf("lodge, stopped while it waited for a login, exited with %v\n%s", err, logs.String())
+		}
+	}()
+	select {
+	case <-ready:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("no control socket while the nodes wait:\n%s", logs.String())
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	c, err := control.Dial(ctx, filepath.Join(root, "run/lodge/control.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Call(ctx, "lodge.allowLogin", map[string]string{"login": "alice@example.com"}, nil); err != nil {
+		t.Errorf("allow login while the nodes wait: %v", err)
+	}
+	if err := c.Call(ctx, "lodge.allowNode", map[string]string{"node": "nPhone1CNTRL"}, nil); err != nil {
+		t.Errorf("allow a node by ID while the nodes wait: %v", err)
+	}
+	for {
+		var st control.Status
+		if err := c.Call(ctx, "lodge.status", nil, &st); err != nil {
+			t.Fatal(err)
+		}
+		waiting := 0
+		for _, n := range st.Nodes {
+			if n.State == "NeedsLogin" && strings.HasPrefix(n.LoginURL, controlURL) && !n.Up {
+				waiting++
+			}
+		}
+		if len(st.Nodes) == 2 && waiting == 2 {
+			if st.Nodes[0].Name != "lodge" || st.Nodes[1].Name != "lodge-content" {
+				t.Errorf("nodes = %+v", st.Nodes)
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the status never showed both nodes needing a login: %+v\n%s", st, logs.String())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// startTestControl runs Tailscale's in-process test control server, which
+// requires an interactive login, and a DERP server, on loopback.
+func startTestControl(t *testing.T) string {
+	t.Helper()
+	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	c := &testcontrol.Server{DERPMap: derpMap, DNSConfig: &tailcfg.DNSConfig{Proxied: true}, MagicDNSDomain: "tailnet.example",
+		RequireAuth: true, Logf: logger.Discard}
+	c.HTTPTestServer = httptest.NewUnstartedServer(c)
+	c.HTTPTestServer.Start()
+	t.Cleanup(c.HTTPTestServer.Close)
+	return c.HTTPTestServer.URL
 }

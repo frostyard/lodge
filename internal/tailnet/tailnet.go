@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"tailscale.com/client/local"
 	"tailscale.com/logtail"
@@ -41,10 +42,13 @@ type Config struct {
 
 // Node is one running tailnet node.
 type Node struct {
-	srv  *tsnet.Server
-	lc   *local.Client
-	name string // the node's full DNS name, without the final dot
-	log  *slog.Logger
+	srv      *tsnet.Server
+	lc       *local.Client
+	hostname string
+	log      *slog.Logger
+
+	mu   sync.Mutex
+	name string // the node's full DNS name, without the final dot, once up
 }
 
 // DisableLogUpload turns off Tailscale's log upload for the process. Start
@@ -52,8 +56,10 @@ type Node struct {
 // checks it.
 func DisableLogUpload() { logtail.Disable() }
 
-// Start starts a node and waits until it is up on the tailnet.
-func Start(ctx context.Context, cfg Config) (*Node, error) {
+// New starts a node without waiting for it to join the tailnet, so lodge
+// can serve its control socket meanwhile; Up waits. Without an auth key the
+// node needs a login, and Status shows the URL.
+func New(cfg Config) (*Node, error) {
 	DisableLogUpload()
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
@@ -74,9 +80,7 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		// The login URL, when there is no auth key, comes this way.
 		UserLogf: func(format string, args ...any) { log.Info(fmt.Sprintf(format, args...)) },
 	}
-	status, err := srv.Up(ctx)
-	if err != nil {
-		_ = srv.Close()
+	if err := srv.Start(); err != nil {
 		return nil, fmt.Errorf("tailnet node %s: %w", cfg.Hostname, err)
 	}
 	lc, err := srv.LocalClient()
@@ -84,12 +88,63 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		_ = srv.Close()
 		return nil, fmt.Errorf("tailnet node %s: %w", cfg.Hostname, err)
 	}
+	return &Node{srv: srv, lc: lc, hostname: cfg.Hostname, log: log}, nil
+}
+
+// Up waits until the node is up on the tailnet, and learns its DNS name.
+func (n *Node) Up(ctx context.Context) error {
+	status, err := n.srv.Up(ctx)
+	if err != nil {
+		return fmt.Errorf("tailnet node %s: %w", n.hostname, err)
+	}
 	name := strings.TrimSuffix(status.Self.DNSName, ".")
-	if domains := srv.CertDomains(); len(domains) > 0 {
+	if domains := n.srv.CertDomains(); len(domains) > 0 {
 		name = domains[0]
 	}
-	log.Info("tailnet node up", "name", name)
-	return &Node{srv: srv, lc: lc, name: name, log: log}, nil
+	n.mu.Lock()
+	n.name = name
+	n.mu.Unlock()
+	n.log.Info("tailnet node up", "name", name)
+	return nil
+}
+
+// Start starts a node and waits until it is up on the tailnet.
+func Start(ctx context.Context, cfg Config) (*Node, error) {
+	n, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.Up(ctx); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	return n, nil
+}
+
+// Status is a node's state for lodgectl status.
+type Status struct {
+	// Hostname is the node's name; DNSName its full name once up.
+	Hostname string `json:"hostname"`
+	DNSName  string `json:"dnsName,omitzero"`
+	// State is tailscaled's backend state: NoState, NeedsLogin,
+	// NeedsMachineAuth, Starting, Running or Stopped.
+	State string `json:"state"`
+	// LoginURL is where to log the node in, while it needs a login.
+	LoginURL string `json:"loginURL,omitzero"`
+}
+
+// Status reports the node's state, and its login URL while it needs one.
+func (n *Node) Status(ctx context.Context) Status {
+	st := Status{Hostname: n.hostname, DNSName: n.DNSName(), State: "Unknown"}
+	s, err := n.lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return st
+	}
+	st.State = s.BackendState
+	if s.BackendState != "Running" {
+		st.LoginURL = s.AuthURL
+	}
+	return st
 }
 
 // stateDir creates dir 0700, or narrows an existing one to 0700.
@@ -103,17 +158,25 @@ func stateDir(dir string) error {
 	return nil
 }
 
-// DNSName is the node's full DNS name: LODGE or CONTENT.
-func (n *Node) DNSName() string { return n.name }
+// DNSName is the node's full DNS name, LODGE or CONTENT, once it is up.
+func (n *Node) DNSName() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.name
+}
 
 // ListenTLS listens on port 443 with the node's certificate, offering
 // HTTP/1.1 only.
 func (n *Node) ListenTLS() (net.Listener, error) {
+	name := n.DNSName()
+	if name == "" {
+		return nil, fmt.Errorf("tailnet node %s: not up yet", n.hostname)
+	}
 	ln, err := n.srv.Listen("tcp", ":443")
 	if err != nil {
-		return nil, fmt.Errorf("tailnet node %s: listen: %w", n.name, err)
+		return nil, fmt.Errorf("tailnet node %s: listen: %w", name, err)
 	}
-	return tls.NewListener(ln, tlsConfig(n.name, n.lc.GetCertificate)), nil
+	return tls.NewListener(ln, tlsConfig(name, n.lc.GetCertificate)), nil
 }
 
 // tlsConfig serves name's certificate, from get, and nothing else, with

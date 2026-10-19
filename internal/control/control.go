@@ -57,8 +57,12 @@ func errorf(code int, format string, args ...any) *Error {
 // Node is one of lodge's tailnet nodes, for lodge.status.
 type Node struct {
 	Name    string `json:"name"`
-	DNSName string `json:"dnsName"`
-	Up      bool   `json:"up"`
+	DNSName string `json:"dnsName,omitzero"`
+	// State is the node's backend state: NeedsLogin, Starting, Running…
+	State string `json:"state"`
+	// LoginURL is where to log the node in, while it needs a login.
+	LoginURL string `json:"loginURL,omitzero"`
+	Up       bool   `json:"up"`
 }
 
 // Deps are what the commands act on.

@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -160,24 +161,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	}
 	names := gateway.LoopbackNames(addrOf(plainLodge), addrOf(plainContent))
 
-	// The tailnet nodes, whose names the gateway needs. The development
-	// build joins none.
-	var lodgeNode, contentNode *tailnet.Node
-	if !e2eBuild && o.node != "" {
-		lodgeNode, contentNode, err = startNodes(ctx, o, stateDir, log)
-		if err != nil {
-			return err
-		}
-		defer lodgeNode.Close()
-		defer contentNode.Close()
-		names = gateway.TailnetNames(lodgeNode.DNSName(), contentNode.DNSName())
-	}
-
 	ss := sessions.NewRegistry()
 	al := allow.New(db, nil)
 	tk := tokens.New(db, nil)
-	g := gateway.New(gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log})
-
 	reload := func() error {
 		if err := reg.Load(); err != nil {
 			return err
@@ -185,14 +171,41 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		reg.Poll(ctx)
 		return nil
 	}
+
+	// The tailnet nodes start without waiting to join: the control socket
+	// and the health polls run while they wait for a login, so lodgectl
+	// status shows the login URL. The development build joins no tailnet.
+	var lodgeNode, contentNode *tailnet.Node
+	if !e2eBuild && o.node != "" {
+		lodgeNode, contentNode, err = newNodes(o, stateDir, log)
+		if err != nil {
+			return err
+		}
+		defer lodgeNode.Close()
+		defer contentNode.Close()
+	}
+
+	// The gateway exists once the nodes have names; until then nothing it
+	// serves can be open.
+	var gw atomic.Pointer[gateway.Gateway]
+	var mcpBase atomic.Value
+	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
-		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, EndToken: g.EndToken, Reload: reload, Log: log,
-		MCPURL: func(id string) string { return names.LodgeOrigin + "/mcp/" + id },
+		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log,
+		EndToken: func(name string) int {
+			if g := gw.Load(); g != nil {
+				return g.EndToken(name)
+			}
+			return 0
+		},
+		MCPURL: func(id string) string { return mcpBase.Load().(string) + "/mcp/" + id },
 		Nodes: func(ctx context.Context) []control.Node {
 			var out []control.Node
 			for _, n := range []*tailnet.Node{lodgeNode, contentNode} {
 				if n != nil {
-					out = append(out, control.Node{Name: firstLabel(n.DNSName()), DNSName: n.DNSName(), Up: n.Running(ctx)})
+					st := n.Status(ctx)
+					out = append(out, control.Node{Name: st.Hostname, DNSName: st.DNSName, State: st.State,
+						LoginURL: st.LoginURL, Up: st.State == "Running"})
 				}
 			}
 			return out
@@ -205,6 +218,64 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	var servers []*http.Server
+	var serversMu sync.Mutex
+	defer func() {
+		log.Info("lodge stopping")
+		cancel()
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer scancel()
+		serversMu.Lock()
+		for _, s := range servers {
+			_ = s.Shutdown(sctx)
+			_ = s.Close()
+		}
+		serversMu.Unlock()
+		wg.Wait()
+	}()
+	wg.Go(func() { reg.Run(ctx) })
+	wg.Go(func() {
+		if err := control.New(deps).Serve(ctx, ctlLn); err != nil {
+			errs <- err
+		}
+	})
+	wg.Go(func() {
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if err := reload(); err != nil {
+					log.Error("reload the apps", "err", err)
+				} else {
+					log.Info("apps reloaded")
+				}
+			}
+		}
+	})
+	log.Info("control socket ready", "path", o.layout("/run/lodge/control.sock"))
+
+	if lodgeNode != nil {
+		if err := upNodes(ctx, lodgeNode, contentNode); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		names = gateway.TailnetNames(lodgeNode.DNSName(), contentNode.DNSName())
+		mcpBase.Store(names.LodgeOrigin)
+	}
+	g := gateway.New(gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log})
+	gw.Store(g)
+	wg.Go(func() { g.Run(ctx) })
 
 	type listener struct {
 		name string
@@ -229,40 +300,12 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	if plainContent != nil {
 		lns = append(lns, listener{"plain content", plainContent, g.Content(plainWhoIs())})
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var wg sync.WaitGroup
-	errs := make(chan error, len(lns)+1)
-	wg.Go(func() { reg.Run(ctx) })
-	wg.Go(func() { g.Run(ctx) })
-	wg.Go(func() {
-		if err := control.New(deps).Serve(ctx, ctlLn); err != nil {
-			errs <- err
-		}
-	})
-	wg.Go(func() {
-		hup := make(chan os.Signal, 1)
-		signal.Notify(hup, syscall.SIGHUP)
-		defer signal.Stop(hup)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-hup:
-				if err := reload(); err != nil {
-					log.Error("reload the apps", "err", err)
-				} else {
-					log.Info("apps reloaded")
-				}
-			}
-		}
-	})
-	var servers []*http.Server
 	for _, l := range lns {
 		srv := gateway.Server(l.h)
 		srv.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelDebug)
+		serversMu.Lock()
 		servers = append(servers, srv)
+		serversMu.Unlock()
 		log.Info("listening", "listener", l.name, "addr", l.ln.Addr().String())
 		wg.Go(func() {
 			if err := srv.Serve(l.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -275,48 +318,41 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 			"lodge", names.LodgeOrigin, "content", names.ContentOrigin)
 	}
 
-	var runErr error
 	select {
 	case <-ctx.Done():
-	case runErr = <-errs:
+		return nil
+	case err := <-errs:
+		return err
 	}
-	log.Info("lodge stopping")
-	cancel()
-	sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer scancel()
-	for _, s := range servers {
-		_ = s.Shutdown(sctx)
-		_ = s.Close()
-	}
-	wg.Wait()
-	return runErr
 }
 
-// startNodes starts both tailnet nodes at once. Each reads its auth key on
-// first start: TS_AUTHKEY, or TS_AUTHKEY_CONTENT for the content node when
-// that is set.
-func startNodes(ctx context.Context, o options, stateDir string, log *slog.Logger) (*tailnet.Node, *tailnet.Node, error) {
+// newNodes starts both tailnet nodes without waiting for them. Each reads
+// its auth key on first start: TS_AUTHKEY, or TS_AUTHKEY_CONTENT for the
+// content node when that is set.
+func newNodes(o options, stateDir string, log *slog.Logger) (*tailnet.Node, *tailnet.Node, error) {
 	key := os.Getenv("TS_AUTHKEY")
 	contentKey := cmp.Or(os.Getenv("TS_AUTHKEY_CONTENT"), key)
-	var lodgeNode, contentNode *tailnet.Node
-	var lerr, cerr error
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		lodgeNode, lerr = tailnet.Start(ctx, tailnet.Config{Hostname: o.node, Dir: filepath.Join(stateDir, "tailnet", o.node), AuthKey: key, Log: log})
-	})
-	wg.Go(func() {
-		contentNode, cerr = tailnet.Start(ctx, tailnet.Config{Hostname: o.contentNode, Dir: filepath.Join(stateDir, "tailnet", o.contentNode), AuthKey: contentKey, Log: log})
-	})
-	wg.Wait()
-	if err := errors.Join(lerr, cerr); err != nil {
-		for _, n := range []*tailnet.Node{lodgeNode, contentNode} {
-			if n != nil {
-				n.Close()
-			}
-		}
+	lodgeNode, err := tailnet.New(tailnet.Config{Hostname: o.node, Dir: filepath.Join(stateDir, "tailnet", o.node), AuthKey: key, Log: log})
+	if err != nil {
+		return nil, nil, err
+	}
+	contentNode, err := tailnet.New(tailnet.Config{Hostname: o.contentNode, Dir: filepath.Join(stateDir, "tailnet", o.contentNode), AuthKey: contentKey, Log: log})
+	if err != nil {
+		lodgeNode.Close()
 		return nil, nil, err
 	}
 	return lodgeNode, contentNode, nil
+}
+
+// upNodes waits for both nodes to join the tailnet.
+func upNodes(ctx context.Context, nodes ...*tailnet.Node) error {
+	errs := make([]error, len(nodes))
+	var wg sync.WaitGroup
+	for i, n := range nodes {
+		wg.Go(func() { errs[i] = n.Up(ctx) })
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // addrOf is a listener's address, or "" for none.
@@ -325,13 +361,4 @@ func addrOf(ln net.Listener) string {
 		return ""
 	}
 	return ln.Addr().String()
-}
-
-func firstLabel(name string) string {
-	for i := range len(name) {
-		if name[i] == '.' {
-			return name[:i]
-		}
-	}
-	return name
 }
