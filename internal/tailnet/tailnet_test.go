@@ -217,6 +217,27 @@ func TestStatusWhileNeedsLogin(t *testing.T) {
 	}
 }
 
+// The login URL is logged once per URL, though tsnet repeats it.
+func TestLoginURLLoggedOnce(t *testing.T) {
+	var logs syncBuffer
+	n := &Node{hostname: "lodge", log: slog.New(slog.NewTextHandler(&logs, nil))}
+	for range 3 {
+		n.userLog("To start this tsnet server, restart with TS_AUTHKEY set, or go to: %s", "https://login.example/a/1")
+	}
+	n.userLog("To start this tsnet server, restart with TS_AUTHKEY set, or go to: %s", "https://login.example/a/2")
+	n.userLog("something else for people")
+	out := logs.String()
+	if c1, c2 := strings.Count(out, "a/1"), strings.Count(out, "a/2"); c1 != 1 || c2 != 1 {
+		t.Errorf("URL 1 logged %d times, URL 2 %d times:\n%s", c1, c2, out)
+	}
+	if !strings.Contains(out, "something else") {
+		t.Errorf("other lines were dropped:\n%s", out)
+	}
+	if n.loginURL != "https://login.example/a/2" {
+		t.Errorf("kept URL = %q", n.loginURL)
+	}
+}
+
 // Without an auth key, the node logs Tailscale's login URL and waits.
 func TestLoginURLLoggedWithoutKey(t *testing.T) {
 	control, _ := startControl(t, func(c *testcontrol.Server) { c.RequireAuth = true })
@@ -224,7 +245,7 @@ func TestLoginURLLoggedWithoutKey(t *testing.T) {
 	logged := make(chan struct{})
 	var once sync.Once
 	h := slog.NewTextHandler(io.MultiWriter(&logs, writerFunc(func(p []byte) {
-		if bytes.Contains(p, []byte("go to: http")) {
+		if bytes.Contains(p, []byte("needs a login")) && bytes.Contains(p, []byte("url=http")) {
 			once.Do(func() { close(logged) })
 		}
 	})), &slog.HandlerOptions{Level: slog.LevelInfo})
@@ -248,6 +269,9 @@ func TestLoginURLLoggedWithoutKey(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), control) {
 		t.Errorf("the login URL is not the control server's: %s", logs.String())
+	}
+	if n := strings.Count(logs.String(), "go to:"); n != 0 {
+		t.Errorf("tsnet's own login line was logged %d times", n)
 	}
 }
 

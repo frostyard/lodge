@@ -255,7 +255,7 @@ func showStatus(o *out, raw []byte) error {
 		if n.LoginURL != "" {
 			detail = "log in at " + n.LoginURL
 		}
-		rows = append(rows, []string{"node", n.Name, cmp(n.State, map[bool]string{true: "up", false: "down"}[n.Up]), detail})
+		rows = append(rows, []string{"node", n.Name, nodeState(n), detail})
 	}
 	for _, a := range st.Apps {
 		rows = append(rows, []string{"app", a.ID, string(a.State), a.Reason})
@@ -263,6 +263,23 @@ func showStatus(o *out, raw []byte) error {
 	rows = append(rows, []string{"sessions", fmt.Sprint(st.Sessions), "", ""})
 	table(o.stdout, "KIND\tNAME\tSTATE\tDETAIL", rows)
 	return nil
+}
+
+// nodeState writes a node's backend state for people.
+func nodeState(n control.Node) string {
+	switch n.State {
+	case "Running":
+		return "up"
+	case "NeedsLogin":
+		return "needs login"
+	case "NeedsMachineAuth":
+		return "needs approval"
+	case "Starting", "NoState":
+		return "starting"
+	case "":
+		return map[bool]string{true: "up", false: "down"}[n.Up]
+	}
+	return strings.ToLower(n.State)
 }
 
 func showApps(o *out, raw []byte) error {

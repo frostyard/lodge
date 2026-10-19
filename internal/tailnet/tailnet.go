@@ -7,6 +7,7 @@
 package tailnet
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -47,8 +48,9 @@ type Node struct {
 	hostname string
 	log      *slog.Logger
 
-	mu   sync.Mutex
-	name string // the node's full DNS name, without the final dot, once up
+	mu       sync.Mutex
+	name     string // the node's full DNS name, without the final dot, once up
+	loginURL string // the latest login URL tsnet announced
 }
 
 // DisableLogUpload turns off Tailscale's log upload for the process. Start
@@ -71,14 +73,16 @@ func New(cfg Config) (*Node, error) {
 		return nil, err
 	}
 	log := cfg.Log.With("node", cfg.Hostname)
+	n := &Node{hostname: cfg.Hostname, log: log}
 	srv := &tsnet.Server{
 		Dir:        cfg.Dir,
 		Hostname:   cfg.Hostname,
 		AuthKey:    cfg.AuthKey,
 		ControlURL: cfg.ControlURL,
 		Logf:       func(format string, args ...any) { log.Debug(fmt.Sprintf(format, args...)) },
-		// The login URL, when there is no auth key, comes this way.
-		UserLogf: func(format string, args ...any) { log.Info(fmt.Sprintf(format, args...)) },
+		// The login URL, when there is no auth key, comes this way, every
+		// 5 s: it is logged once per URL and kept for Status.
+		UserLogf: n.userLog,
 	}
 	if err := srv.Start(); err != nil {
 		return nil, fmt.Errorf("tailnet node %s: %w", cfg.Hostname, err)
@@ -88,7 +92,29 @@ func New(cfg Config) (*Node, error) {
 		_ = srv.Close()
 		return nil, fmt.Errorf("tailnet node %s: %w", cfg.Hostname, err)
 	}
-	return &Node{srv: srv, lc: lc, hostname: cfg.Hostname, log: log}, nil
+	n.srv, n.lc = srv, lc
+	return n, nil
+}
+
+// loginLine is how tsnet announces the login URL.
+const loginLine = "go to: "
+
+// userLog logs tsnet's messages for people, but the login URL only when it
+// changes.
+func (n *Node) userLog(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if _, url, ok := strings.Cut(msg, loginLine); ok {
+		url = strings.TrimSpace(url)
+		n.mu.Lock()
+		seen := n.loginURL == url
+		n.loginURL = url
+		n.mu.Unlock()
+		if !seen {
+			n.log.Warn("the tailnet node needs a login: open the URL, or restart with an auth key", "url", url)
+		}
+		return
+	}
+	n.log.Info(msg)
 }
 
 // Up waits until the node is up on the tailnet, and learns its DNS name.
@@ -136,13 +162,17 @@ type Status struct {
 // Status reports the node's state, and its login URL while it needs one.
 func (n *Node) Status(ctx context.Context) Status {
 	st := Status{Hostname: n.hostname, DNSName: n.DNSName(), State: "Unknown"}
+	n.mu.Lock()
+	announced := n.loginURL
+	n.mu.Unlock()
 	s, err := n.lc.StatusWithoutPeers(ctx)
 	if err != nil {
+		st.LoginURL = announced
 		return st
 	}
 	st.State = s.BackendState
 	if s.BackendState != "Running" {
-		st.LoginURL = s.AuthURL
+		st.LoginURL = cmp.Or(s.AuthURL, announced)
 	}
 	return st
 }

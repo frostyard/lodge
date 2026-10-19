@@ -29,7 +29,13 @@ func serve(t *testing.T) string {
 	reg := apps.New(root, nil)
 	reg.Load()
 	srv := control.New(control.Deps{Allow: allow.New(db, nil), Tokens: tokens.New(db, nil), Sessions: sessions.NewRegistry(), Apps: reg,
-		Reload: reg.Load, MCPURL: func(id string) string { return "https://LODGE/mcp/" + id }})
+		Reload: reg.Load, MCPURL: func(id string) string { return "https://LODGE/mcp/" + id },
+		Nodes: func(context.Context) []control.Node {
+			return []control.Node{
+				{Name: "lodge", State: "NeedsLogin", LoginURL: "https://login.example/a/1"},
+				{Name: "lodge-content", DNSName: "lodge-content.example", State: "Running", Up: true},
+			}
+		}})
 	ln, err := control.Listen(filepath.Join(root, "run/lodge/control.sock"))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +74,10 @@ func TestAllowAndList(t *testing.T) {
 	if code, out, _ := lodgectl(t, root, "allow", "node", "nPhone1CNTRL"); code != 0 || !strings.Contains(out, "allow node") {
 		t.Errorf("allow node: %d %q", code, out)
 	}
-	if code, out, _ := lodgectl(t, root, "status"); code != 0 || !strings.Contains(out, "sessions") {
+	code, out, _ := lodgectl(t, root, "status")
+	if code != 0 || !strings.Contains(out, "sessions") ||
+		!regexp.MustCompile(`node\s+lodge\s+needs login\s+log in at https://login.example/a/1`).MatchString(out) ||
+		!regexp.MustCompile(`node\s+lodge-content\s+up\s+lodge-content.example`).MatchString(out) {
 		t.Errorf("status: %d %q", code, out)
 	}
 }
