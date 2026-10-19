@@ -25,6 +25,7 @@ var ErrEventsOverflow = errors.New("jsonrpc: event buffer overflow")
 // api package embeds it in its own Client, on which the generated domain
 // clients hang.
 type Client[C Code] struct {
+	name string // the server's, for errors; "" names the kit
 	conn net.Conn
 
 	wmu sync.Mutex // serializes writes
@@ -38,10 +39,22 @@ type Client[C Code] struct {
 	done   chan struct{}
 }
 
+// ClientOptions configures NewClientWith.
+type ClientOptions struct {
+	// Name is the server's, such as "notesd", for the client's errors:
+	// "notesd: connection closed", "write to notesd: …". Empty names the
+	// kit and "the server".
+	Name string
+}
+
 // NewClient starts a client on an established connection. The caller makes
 // the server's hello first, if it has one.
-func NewClient[C Code](conn net.Conn) *Client[C] {
+func NewClient[C Code](conn net.Conn) *Client[C] { return NewClientWith[C](conn, ClientOptions{}) }
+
+// NewClientWith is NewClient with options.
+func NewClientWith[C Code](conn net.Conn, opts ClientOptions) *Client[C] {
 	c := &Client[C]{
+		name:    opts.Name,
 		conn:    conn,
 		pending: map[int64]chan Frame[C]{},
 		events:  make(chan EventEnvelope, EventBuffer),
@@ -127,16 +140,32 @@ func (c *Client[C]) write(m Frame[C]) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if _, err := c.conn.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("write to the server: %w", err)
+		return fmt.Errorf("write to %s: %w", c.server(), err)
 	}
 	return nil
+}
+
+// prefix begins the client's own errors: the server's name, or the kit's.
+func (c *Client[C]) prefix() string {
+	if c.name != "" {
+		return c.name
+	}
+	return "jsonrpc"
+}
+
+// server names the server in errors.
+func (c *Client[C]) server() string {
+	if c.name != "" {
+		return c.name
+	}
+	return "the server"
 }
 
 func (c *Client[C]) readLoop() {
 	err := c.read()
 	c.mu.Lock()
 	if err == nil {
-		err = errors.New("jsonrpc: connection closed")
+		err = errors.New(c.prefix() + ": connection closed")
 	}
 	c.err = err
 	c.mu.Unlock()
@@ -151,6 +180,9 @@ func (c *Client[C]) read() error {
 	for sc.Scan() {
 		var m Frame[C]
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			if c.name != "" {
+				return fmt.Errorf("%s: malformed message: %w", c.name, err)
+			}
 			return fmt.Errorf("jsonrpc: malformed message from the server: %w", err)
 		}
 		if len(m.ID) == 0 {
@@ -159,7 +191,7 @@ func (c *Client[C]) read() error {
 			}
 			var ev EventEnvelope
 			if err := json.Unmarshal(m.Params, &ev); err != nil {
-				return fmt.Errorf("jsonrpc: malformed event: %w", err)
+				return fmt.Errorf("%s: malformed event: %w", c.prefix(), err)
 			}
 			select {
 			case c.events <- ev:

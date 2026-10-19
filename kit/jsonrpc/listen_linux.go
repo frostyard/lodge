@@ -19,8 +19,14 @@ import (
 // created if missing): the socket its CLI and desktop app use. A stale
 // socket is replaced; a live one means the daemon is already running.
 // Accept admits only processes of the same user (SO_PEERCRED), and closes
-// the rest, logged to log when it is not nil.
+// the rest, logged to log when it is not nil. ListenWith names the daemon
+// in its errors.
 func Listen(path string, log *slog.Logger) (net.Listener, error) {
+	return ListenWith(path, ListenOptions{Logger: log})
+}
+
+// ListenWith is Listen with options.
+func ListenWith(path string, opts ListenOptions) (net.Listener, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("socket directory: %w", err)
@@ -31,6 +37,9 @@ func Listen(path string, log *slog.Logger) (net.Listener, error) {
 	if _, err := os.Lstat(path); err == nil {
 		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 			_ = c.Close()
+			if opts.Name != "" {
+				return nil, fmt.Errorf("%s is already listening on %s", opts.Name, path)
+			}
 			return nil, fmt.Errorf("another server is already listening on %s", path)
 		}
 		if err := os.Remove(path); err != nil {
@@ -48,7 +57,7 @@ func Listen(path string, log *slog.Logger) (net.Listener, error) {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 	ln.SetUnlinkOnClose(true)
-	return &private{UnixListener: ln, log: log}, nil
+	return &private{UnixListener: ln, log: opts.Logger}, nil
 }
 
 func checkPrivateDir(dir string) error {
