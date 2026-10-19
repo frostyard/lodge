@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/frostyard/lodge/internal/allow"
@@ -39,6 +40,8 @@ const (
 
 // Config is what the gateway needs.
 type Config struct {
+	// Names are the nodes' names; SetNames changes them once the nodes
+	// have joined the tailnet.
 	Names    Names
 	Root     string // the layout root, "" for /
 	Apps     *apps.Registry
@@ -59,6 +62,7 @@ type Gateway struct {
 	transport *http.Transport
 	ws        *http.Client
 	streams   *streams
+	names     atomic.Pointer[Names]
 }
 
 // New returns a gateway over cfg.
@@ -80,7 +84,7 @@ func New(cfg Config) *Gateway {
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
 	}
-	return &Gateway{
+	g := &Gateway{
 		cfg:       cfg,
 		log:       cfg.Log,
 		transport: tr,
@@ -88,7 +92,17 @@ func New(cfg Config) *Gateway {
 		ws:      &http.Client{Transport: &http.Transport{DialContext: cfg.Apps.DialContext, DisableKeepAlives: true, DisableCompression: true}},
 		streams: newStreams(),
 	}
+	g.SetNames(cfg.Names)
+	return g
 }
+
+// SetNames sets the nodes' names. lodge makes its gateway before the nodes
+// join, for the agent socket, which names no node, and sets their names
+// once they have.
+func (g *Gateway) SetNames(n Names) { g.names.Store(&n) }
+
+// Names are the nodes' names.
+func (g *Gateway) Names() Names { return *g.names.Load() }
 
 func (g *Gateway) now() time.Time { return g.cfg.Now() }
 
@@ -278,7 +292,7 @@ type rail struct {
 }
 
 func (g *Gateway) appsList(w http.ResponseWriter, r *http.Request) {
-	out := rail{Contract: Contract, ContentOrigin: g.cfg.Names.ContentOrigin, Apps: []railApp{}}
+	out := rail{Contract: Contract, ContentOrigin: g.Names().ContentOrigin, Apps: []railApp{}}
 	for _, a := range g.cfg.Apps.List() {
 		ra := railApp{ID: a.ID, Name: cmp.Or(a.Manifest.Name, a.ID), Key: a.Key, Content: a.Manifest.Content,
 			Companion: a.Manifest.Companion, State: a.State, Reason: a.Reason}

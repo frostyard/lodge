@@ -72,7 +72,7 @@ already trusts for the inference socket
   host an agent run by the developer.
 - [specs/lodge-http.md](../specs/lodge-http.md#the-agent-socket) and
   [specs/app-contract.md](../specs/app-contract.md#the-agent-socket) pin
-  it. Both are designed, not built: the roadmap's
+  it. The roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
   builds them.
 

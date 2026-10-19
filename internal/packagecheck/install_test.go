@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/frostyard/lodge/internal/agents"
+	"github.com/frostyard/lodge/internal/inference"
 )
 
 const packaging = "../../packaging"
@@ -152,7 +155,7 @@ func TestUnitAndEntries(t *testing.T) {
 		}
 	}
 	users := read("sysusers.d/lodge.conf")
-	for _, line := range []string{"u lodge - ", "g lodge-apps -", "m lodge lodge-apps"} {
+	for _, line := range []string{"u lodge - ", "g lodge-apps -", "m lodge lodge-apps", "g lodge-agents -", "m lodge lodge-agents"} {
 		if !strings.Contains(users, "\n"+line) {
 			t.Errorf("sysusers.d lacks %q", line)
 		}
@@ -193,5 +196,21 @@ func TestUnitsVerify(t *testing.T) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("systemd-analyze verify: %v\n%s", err, out)
+	}
+}
+
+// config.example.json is a configuration lodge accepts as it is: its
+// agents and its inference.
+func TestConfigExampleLoads(t *testing.T) {
+	path := filepath.Join(packaging, "config.example.json")
+	names, err := agents.LoadConfig(path)
+	if err != nil {
+		t.Errorf("agents: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("the example lists agents %q; an agent is a grant the owner makes", names)
+	}
+	if _, err := inference.LoadConfig(path); err != nil {
+		t.Errorf("inference: %v", err)
 	}
 }

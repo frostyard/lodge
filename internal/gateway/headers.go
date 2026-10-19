@@ -106,18 +106,18 @@ func browserHeaders(h http.Header, csp, frameOptions string) {
 }
 
 func (g *Gateway) shellHeaders(h http.Header) {
-	browserHeaders(h, g.cfg.Names.ShellPolicy(), "DENY")
+	browserHeaders(h, g.Names().ShellPolicy(), "DENY")
 }
 
 func (g *Gateway) appHeaders(id string, f frameFlags) func(http.Header) {
 	return func(h http.Header) {
-		browserHeaders(h, g.cfg.Names.AppPolicy(id, f.content, f.remoteImages), "SAMEORIGIN")
+		browserHeaders(h, g.Names().AppPolicy(id, f.content, f.remoteImages), "SAMEORIGIN")
 	}
 }
 
 func (g *Gateway) contentHeaders(links bool) func(http.Header) {
 	return func(h http.Header) {
-		h.Add("Content-Security-Policy", g.cfg.Names.ContentPolicy(links))
+		h.Add("Content-Security-Policy", g.Names().ContentPolicy(links))
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Resource-Policy", "same-site")

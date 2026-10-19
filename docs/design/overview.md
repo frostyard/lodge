@@ -38,10 +38,11 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
   user's phone and Chrome's PDF viewer are not done, and the Copilot and
   Codex providers are not built.
-- The assistant, Porter, is designed (Phase 5). lodge's side of it, the
-  companion and the agent socket, is not built: the roadmap's
-  [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
-  builds it. What this document says of them is marked *(Phase 6)*.
+- The assistant, Porter, is designed (Phase 5). Of lodge's side of it,
+  the roadmap's
+  [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
+  the agent socket is built and the companion is not. What this document
+  says of the companion is marked *(Phase 6)*.
 
 This document is rewritten as each phase lands.
 
@@ -69,7 +70,7 @@ tells the app in headers, and moves the bytes.
    │    └─ CONTENT/<id>/…               sandboxed bytes ────┘
    ├─ internal/inference ◀── /run/lodge/inference.sock ◀── app daemons (peer uid → app)
    │       └─▶ the local model (MODEL_HOST), later Copilot and Codex
-   ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid; Phase 6)
+   ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid)
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
 
  notesd (user frostnotes) · maild (user frostmail) · porterd (user frostporter)
@@ -87,16 +88,16 @@ works from behind it.
 
 | Process | User | Groups | Holds |
 | --- | --- | --- | --- |
-| lodge | `lodge` | `lodge`, `lodge-apps`, *(Phase 6)* `lodge-agents` | `/var/lib/lodge/`: tsnet state, allow-lists, tokens, provider credentials |
+| lodge | `lodge` | `lodge`, `lodge-apps`, `lodge-agents` | `/var/lib/lodge/`: tsnet state, allow-lists, tokens, provider credentials |
 | notesd | `frostnotes` | `lodge-apps` | its vaults' state; its socket is `frostnotes:lodge` 0660 |
 | maild | `frostmail` | `lodge-apps` | mail, its accounts' credentials |
-| porterd, the assistant | `frostporter` | `lodge-apps`, *(Phase 6)* `lodge-agents` | its own state (its thread), and an MCP token for each app it uses |
+| porterd, the assistant | `frostporter` | `lodge-apps`, `lodge-agents` | its own state (its thread), and an MCP token for each app it uses |
 
 - lodge can open every app's socket (group `lodge`), and nothing else of
   theirs.
 - An app can open the inference socket (group `lodge-apps`), and nothing of
   lodge's or another app's.
-- *(Phase 6)* An agent on lodge's host can open the agent socket (group
+- An agent on lodge's host can open the agent socket (group
   `lodge-agents`), and lodge serves it only when lodge's configuration
   names its user.
 - systemd socket units create the app sockets
@@ -122,9 +123,11 @@ its owner's login and display name. Tests elsewhere use a fake WhoIs. The
 development build uses a fixed one on loopback.
 
 **Start order.** lodge opens its database, reads the manifests, and starts
-both nodes without waiting for them. It then serves the control socket
-and polls the apps' health, and only then waits for the nodes to join the
-tailnet before the gateway listens. So on a first start without an auth
+both nodes without waiting for them. It then serves the control,
+inference and agent sockets and polls the apps' health, and only then
+waits for the nodes to join the tailnet before the gateway listens on
+them. The gateway exists from the start, for the agent socket, and learns
+the nodes' names once they have joined. So on a first start without an auth
 key, `lodgectl status` already answers, and shows each node's login URL.
 The journal says only that a login is needed: the URL claims the node for
 whoever opens it first.
@@ -184,7 +187,7 @@ each to the token name and scope that opened it. `lodge/kit` provides the
 session helper. Revoking a token closes every stream lodge is proxying for
 it.
 
-**Agents on lodge's host** *(Phase 6)* use the agent socket,
+**Agents on lodge's host** use the agent socket,
 `/run/lodge/agent.sock`, rather than the tailnet
 ([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md);
 [lodge-http.md](../specs/lodge-http.md#the-agent-socket)). Porter, the
@@ -202,6 +205,11 @@ reaches notes and mail only through their MCP, with one token per app.
   useless, and one agent cannot use another's.
 - So an agent on lodge's host needs no tsnet and no node, and its calls
   never leave the host. Agents elsewhere stay on the tailnet.
+- `internal/agents` keeps the list, read from the configuration with the
+  manifests, and the socket's connections; reloading without an agent
+  closes them. The gateway serves the socket with the same code as the
+  tailnet's `/mcp/<id>`. The kit's `lodgeapp.Env.AgentClient` is an
+  agent's client of it.
 
 ### Untrusted content
 
@@ -359,7 +367,7 @@ Apps pin both to a published lodge commit or release.
   it. Its sessions close within a minute, or at once.
 - **A token in the wrong hands:** `lodgectl token revoke NAME`. Its streams
   close at once. Its writes carry its name in each app's history.
-- **Adding an agent on lodge's host** *(Phase 6)*: put its system user in
+- **Adding an agent on lodge's host:** put its system user in
   group `lodge-agents`, add the user to `agents` in
   `/etc/lodge/config.json`, run `sudo lodgectl reload`, and issue its
   tokens with `sudo lodgectl token issue NAME --app ID --scope SCOPE

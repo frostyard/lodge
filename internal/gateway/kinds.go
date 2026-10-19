@@ -10,6 +10,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/frostyard/lodge/internal/agents"
+	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/tokens"
 )
@@ -27,7 +29,7 @@ func (g *Gateway) Content(who peer.WhoIs) http.Handler {
 		a, installed := g.cfg.Apps.Get(id)
 		headers := g.contentHeaders(installed && a.Manifest.ContentLinks)
 		// 1. Host.
-		if !g.cfg.Names.contentHost(r.Host) {
+		if !g.Names().contentHost(r.Host) {
 			fail(w, http.StatusForbidden, "this is not lodge's content address", headers)
 			return
 		}
@@ -73,7 +75,7 @@ func (g *Gateway) Content(who peer.WhoIs) http.Handler {
 // device serves /device/<id>/<path>: lodge checks no identity, and the app
 // authenticates the request (docs/specs/lodge-http.md, Device routes).
 func (g *Gateway) device(w http.ResponseWriter, r *http.Request, who peer.WhoIs, id, sub string) {
-	if !g.cfg.Names.lodgeHost(r.Host) {
+	if !g.Names().lodgeHost(r.Host) {
 		fail(w, http.StatusForbidden, "this is not lodge's address", deviceHeaders)
 		return
 	}
@@ -247,17 +249,53 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// mcp serves /mcp/<id> (docs/specs/lodge-http.md, /mcp/<id>).
+// mcp serves /mcp/<id> on the lodge node (docs/specs/lodge-http.md,
+// /mcp/<id>).
 func (g *Gateway) mcp(w http.ResponseWriter, r *http.Request, who peer.WhoIs, id string) {
+	g.serveMCP(w, r, mcpRoute{who: who}, id)
+}
+
+// Agent serves the agent socket: /mcp/<id> alone, for the agent its
+// connection was admitted as (docs/specs/lodge-http.md, The agent socket).
+// The connection's user stands in for Host, WhoIs and the address check.
+func (g *Gateway) Agent() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := agents.User(r.Context())
+		if !ok {
+			fail(w, http.StatusForbidden, "lodge cannot name this agent", agentHeaders)
+			return
+		}
+		segs, ok := segments(r.URL.EscapedPath())
+		if !ok || r.URL.Opaque != "" || len(segs) != 2 || segs[0] != "mcp" || !apps.ValidID(segs[1]) {
+			fail(w, http.StatusNotFound, "not found", agentHeaders)
+			return
+		}
+		g.serveMCP(w, r, mcpRoute{agent: user}, segs[1])
+	})
+}
+
+// mcpRoute is where an MCP request came: the lodge node, whose peers who
+// names, or the agent socket, from agent's user.
+type mcpRoute struct {
+	who   peer.WhoIs
+	agent string
+}
+
+func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request, route mcpRoute, id string) {
 	sw := &statusWriter{ResponseWriter: w}
 	var p peer.Peer
 	var tok tokens.Token
 	defer func() {
-		g.log.Info("mcp", "app", id, "node", p.NodeName, "token", tok.Name, "method", r.Method, "status", sw.status)
+		attrs := []any{"app", id, "node", p.NodeName}
+		if route.agent != "" {
+			attrs = []any{"app", id, "agent", route.agent}
+		}
+		g.log.Info("mcp", append(attrs, "token", tok.Name, "method", r.Method, "status", sw.status)...)
 	}()
 	w = sw
-	// 1. Host.
-	if !g.cfg.Names.lodgeHost(r.Host) {
+	onSocket := route.agent != ""
+	// 1. Host, on the tailnet.
+	if !onSocket && !g.Names().lodgeHost(r.Host) {
 		fail(w, http.StatusForbidden, "this is not lodge's address", agentHeaders)
 		return
 	}
@@ -274,18 +312,20 @@ func (g *Gateway) mcp(w http.ResponseWriter, r *http.Request, who peer.WhoIs, id
 		fail(w, http.StatusMethodNotAllowed, "method "+r.Method+" is not allowed here", agentHeaders)
 		return
 	}
-	// 4. Peer: checks a and b.
-	var d *denial
-	if p, d = g.peerChecks(r, who); d != nil {
-		fail(w, d.status, d.line, agentHeaders)
-		return
+	// 4. Peer, on the tailnet: checks a and b.
+	if !onSocket {
+		var d *denial
+		if p, d = g.peerChecks(r, route.who); d != nil {
+			fail(w, d.status, d.line, agentHeaders)
+			return
+		}
 	}
-	// 5. Token.
+	// 5. Token, for this app and this route.
 	unauthorized := func() {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "unauthorized", agentHeaders)
 	}
-	t, err := g.cfg.Tokens.Check(r.Context(), tokens.Bearer(r.Header.Get("Authorization")), id)
+	t, err := g.cfg.Tokens.Check(r.Context(), tokens.Bearer(r.Header.Get("Authorization")), id, route.agent)
 	if err != nil {
 		unauthorized()
 		return
@@ -310,7 +350,7 @@ func (g *Gateway) mcp(w http.ResponseWriter, r *http.Request, who peer.WhoIs, id
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer g.streams.add(tok.ID, cancel)()
-	if again, err := g.cfg.Tokens.Check(ctx, tokens.Bearer(r.Header.Get("Authorization")), id); err != nil || again.ID != tok.ID {
+	if again, err := g.cfg.Tokens.Check(ctx, tokens.Bearer(r.Header.Get("Authorization")), id, route.agent); err != nil || again.ID != tok.ID {
 		unauthorized()
 		return
 	}
