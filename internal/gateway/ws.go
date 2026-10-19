@@ -49,8 +49,7 @@ func (g *Gateway) session(w http.ResponseWriter, r *http.Request, who peer.WhoIs
 	}
 
 	h := http.Header{}
-	setCaller(h, proxyReq{kind: kindSession, peer: p})
-	h.Set("Lodge-Session", s.ID)
+	setCaller(h, proxyReq{kind: kindSession, peer: p, session: s.ID})
 	app, err = g.dialApp(ctx, a.ID, "/api", h, nil)
 	if err != nil {
 		g.log.Warn("open an app's session", "app", a.ID, "err", err)

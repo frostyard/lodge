@@ -11,6 +11,7 @@ import (
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/tokens"
+	"github.com/frostyard/lodge/kit/lodgeapp"
 )
 
 // kind is a caller kind (docs/specs/app-contract.md, Caller headers).
@@ -34,6 +35,8 @@ type proxyReq struct {
 	// escapedPath is the path on the app's socket, escaped, query apart.
 	escapedPath string
 	token       tokens.Token
+	// session is the session's ID, on the /api upgrade only.
+	session string
 	// headers sets this kind's response headers, on errors too.
 	headers func(http.Header)
 	// modify rewrites the app's response headers.
@@ -58,35 +61,26 @@ func stripClient(h http.Header, device bool) {
 	}
 }
 
-// setCaller sets the caller headers for p's kind.
+// setCaller sets the caller headers for p's kind with the kit's
+// lodgeapp.Caller, which deletes every Lodge-* header first, so lodge and
+// the apps agree on the encoding.
 func setCaller(h http.Header, p proxyReq) {
-	h.Set("Lodge-Caller", string(p.kind))
+	c := lodgeapp.Caller{Kind: lodgeapp.Kind(p.kind)}
 	switch p.kind {
 	case kindSession, kindContent:
-		setIdentity(h, p.peer)
+		c.Login, c.DisplayName, c.NodeID, c.NodeName = p.peer.Login, p.peer.DisplayName, p.peer.NodeID, nodeName(p.peer.NodeName)
+		c.Session = p.session
 	case kindAgent:
-		h.Set("Lodge-Token", p.token.Name)
-		h.Set("Lodge-Scope", p.token.Scope)
+		c.Token, c.Scope = p.token.Name, p.token.Scope
 	case kindDevice:
 		if p.named {
-			h.Set("Lodge-Node-ID", p.peer.NodeID)
-			h.Set("Lodge-Node-Name", nodeName(p.peer.NodeName))
+			c.NodeID, c.NodeName = p.peer.NodeID, nodeName(p.peer.NodeName)
 			if !p.peer.Tagged {
-				h.Set("Lodge-Login", PercentEncode(p.peer.Login))
+				c.Login = p.peer.Login
 			}
 		}
 	}
-}
-
-// setIdentity sets the four identity headers of session and content
-// callers, Lodge-Display-Name only when it is not empty.
-func setIdentity(h http.Header, p peer.Peer) {
-	h.Set("Lodge-Login", PercentEncode(p.Login))
-	if p.DisplayName != "" {
-		h.Set("Lodge-Display-Name", PercentEncode(p.DisplayName))
-	}
-	h.Set("Lodge-Node-ID", p.NodeID)
-	h.Set("Lodge-Node-Name", nodeName(p.NodeName))
+	c.SetHeaders(h)
 }
 
 // nodeName keeps [a-z0-9-] of a node's short name.
@@ -100,26 +94,6 @@ func nodeName(s string) string {
 		}
 		return -1
 	}, s)
-}
-
-// PercentEncode encodes every byte of s outside A-Z a-z 0-9 - . _ ~ @ +
-// (docs/specs/app-contract.md, Caller headers).
-func PercentEncode(s string) string {
-	const hex = "0123456789ABCDEF"
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '-', c == '.', c == '_', c == '~', c == '@', c == '+':
-			b.WriteByte(c)
-		default:
-			b.WriteByte('%')
-			b.WriteByte(hex[c>>4])
-			b.WriteByte(hex[c&15])
-		}
-	}
-	return b.String()
 }
 
 // proxy relays r to the app's socket as p says.

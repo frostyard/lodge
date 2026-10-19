@@ -17,11 +17,26 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/frostyard/lodge/kit/manifest"
 )
+
+// Contracts are the contract majors this lodge speaks.
+var Contracts = []int{manifest.Contract}
+
+// Manifest is an app's app.json, the kit's type.
+type Manifest = manifest.Manifest
+
+// ValidID reports whether id may name an app.
+func ValidID(id string) bool { return manifest.ValidID(id) }
+
+// servable is a path lodge's file rules serve: every segment a plain name.
+var servable = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$`)
 
 // State is an app's state on the rail.
 type State string
@@ -136,33 +151,49 @@ func (r *Registry) Load() error {
 	return nil
 }
 
+// loadOne loads app id with the kit's manifest.Load, then checks what
+// lodge adds: a contract major it speaks, and an index and icon it will
+// serve (no symbolic link on the way, no hidden segment).
 func (r *Registry) loadOne(id string) App {
 	a := App{ID: id, State: Disabled}
 	dir := r.AppDir(id)
-	b, err := os.ReadFile(filepath.Join(dir, "app.json"))
+	m, err := manifest.Load(dir)
 	if err != nil {
-		a.Reason = "app.json cannot be read"
+		a.Manifest = loose(dir)
+		a.Reason = oneLine(err.Error())
 		return a
 	}
-	m, err := ParseManifest(b, id)
 	a.Manifest = m
-	if err != nil {
-		a.Reason = err.Error()
-		return a
-	}
 	web := filepath.Join(dir, "web")
-	if !regularFile(web, "index.html") {
-		a.Reason = "web/index.html is missing"
-		return a
+	switch {
+	case !slices.Contains(Contracts, m.Contract):
+		a.Reason = fmt.Sprintf("contract %d is not one this lodge speaks (%v)", m.Contract, Contracts)
+	case !regularFile(web, "index.html"):
+		a.Reason = "web/index.html is not a regular file"
+	case !servable.MatchString(m.Icon) || !regularFile(web, m.Icon):
+		a.Reason = fmt.Sprintf("its icon web/%s cannot be served", m.Icon)
+	default:
+		a.Key = m.Key
+		a.State, a.Reason = Down, "not polled yet"
 	}
-	if !regularFile(web, m.Icon) {
-		a.Reason = fmt.Sprintf("its icon web/%s is missing", m.Icon)
-		return a
-	}
-	a.Key = m.Key
-	a.State, a.Reason = Down, "not polled yet"
 	return a
 }
+
+// loose reads what it can of a manifest that does not load, so the rail
+// can still name the app.
+func loose(dir string) Manifest {
+	var m Manifest
+	if b, err := os.ReadFile(filepath.Join(dir, "app.json")); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	if utf8Len := len([]rune(m.Name)); utf8Len < 1 || utf8Len > 32 {
+		m.Name = ""
+	}
+	return Manifest{Name: m.Name}
+}
+
+// oneLine joins a multi-line error into one line.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // regularFile reports whether rel names a regular file under dir with no
 // symbolic link on the way.

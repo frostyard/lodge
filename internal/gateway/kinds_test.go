@@ -77,9 +77,6 @@ func TestProxyEncodesIdentity(t *testing.T) {
 	if _, ok := s.Header["Lodge-Display-Name"]; ok {
 		t.Error("an empty display name was sent")
 	}
-	if got := PercentEncode("a b/c%~._-@+\n"); got != "a%20b%2Fc%25~._-@+%0A" {
-		t.Errorf("PercentEncode = %q", got)
-	}
 }
 
 func (h *harness) contentGet(path string, hdr map[string]string) answer {

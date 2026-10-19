@@ -48,7 +48,7 @@ func TestDisabled(t *testing.T) {
 		"contract 2":       {id: "a", manifest: map[string]any{"contract": 2}, reason: "contract 2"},
 		"no contract":      {id: "a", manifest: map[string]any{"contract": nil}, reason: "contract 0"},
 		"id mismatch":      {id: "a", manifest: map[string]any{"id": "b"}, reason: "directory"},
-		"bad id":           {id: "a", manifest: map[string]any{"id": "A"}, reason: "form"},
+		"bad id":           {id: "a", manifest: map[string]any{"id": "A"}, reason: "must match"},
 		"long name":        {id: "a", manifest: map[string]any{"name": strings.Repeat("n", 33)}, reason: "name"},
 		"empty name":       {id: "a", manifest: map[string]any{"name": ""}, reason: "name"},
 		"png icon":         {id: "a", manifest: map[string]any{"icon": "icon.png"}, reason: "icon"},
@@ -57,12 +57,14 @@ func TestDisabled(t *testing.T) {
 		"root user":        {id: "a", manifest: map[string]any{"user": "root"}, reason: "user"},
 		"lodge user":       {id: "a", manifest: map[string]any{"user": "lodge"}, reason: "user"},
 		"bad key":          {id: "a", manifest: map[string]any{"key": "N"}, reason: "key"},
-		"wrong type":       {id: "a", manifest: map[string]any{"content": "yes"}, reason: "parse"},
+		"wrong type":       {id: "a", manifest: map[string]any{"content": "yes"}, reason: "app.json"},
 		"no index":         {id: "a", files: func(d string) { os.Remove(filepath.Join(d, "web/index.html")) }, reason: "index.html"},
 		"no icon":          {id: "a", files: func(d string) { os.Remove(filepath.Join(d, "web/icon.svg")) }, reason: "icon"},
+		"hidden icon":      {id: "a", manifest: map[string]any{"icon": ".i/icon.svg"}, files: hiddenIcon, reason: "cannot be served"},
+		"symlinked dir":    {id: "a", manifest: map[string]any{"icon": "img/icon.svg"}, files: symlinkDir, reason: "cannot be served"},
 		"symlinked index":  {id: "a", files: symlinkIndex, reason: "index.html"},
-		"unparsable":       {id: "a", files: func(d string) { os.WriteFile(filepath.Join(d, "app.json"), []byte("{"), 0o644) }, reason: "parse"},
-		"duplicate member": {id: "a", files: dupMember, reason: "parse"},
+		"unparsable":       {id: "a", files: func(d string) { os.WriteFile(filepath.Join(d, "app.json"), []byte("{"), 0o644) }, reason: "app.json"},
+		"duplicate member": {id: "a", files: dupMember, reason: "app.json"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -91,6 +93,17 @@ func symlinkIndex(dir string) {
 	idx := filepath.Join(dir, "web/index.html")
 	os.Rename(idx, filepath.Join(dir, "real.html"))
 	os.Symlink(filepath.Join(dir, "real.html"), idx)
+}
+
+func hiddenIcon(dir string) {
+	os.MkdirAll(filepath.Join(dir, "web/.i"), 0o755)
+	os.WriteFile(filepath.Join(dir, "web/.i/icon.svg"), []byte("<svg/>"), 0o644)
+}
+
+func symlinkDir(dir string) {
+	os.MkdirAll(filepath.Join(dir, "real"), 0o755)
+	os.WriteFile(filepath.Join(dir, "real/icon.svg"), []byte("<svg/>"), 0o644)
+	os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "web/img"))
 }
 
 func dupMember(dir string) {
