@@ -22,6 +22,7 @@ import (
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/control"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/tokens"
 )
@@ -45,16 +46,18 @@ const usage = `usage: lodgectl [--root DIR] [--json] COMMAND
   token revoke NAME                        revoke one, closing its streams
   sessions                                 the live sessions
   session end ID                           close one
+  usage [--since YYYY-MM-DD]               inference use per app and alias
+  provider key NAME                        set an inference provider's key from stdin; empty removes it
   version                                  lodgectl's version
 
 --root DIR (or LODGE_ROOT) finds the socket under DIR, for the development build.
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 }
 
-func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	fs := flag.NewFlagSet("lodgectl", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
@@ -72,7 +75,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		fmt.Fprintf(stdout, "lodgectl %s (%s)\n", version, commit)
 		return 0
 	}
-	cmd, err := parse(args)
+	cmd, err := parse(args, stdin)
 	if err != nil {
 		fmt.Fprintf(stderr, "lodgectl: %v\n\n%s", err, usage)
 		return 2
@@ -128,7 +131,7 @@ func (cmd command) do(ctx context.Context, c *control.Client, o *out) error {
 	return cmd.show(o, raw)
 }
 
-func parse(args []string) (command, error) {
+func parse(args []string, stdin io.Reader) (command, error) {
 	need := func(n int) error {
 		if len(args) != n {
 			return fmt.Errorf("%s takes no arguments", args[0])
@@ -171,7 +174,23 @@ func parse(args []string) (command, error) {
 		}
 		return command{}, errors.New("session end ID")
 	case "usage":
-		return command{method: "lodge.usage"}, need(1)
+		return parseUsage(args[1:])
+	case "provider":
+		if len(args) == 3 && args[1] == "key" {
+			// The key comes from stdin, never the command line, which
+			// other users can see.
+			b, err := io.ReadAll(io.LimitReader(stdin, 8<<10))
+			if err != nil {
+				return command{}, err
+			}
+			key := strings.TrimSpace(string(b))
+			what := "key set for provider " + args[2]
+			if key == "" {
+				what = "key removed for provider " + args[2]
+			}
+			return command{method: "lodge.providerKey", params: map[string]string{"provider": args[2], "key": key}, show: showDone(what)}, nil
+		}
+		return command{}, errors.New("provider key NAME, with the key on stdin")
 	}
 	return command{}, fmt.Errorf("no command %q", args[0])
 }
@@ -198,6 +217,33 @@ func parseIssue(args []string) (command, error) {
 		return command{}, errors.New("token issue NAME --app ID --scope SCOPE")
 	}
 	return command{method: "lodge.issueToken", params: map[string]string{"name": name, "app": *app, "scope": *scope}, show: showIssued}, nil
+}
+
+func parseUsage(args []string) (command, error) {
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	since := fs.String("since", "", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return command{}, errors.New("usage [--since YYYY-MM-DD]")
+	}
+	params := map[string]string{}
+	if *since != "" {
+		params["since"] = *since
+	}
+	return command{method: "lodge.usage", params: params, show: showUsage}, nil
+}
+
+func showUsage(o *out, raw []byte) error {
+	var list []inference.Sum
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	var rows [][]string
+	for _, u := range list {
+		rows = append(rows, []string{u.App, u.Alias, fmt.Sprint(u.Requests), fmt.Sprint(u.Failures), fmt.Sprint(u.Input), fmt.Sprint(u.Output)})
+	}
+	table(o.stdout, "APP\tALIAS\tREQUESTS\tFAILURES\tINPUT TOKENS\tOUTPUT TOKENS", rows)
+	return nil
 }
 
 func showDone(what string) func(*out, []byte) error {
@@ -259,6 +305,16 @@ func showStatus(o *out, raw []byte) error {
 	}
 	for _, a := range st.Apps {
 		rows = append(rows, []string{"app", a.ID, string(a.State), a.Reason})
+	}
+	for _, p := range st.Providers {
+		state, detail := "available", fmt.Sprintf("%s, %d slots, %d running, %d waiting", p.Type, p.Slots, p.Running, p.Waiting)
+		if !p.Available {
+			state, detail = "unavailable", p.Type+": "+p.Reason
+		}
+		rows = append(rows, []string{"provider", p.Name, state, detail})
+	}
+	if st.InferenceRefused != "" {
+		rows = append(rows, []string{"inference", "config", "refused", st.InferenceRefused})
 	}
 	rows = append(rows, []string{"sessions", fmt.Sprint(st.Sessions), "", ""})
 	table(o.stdout, "KIND\tNAME\tSTATE\tDETAIL", rows)

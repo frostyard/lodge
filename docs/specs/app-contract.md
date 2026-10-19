@@ -301,6 +301,8 @@ app daemons only.
 - **Policy.** Any app may use any alias, unless lodge's configuration
   narrows that app's list.
 - **Browsers never reach inference.** A frontend asks its own daemon.
+- lodge's side (its configuration, the queue, credentials, availability
+  and the usage log) is [inference.md](inference.md).
 
 ### The frontend: `@frostyard/lodge-client`
 

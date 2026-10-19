@@ -134,7 +134,8 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
 
 ## Phase 3 — The inference layer
 
-Implements [app-contract.md's inference](../specs/app-contract.md#inference)
+Implements [app-contract.md's inference](../specs/app-contract.md#inference),
+[inference.md](../specs/inference.md)
 ([ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md))
 and [design/overview.md](../design/overview.md#inference).
 

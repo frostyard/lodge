@@ -74,7 +74,9 @@ Each app runs as its own system user
   `GET /v1/models` and `lodgectl status` show an unreachable provider as
   unavailable, and its aliases fail fast rather than queue.
 
-[specs/app-contract.md](../specs/app-contract.md#inference) pins the API.
+[specs/app-contract.md](../specs/app-contract.md#inference) pins the API,
+and [specs/inference.md](../specs/inference.md) lodge's side of it: the
+configuration, the queue, credentials and the usage log.
 
 ## Consequences
 

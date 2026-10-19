@@ -18,11 +18,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/tokens"
@@ -81,7 +83,16 @@ type Deps struct {
 	Reload func() error
 	// MCPURL is https://LODGE/mcp/<id>, for issueToken's hint.
 	MCPURL func(id string) string
-	Log    *slog.Logger
+	// Inference is the inference layer; nil without one.
+	Inference Inference
+	Log       *slog.Logger
+}
+
+// Inference is what the control socket asks of the inference layer.
+type Inference interface {
+	Status() ([]inference.ProviderStatus, string)
+	Usage(ctx context.Context, since time.Time) ([]inference.Sum, error)
+	SetKey(ctx context.Context, provider, key string) error
 }
 
 // Server serves the control socket.

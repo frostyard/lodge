@@ -28,6 +28,7 @@ import (
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/control"
 	"github.com/frostyard/lodge/internal/gateway"
+	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/store"
 	"github.com/frostyard/lodge/internal/tailnet"
@@ -45,6 +46,7 @@ type options struct {
 	node, contentNode     string
 	listen, contentListen string
 	root                  string
+	config                string
 	logLevel              string
 }
 
@@ -68,6 +70,7 @@ func parseFlags(args []string, stderr io.Writer) (options, bool, error) {
 	fs.StringVar(&o.listen, "listen", "", "plain HTTP for the lodge node's routes, on a loopback address")
 	fs.StringVar(&o.contentListen, "content-listen", "", "plain HTTP for the content routes, on a loopback address")
 	fs.StringVar(&o.root, "root", "", "move every path of the install layout under this directory")
+	fs.StringVar(&o.config, "config", "/etc/lodge/config.json", "lodge's configuration (moved under --root)")
 	fs.StringVar(&o.logLevel, "log-level", "info", "debug, info, warn or error")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -167,11 +170,23 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	ss := sessions.NewRegistry()
 	al := allow.New(db, nil)
 	tk := tokens.New(db, nil)
+
+	// The inference layer (docs/specs/inference.md). Under --root every app
+	// runs as the developer, whose uid then names its app in Lodge-App.
+	devUID := -1
+	if o.root != "" {
+		devUID = os.Getuid()
+	}
+	inf := inference.New(inference.Options{DB: db, Callers: reg, DevUID: devUID, Log: log.With("part", "inference")})
+	configPath := o.layout(o.config)
+	inf.Load(inference.LoadConfig(configPath))
+
 	reload := func() error {
 		if err := reg.Load(); err != nil {
 			return err
 		}
 		reg.Poll(ctx)
+		inf.Load(inference.LoadConfig(configPath))
 		return nil
 	}
 
@@ -194,7 +209,7 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	var mcpBase atomic.Value
 	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
-		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log,
+		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log, Inference: inf,
 		EndToken: func(id int64) int {
 			if g := gw.Load(); g != nil {
 				return g.EndToken(id)
@@ -265,6 +280,24 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		}
 	})
 	log.Info("control socket ready", "path", o.layout("/run/lodge/control.sock"))
+
+	// The inference socket is in group lodge-apps, which lodge is in
+	// (packaging/sysusers.d); under --root, it stays the developer's.
+	group := "lodge-apps"
+	if o.root != "" {
+		group = ""
+	}
+	wg.Go(func() { inf.Run(ctx) })
+	if infLn, err := inference.Listen(o.layout("/run/lodge/inference.sock"), group); err != nil {
+		log.Error("no inference socket", "err", err)
+	} else {
+		wg.Go(func() {
+			if err := inf.Serve(ctx, infLn); err != nil {
+				errs <- fmt.Errorf("inference socket: %w", err)
+			}
+		})
+		log.Info("inference socket ready", "path", o.layout("/run/lodge/inference.sock"))
+	}
 
 	if lodgeNode != nil {
 		if err := upNodes(ctx, lodgeNode, contentNode); err != nil {
