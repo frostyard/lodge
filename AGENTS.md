@@ -60,6 +60,8 @@ Everything but `cmd/lodge`, `kit/` and the two check packages is planned.
   - `kit/mcpsession`: binds MCP sessions to their token.
   - `kit/kittest`: plays lodge's side over a socket, and checks the
     contract's socket rules.
+  - `kit/inference`: an app daemon's client of the inference socket
+    (models, chat completions and responses, streamed or not).
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
   `shell/`: the shell page's UI. Both are TypeScript, built in an nsl
   machine.
