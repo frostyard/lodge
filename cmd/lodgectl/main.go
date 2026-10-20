@@ -21,6 +21,7 @@ import (
 
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/codexauth"
 	"github.com/frostyard/lodge/internal/control"
 	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/sessions"
@@ -50,6 +51,11 @@ const usage = `usage: lodgectl [--root DIR] [--json] COMMAND
   session end ID                           close one
   usage [--since YYYY-MM-DD]               inference use per app and alias
   provider key NAME                        set an inference provider's key from stdin; empty removes it
+  provider login NAME [--client-id ID] [--email EMAIL] [--port N] [--out FILE]
+                                           on a computer with a browser: sign a codex provider in
+                                           to your ChatGPT plan, and write its login file
+  provider import NAME                     on lodge's host: import a login file from stdin
+  provider models NAME                     the models a provider offers
   version                                  lodgectl's version
 
 --root DIR (or LODGE_ROOT) finds the socket under DIR, for the development build.
@@ -76,6 +82,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	if args[0] == "version" {
 		fmt.Fprintf(stdout, "lodgectl %s (%s)\n", version, commit)
 		return 0
+	}
+	if len(args) >= 2 && args[0] == "provider" && args[1] == "login" {
+		// The sign-in needs a browser, not lodge: it runs on the owner's
+		// computer and writes a file for lodge's host.
+		return login(args[2:], stdout, stderr, getenv)
 	}
 	cmd, err := parse(args, stdin)
 	if err != nil {
@@ -192,7 +203,18 @@ func parse(args []string, stdin io.Reader) (command, error) {
 			}
 			return command{method: "lodge.providerKey", params: map[string]string{"provider": args[2], "key": key}, show: showDone(what)}, nil
 		}
-		return command{}, errors.New("provider key NAME, with the key on stdin")
+		if len(args) == 3 && args[1] == "import" {
+			var l codexauth.Login
+			if err := json.UnmarshalRead(io.LimitReader(stdin, 1<<20), &l); err != nil {
+				return command{}, fmt.Errorf("provider import NAME reads a login file from lodgectl provider login on stdin: %w", err)
+			}
+			return command{method: "lodge.providerImport", params: map[string]any{"provider": args[2], "login": l}, show: showImported(args[2])}, nil
+		}
+		if len(args) == 3 && args[1] == "models" {
+			return command{method: "lodge.providerModels", params: map[string]string{"provider": args[2]}, show: showModels}, nil
+		}
+		return command{}, errors.New("provider key NAME (the key on stdin), provider import NAME (the login file on stdin), " +
+			"provider models NAME, or provider login NAME")
 	}
 	return command{}, fmt.Errorf("no command %q", args[0])
 }
@@ -325,6 +347,9 @@ func showStatus(o *out, raw []byte) error {
 		if !p.Available {
 			state, detail = "unavailable", p.Type+": "+p.Reason
 		}
+		if p.Login != "" {
+			detail += "; signed in as " + p.Login
+		}
 		rows = append(rows, []string{"provider", p.Name, state, detail})
 	}
 	if st.InferenceRefused != "" {
@@ -434,5 +459,32 @@ func showSessions(o *out, raw []byte) error {
 		rows = append(rows, []string{s.ID, s.App, s.Login, s.NodeName, when(s.Started), s.SeenAt.In(here()).Format("15:04:05")})
 	}
 	table(o.stdout, "ID\tAPP\tLOGIN\tNODE\tSTARTED\tSEEN", rows)
+	return nil
+}
+
+func showImported(name string) func(*out, []byte) error {
+	return func(o *out, raw []byte) error {
+		var r struct {
+			Account  string `json:"account"`
+			ClientID string `json:"client_id"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return err
+		}
+		fmt.Fprintf(o.stdout, "provider %s is signed in as %s (client %s); delete the login file you imported\n", name, r.Account, r.ClientID)
+		return nil
+	}
+}
+
+func showModels(o *out, raw []byte) error {
+	var list []inference.Model
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	var rows [][]string
+	for _, m := range list {
+		rows = append(rows, []string{m.ID, m.Name})
+	}
+	table(o.stdout, "MODEL\tNAME", rows)
 	return nil
 }

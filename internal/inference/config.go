@@ -88,16 +88,21 @@ func (c Config) Validate() error {
 			bad("provider name %q must match [a-z][a-z0-9-]{0,31}", name)
 		}
 		switch p.Type {
-		case TypeOpenAI:
-			u, err := url.Parse(p.BaseURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || !strings.HasSuffix(u.Path, "/v1") ||
-				u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-				bad("provider %s: baseURL %q must be an http or https URL ending in /v1", name, p.BaseURL)
+		case TypeOpenAI, TypeCodex:
+			if p.Type == TypeOpenAI || p.BaseURL != "" {
+				u, err := url.Parse(p.BaseURL)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || !strings.HasSuffix(u.Path, "/v1") ||
+					u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+					bad("provider %s: baseURL %q must be an http or https URL ending in /v1", name, p.BaseURL)
+				}
 			}
 			if p.Slots < 1 || p.Slots > 64 {
 				bad("provider %s: slots must be 1 to 64", name)
 			}
-		case TypeCopilot, TypeCodex:
+			if p.Type == TypeCodex && p.Home {
+				bad("provider %s: a codex provider is OpenAI's, not on the owner's own hardware", name)
+			}
+		case TypeCopilot:
 		default:
 			bad("provider %s: type %q is not openai, copilot or codex", name, p.Type)
 		}

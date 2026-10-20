@@ -22,7 +22,9 @@ Status (2026-10-19):
   two checks passed on 2026-10-19; the other checks on the user's devices
   are still to come.
 - **Phase 3 is merged,** and the `local` provider is reachable from lodge's
-  host. The Copilot and Codex adapters are not built until their terms are
+  host. The Codex adapter is built on Sign in with ChatGPT's plan usage
+  ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md),
+  2026-10-20). The Copilot adapter is not built until its terms are
   checked.
 - **Phase 4:** the new-app skill is built. Mail's side is frostmail's
   [plan 0011](https://github.com/frostyard/frostmail/blob/main/docs/plans/0011-m8-mail-in-lodge.md),
@@ -186,6 +188,11 @@ and [design/overview.md](../design/overview.md#inference).
 - **Copilot and Codex:** check each provider's terms for subscription
   logins used from third-party software. Build an adapter only for a
   provider that allows it, and drop the rest.
+  - **Codex: built (2026-10-20).** OpenAI offers ChatGPT plan usage to
+    open-source and locally hosted apps through Sign in with ChatGPT
+    ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md);
+    [specs/inference.md](../specs/inference.md#the-codex-provider)).
+  - **Copilot:** not checked yet.
 - **The kit's inference client**, with `Lodge-Priority`.
 - **Done when:**
   - an app daemon streams a chat completion through `local`;
@@ -364,9 +371,10 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 - **Packaging.** Debs through apt-publisher, or a sysext, with the
   `sysusers.d` entries and socket units. Phase 2 deploys with the units
   alone. Decide before Phase 4 brings a second app.
-- **The Copilot and Codex adapters.** Subscription logins used from
-  third-party software are a terms-of-service grey area. Verify per
-  provider in Phase 3.
+- **The Copilot adapter.** Subscription logins used from third-party
+  software are a terms-of-service grey area. Verify in Phase 3. (Codex is
+  resolved by
+  [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md).)
 - **Where the client is published:** npm, GitHub Packages, or a release
   tarball pinned with its hash. Decide in Phase 1.
 

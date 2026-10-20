@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/frostyard/lodge/internal/codexauth"
 )
 
 // Limits (docs/specs/inference.md).
@@ -59,6 +61,9 @@ type Options struct {
 	Client *http.Client
 	Log    *slog.Logger     // [discard]
 	Now    func() time.Time // [time.Now]
+	// Auth is the ChatGPT sign-in codex providers refresh with
+	// [codexauth.OpenAI].
+	Auth codexauth.Endpoints
 }
 
 // Provider is one configured provider with its queue and availability.
@@ -116,6 +121,10 @@ type Server struct {
 	client  *http.Client
 	log     *slog.Logger
 	now     func() time.Time
+	auth    codexauth.Endpoints
+	// loginMu serializes codex sign-ins' refreshes, whose refresh tokens
+	// rotate.
+	loginMu sync.Mutex
 
 	cur   atomic.Pointer[state]
 	check chan struct{}
@@ -138,7 +147,10 @@ func New(o Options) *Server {
 			IdleConnTimeout:       90 * time.Second,
 		}}
 	}
-	s := &Server{db: o.DB, callers: o.Callers, devUID: o.DevUID, client: o.Client, log: o.Log, now: o.Now,
+	if o.Auth == (codexauth.Endpoints{}) {
+		o.Auth = codexauth.OpenAI
+	}
+	s := &Server{db: o.DB, callers: o.Callers, devUID: o.DevUID, client: o.Client, log: o.Log, now: o.Now, auth: o.Auth,
 		check: make(chan struct{}, 1)}
 	s.cur.Store(&state{providers: map[string]*Provider{}})
 	return s
@@ -167,7 +179,7 @@ func (s *Server) Load(cfg Config, err error) {
 				p.reason = "not checked yet"
 				p.checked, p.once = make(chan struct{}), new(sync.Once)
 			}
-			if pc.Type != TypeOpenAI {
+			if pc.Type == TypeCopilot {
 				p.available, p.reason = false, "not built: its terms are to verify (ADR-0011)"
 				p.once.Do(func() { close(p.checked) })
 			}
@@ -202,11 +214,12 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-// CheckAll checks every openai provider's reachability.
+// CheckAll checks every built provider: an openai provider's
+// reachability, and a codex provider's sign-in too.
 func (s *Server) CheckAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, p := range s.state().providers {
-		if p.Cfg.Type != TypeOpenAI {
+		if p.Cfg.Type == TypeCopilot {
 			continue
 		}
 		wg.Go(func() {
@@ -223,8 +236,11 @@ func (s *Server) CheckAll(ctx context.Context) {
 	wg.Wait()
 }
 
-// probe asks GET <baseURL>/models, with the key.
+// probe asks GET <baseURL>/models, with the key or the sign-in.
 func (s *Server) probe(ctx context.Context, p *Provider) (bool, string) {
+	if p.Cfg.Type == TypeCodex {
+		return s.probeCodex(ctx, p)
+	}
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Cfg.BaseURL+"/models", nil)
@@ -253,6 +269,8 @@ type ProviderStatus struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitzero"`
 	Slots     int    `json:"slots"`
+	// Login names a codex provider's signed-in account and client.
+	Login string `json:"login,omitzero"`
 	Load
 }
 
@@ -263,7 +281,11 @@ func (s *Server) Status() ([]ProviderStatus, string) {
 	for _, name := range slices.Sorted(maps.Keys(st.providers)) {
 		p := st.providers[name]
 		ok, reason := p.state()
-		out = append(out, ProviderStatus{Name: name, Type: p.Cfg.Type, Available: ok, Reason: reason, Slots: p.Cfg.Slots, Load: p.Queue.Load()})
+		ps := ProviderStatus{Name: name, Type: p.Cfg.Type, Available: ok, Reason: reason, Slots: p.Cfg.Slots, Load: p.Queue.Load()}
+		if p.Cfg.Type == TypeCodex {
+			ps.Login = s.loginLabel(context.Background(), name)
+		}
+		out = append(out, ps)
 	}
 	refused := ""
 	if st.err != nil {
@@ -505,6 +527,10 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, app, endpoint s
 		return
 	}
 	defer release()
+	if p.Cfg.Type == TypeCodex {
+		done(s.forwardCodex(w, r, p, endpoint, members, stream, &rec))
+		return
+	}
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, p.Cfg.BaseURL+endpoint, bytes.NewReader(out))
 	if err != nil {

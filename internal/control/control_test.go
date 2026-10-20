@@ -14,6 +14,7 @@ import (
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
+	"github.com/frostyard/lodge/internal/codexauth"
 	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
@@ -290,6 +291,7 @@ func TestMalformedRequests(t *testing.T) {
 type fakeInference struct {
 	since time.Time
 	keys  map[string]string
+	login codexauth.Login
 }
 
 func (f *fakeInference) Status() ([]inference.ProviderStatus, string) {
@@ -299,6 +301,27 @@ func (f *fakeInference) Status() ([]inference.ProviderStatus, string) {
 func (f *fakeInference) Usage(_ context.Context, since time.Time) ([]inference.Sum, error) {
 	f.since = since
 	return []inference.Sum{{App: "mail", Alias: "local", Requests: 2, Input: 10, Output: 4}}, nil
+}
+
+func (f *fakeInference) ImportLogin(_ context.Context, provider string, l codexauth.Login) error {
+	switch provider {
+	case "home":
+		return inference.ErrNotCodex
+	case "plan":
+		if err := l.Validate(); err != nil {
+			return err
+		}
+		f.login = l
+		return nil
+	}
+	return inference.ErrNoProvider
+}
+
+func (f *fakeInference) Models(_ context.Context, provider string) ([]inference.Model, error) {
+	if provider != "plan" {
+		return nil, inference.ErrNoProvider
+	}
+	return []inference.Model{{ID: "gpt-x", Name: "GPT X"}}, nil
 }
 
 func (f *fakeInference) SetKey(_ context.Context, provider, key string) error {
@@ -338,6 +361,34 @@ func TestInferenceMethods(t *testing.T) {
 	}
 	if err := f.c.Call(ctx, "lodge.providerKey", map[string]string{"provider": "home", "key": "two words"}, nil); code(err) != CodeInvalidParams {
 		t.Errorf("a key with a space: %v", err)
+	}
+
+	l := codexauth.Login{Type: codexauth.Type, ClientID: "oaiapp_1", Account: "user-1", Email: "owner@example.com",
+		Scope: codexauth.Scope, AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)}
+	var imported struct {
+		Account  string `json:"account"`
+		ClientID string `json:"client_id"`
+	}
+	if err := f.c.Call(ctx, "lodge.providerImport", map[string]any{"provider": "plan", "login": l}, &imported); err != nil ||
+		inf.login.RefreshToken != "rt" || imported.Account != "owner@example.com" || imported.ClientID != "oaiapp_1" {
+		t.Errorf("import a sign-in: %v %+v", err, imported)
+	}
+	if err := f.c.Call(ctx, "lodge.providerImport", map[string]any{"provider": "home", "login": l}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("a sign-in for an openai provider: %v", err)
+	}
+	if err := f.c.Call(ctx, "lodge.providerImport", map[string]any{"provider": "nosuch", "login": l}, nil); code(err) != CodeNotFound {
+		t.Errorf("a sign-in for no provider: %v", err)
+	}
+	l.Scope = "openid"
+	if err := f.c.Call(ctx, "lodge.providerImport", map[string]any{"provider": "plan", "login": l}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("a sign-in without the plan's scope: %v", err)
+	}
+	var models []inference.Model
+	if err := f.c.Call(ctx, "lodge.providerModels", map[string]string{"provider": "plan"}, &models); err != nil || len(models) != 1 {
+		t.Errorf("models = %+v %v", models, err)
+	}
+	if err := f.c.Call(ctx, "lodge.providerModels", map[string]string{"provider": "nosuch"}, nil); code(err) != CodeNotFound {
+		t.Errorf("models of no provider: %v", err)
 	}
 }
 

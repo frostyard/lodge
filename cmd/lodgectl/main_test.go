@@ -33,8 +33,9 @@ func serve(t *testing.T) string {
 	reg.Load()
 	inf := inference.New(inference.Options{DB: db, DevUID: -1})
 	inf.Load(inference.Config{
-		Providers: map[string]inference.ProviderConfig{"home": {Type: inference.TypeOpenAI, BaseURL: "http://127.0.0.1:1/v1", Slots: 4, Home: true}},
-		Aliases:   map[string]inference.AliasConfig{"local": {Provider: "home", Model: "MODEL"}},
+		Providers: map[string]inference.ProviderConfig{"home": {Type: inference.TypeOpenAI, BaseURL: "http://127.0.0.1:1/v1", Slots: 4, Home: true},
+			"plan": {Type: inference.TypeCodex, BaseURL: "http://127.0.0.1:1/v1", Slots: 2}},
+		Aliases: map[string]inference.AliasConfig{"local": {Provider: "home", Model: "MODEL"}},
 	}, nil)
 	ag := agents.New(agents.Options{Path: "/run/lodge/agent.sock", DevUID: -1, Lookup: func(name string) (int, error) {
 		if name == "frostporter" {
@@ -185,5 +186,36 @@ func TestAgentTokenIssue(t *testing.T) {
 	}
 	if code, _, errs := lodgectl(t, root, "token", "issue", "x", "--app", "notes", "--scope", "s", "--agent", "ghost"); code != 1 || !strings.Contains(errs, "not an agent") {
 		t.Errorf("an unlisted agent: %d %q", code, errs)
+	}
+}
+
+// A login file comes in on stdin, and its tokens never show again.
+func TestProviderImport(t *testing.T) {
+	root := serve(t)
+	login := `{"type":"codex","client_id":"oaiapp_1","account":"user-1","email":"owner@example.com",` +
+		`"scope":"openid chatgpt.tokens.use.direct","access_token":"at-secret","refresh_token":"rt-secret","expires_at":"2099-01-01T00:00:00Z"}` // never due, so no refresh reaches OpenAI
+	if code, out, errs := lodgectlIn(t, root, login, "provider", "import", "plan"); code != 0 ||
+		!strings.Contains(out, "provider plan is signed in as owner@example.com (client oaiapp_1)") {
+		t.Fatalf("provider import: %d %q %q", code, out, errs)
+	}
+	code, out, _ := lodgectl(t, root, "status")
+	if code != 0 || !strings.Contains(out, "signed in as owner@example.com (client oaiapp_1)") || strings.Contains(out, "secret") {
+		t.Errorf("status: %d %q", code, out)
+	}
+	if code, _, errs := lodgectlIn(t, root, login, "provider", "import", "home"); code != 1 || !strings.Contains(errs, "not of type codex") {
+		t.Errorf("a sign-in for an openai provider: %d %q", code, errs)
+	}
+	if code, _, _ := lodgectlIn(t, root, "not json", "provider", "import", "plan"); code != 2 {
+		t.Errorf("a file that is not a login: exit %d", code)
+	}
+	if code, _, errs := lodgectlIn(t, root, strings.Replace(login, "chatgpt.tokens.use.direct", "", 1), "provider", "import", "plan"); code != 1 ||
+		!strings.Contains(errs, "chatgpt.tokens.use.direct") {
+		t.Errorf("a sign-in without the plan's scope: %d %q", code, errs)
+	}
+	if code, _, errs := lodgectl(t, root, "provider", "models", "plan"); code != 1 || !strings.Contains(errs, "GET /models") {
+		t.Errorf("models of an unreachable provider: %d %q", code, errs)
+	}
+	if code, _, _ := lodgectl(t, root, "provider", "login"); code != 2 {
+		t.Errorf("provider login without a name: exit %d", code)
 	}
 }

@@ -32,6 +32,7 @@ frostyard/core's
 - [0012 — The kit shares the RPC runtime, not the generator](adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)
 - [0013 — The companion opens beside the current app](adr/0013-the-companion-opens-beside-the-current-app.md)
 - [0014 — Agents on lodge's host use a local agent socket](adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+- [0015 — Codex uses the owner's ChatGPT plan through Sign in with ChatGPT](adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)
 
 ### Design
 
