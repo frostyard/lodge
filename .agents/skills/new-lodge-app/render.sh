@@ -10,7 +10,7 @@
 #   USER       its system user (default frost<ID>): ^[a-z_][a-z0-9_-]{0,31}$
 #   KEY        its switcher key, one letter, or "" for none (default "")
 #   MODULE     its Go module path (default github.com/frostyard/<USER>)
-#   LODGE_REF  the lodge-client release (client/vX.Y.Z, default client/v0.1.0)
+#   LODGE_REF  the lodge-client release (client/vX.Y.Z, default client/v0.2.0)
 #              or the lodge commit its web bundle pins lodge-client at
 #
 # DEST must not exist, or be empty: render.sh never overwrites a file.
@@ -23,7 +23,7 @@ name=${3:?$usage}
 user=${4:-frost$id}
 key=${5:-}
 module=${6:-github.com/frostyard/$user}
-ref=${7:-client/v0.1.0}
+ref=${7:-client/v0.2.0}
 here=$(cd "$(dirname "$0")" && pwd)
 
 fail() {

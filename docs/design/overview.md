@@ -31,7 +31,7 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/inference.md](../specs/inference.md).
 
 **Status: Phases 1 to 3 and 6 built (2026-10-19).**
-- The kit and the client are released as `kit/v0.1.0` and `client/v0.1.0`.
+- The kit and the client are released as `kit/v0.2.0` and `client/v0.2.0`.
 - lodge v1 (the nodes, the gateway, the control socket, the shell, the
   development build and packaging) and the inference layer are merged, and
   run on lodge's first host.

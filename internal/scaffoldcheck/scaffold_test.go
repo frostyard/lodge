@@ -97,7 +97,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 
 	t.Run("the web bundle", func(t *testing.T) {
 		for path, want := range map[string]string{
-			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.1.0&path:client"`,
+			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.2.0&path:client"`,
 			"web/vite.config.ts":      `base: "/app/tasks/"`,
 			"web/src/main.ts":         `connectLodge({ app: "tasks" })`,
 			"web/index.html":          `<script type="module" src="/src/main.ts"></script>`,
