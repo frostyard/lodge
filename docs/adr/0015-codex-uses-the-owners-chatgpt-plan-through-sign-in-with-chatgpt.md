@@ -32,9 +32,11 @@ ChatGPT plan usage for open-source and locally hosted apps
 lodge is open source and self-hosted, and the owner asked on 2026-10-20 to
 use their plan for Porter. Its plan usage is still a preview:
 - it takes only the Responses API;
-- it takes functions only grouped in namespaces;
 - it refuses several fields: `temperature`, `max_output_tokens`,
-  `background`, and others.
+  `background`, and others;
+- its docs say functions go grouped in namespaces, but a live check found
+  plain functions accepted and app-named namespaces such as `notes`
+  refused as reserved.
 
 ## Decision
 
@@ -58,9 +60,9 @@ use their plan for Porter. Its plan usage is still a preview:
   command to sign in again. The computer that signed in never refreshes
   the copy it made.
 - **Apps keep the chat completions API.** lodge translates each request
-  into a Responses request (system messages become `instructions`, tools
-  go in namespaces), and translates the event stream back into a chat
-  completion or its chunks. An app that sends `/v1/responses` gets its
+  into a Responses request: system messages become `instructions`, and
+  tools go as plain functions under the app's names. It translates the
+  event stream back into a chat completion or its chunks. An app that sends `/v1/responses` gets its
   request fitted to plan usage. The exact rules are in
   [specs/inference.md](../specs/inference.md#the-codex-provider).
 - **Plan usage errors stop the request; they never fall back.** A usage
@@ -81,9 +83,10 @@ use their plan for Porter. Its plan usage is still a preview:
 - The sign-in needs a browser, so it never happens on lodge's host. After
   a sign-out (a revoked app, 30 days without a refresh), the owner runs
   the login again on their computer and imports it.
-- Plan usage is a preview. Its limits, such as functions only in
-  namespaces, may change. They live in one translation file and its tests,
-  and a refused field answers 400 with the field's name.
+- Plan usage is a preview, and its docs and behavior already differ on
+  tools. Its limits may change. They live in one translation file and its
+  tests, and `TestCodexLive` checks them against the owner's plan. A
+  refused field answers 400 with the field's name.
 - Background work, such as Porter's routines, counts against the same
   plan limits as the owner's own use of ChatGPT and Codex.
 

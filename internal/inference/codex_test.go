@@ -117,8 +117,13 @@ func answer(evs ...string) func(int, map[string]any) (int, []string) {
 	return func(int, map[string]any) (int, []string) { return http.StatusOK, evs }
 }
 
-const completedText = `{"type":"response.completed","response":{"id":"r1","model":"gpt-test","status":"completed",` +
-	`"output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":12,"output_tokens":5}}}`
+// An unstored response's events, as plan usage sends them: the items
+// come in output_item.done, and response.completed's output is empty.
+const (
+	itemText      = `{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`
+	completedText = `{"type":"response.completed","response":{"id":"r1","model":"gpt-test","status":"completed",` +
+		`"output":[],"usage":{"input_tokens":12,"output_tokens":5}}}`
+)
 
 type codexHarness struct {
 	*harness
@@ -179,13 +184,12 @@ func (h *codexHarness) usage() Sum {
 	return sums[0]
 }
 
-func TestCodexChatCallsToolsByNamespace(t *testing.T) {
+func TestCodexChatCallsTools(t *testing.T) {
 	h := newCodexHarness(t, true)
 	h.plan.script = answer(
 		`{"type":"response.created","response":{"id":"r1","model":"gpt-test"}}`,
-		`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c2","namespace":"notes","name":"read_note","arguments":"{\"path\":\"a.md\"}"}}`,
-		`{"type":"response.completed","response":{"id":"r1","model":"gpt-test","status":"completed","output":[`+
-			`{"type":"function_call","call_id":"c2","namespace":"notes","name":"read_note","arguments":"{\"path\":\"a.md\"}"}],`+
+		`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c2","name":"notes__read_note","arguments":"{\"path\":\"a.md\"}"}}`,
+		`{"type":"response.completed","response":{"id":"r1","model":"gpt-test","status":"completed","output":[],`+
 			`"usage":{"input_tokens":12,"output_tokens":5}}}`)
 	body := `{"model":"smart","temperature":0.2,"max_tokens":100,"chat_template_kwargs":{"enable_thinking":false},"tool_choice":"required",
 		"messages":[{"role":"system","content":"You are Porter."},{"role":"user","content":"read a.md"},
@@ -240,14 +244,17 @@ func TestCodexChatCallsToolsByNamespace(t *testing.T) {
 		}
 	}
 	tools, _ := json.Marshal(b["tools"])
-	for _, want := range []string{`"type":"namespace"`, `"name":"notes"`, `"name":"read_note"`, `"name":"porter"`, `"name":"now"`,
-		`"name":"functions"`, `"name":"plain"`} {
+	for _, want := range []string{`"type":"function"`, `"name":"notes__read_note"`, `"name":"porter__now"`, `"name":"plain"`,
+		`"properties":{}`} {
 		if !strings.Contains(string(tools), want) {
 			t.Errorf("tools lack %s: %s", want, tools)
 		}
 	}
+	if strings.Contains(string(tools), "namespace") {
+		t.Errorf("tools are grouped in namespaces, which plan usage reserves: %s", tools)
+	}
 	input, _ := json.Marshal(b["input"])
-	for _, want := range []string{`"role":"user"`, `"type":"function_call"`, `"call_id":"c1"`, `"namespace":"porter"`, `"name":"now"`,
+	for _, want := range []string{`"role":"user"`, `"type":"function_call"`, `"call_id":"c1"`, `"name":"porter__now"`,
 		`"type":"function_call_output"`, `"output":"Monday"`} {
 		if !strings.Contains(string(input), want) {
 			t.Errorf("input lacks %s: %s", want, input)
@@ -322,7 +329,7 @@ func TestCodexRefreshesBeforeExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.s.CheckAll(t.Context()) // Run does, when an import asks
-	h.plan.script = answer(completedText)
+	h.plan.script = answer(itemText, completedText)
 	for range 2 {
 		if r := h.do(http.MethodPost, "/v1/chat/completions", `{"model":"smart","messages":[{"role":"user","content":"hi"}]}`, nil); r.status != 200 ||
 			!strings.Contains(r.body, "Hello") {
@@ -340,7 +347,7 @@ func TestCodexRefreshesBeforeExpiry(t *testing.T) {
 
 func TestCodexRefreshesOnceOn401(t *testing.T) {
 	h := newCodexHarness(t, true)
-	h.plan.script = answer(completedText)
+	h.plan.script = answer(itemText, completedText)
 	h.plan.reject401 = 1
 	if r := h.do(http.MethodPost, "/v1/chat/completions", `{"model":"smart","messages":[{"role":"user","content":"hi"}]}`, nil); r.status != 200 {
 		t.Fatalf("chat: %d %s", r.status, r.body)
@@ -414,7 +421,7 @@ func TestCodexPlanErrors(t *testing.T) {
 
 func TestCodexResponsesEndpoint(t *testing.T) {
 	h := newCodexHarness(t, true)
-	h.plan.script = answer(`{"type":"response.output_text.delta","delta":"Hello"}`, completedText)
+	h.plan.script = answer(`{"type":"response.output_text.delta","delta":"Hello"}`, itemText, completedText)
 	r := h.do(http.MethodPost, "/v1/responses",
 		`{"model":"smart","temperature":1,"background":true,"input":[{"role":"system","content":"Be brief."},{"role":"user","content":"hi"}]}`, nil)
 	if r.status != 200 || r.header.Get("Content-Type") != "application/json" {
@@ -423,9 +430,13 @@ func TestCodexResponsesEndpoint(t *testing.T) {
 	var got struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
+		Output []struct {
+			Type string `json:"type"`
+		} `json:"output"`
 	}
-	if err := json.Unmarshal([]byte(r.body), &got); err != nil || got.ID != "r1" || got.Status != "completed" {
-		t.Errorf("answer %q", r.body)
+	if err := json.Unmarshal([]byte(r.body), &got); err != nil || got.ID != "r1" || got.Status != "completed" ||
+		len(got.Output) != 1 || got.Output[0].Type != "message" {
+		t.Errorf("answer %q: the stream's items belong in output", r.body)
 	}
 	b := h.plan.last(t).Body
 	if b["store"] != false || b["stream"] != true || b["temperature"] != nil || b["background"] != nil {
@@ -488,5 +499,19 @@ func TestCodexConfig(t *testing.T) {
 	}
 	if u, _ := url.Parse(CodexBaseURL); u.Host != "api.openai.com" {
 		t.Error("plan usage goes to the public Responses API")
+	}
+}
+
+// A response.completed that carries its output, as a stored response's
+// does, answers as well as the items do.
+func TestCodexReadsACompletedOutput(t *testing.T) {
+	h := newCodexHarness(t, true)
+	h.plan.script = answer(`{"type":"response.completed","response":{"id":"r1","model":"gpt-test","status":"completed",` +
+		`"output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}`)
+	for _, stream := range []bool{false, true} {
+		r := h.do(http.MethodPost, "/v1/chat/completions", fmt.Sprintf(`{"model":"smart","stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream), nil)
+		if r.status != 200 || !strings.Contains(r.body, "Hello") {
+			t.Errorf("stream %v: %d %s", stream, r.status, r.body)
+		}
 	}
 }

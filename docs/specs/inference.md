@@ -213,16 +213,19 @@ open-source and locally hosted apps
     `function_call_output` items.
   - A message with any other role, or content of another type, answers 400
     `unsupported`.
-  - Tools go in namespaces: `APP__TOOL` becomes function `TOOL` in
-    namespace `APP`, and a name without `__` goes in namespace
-    `functions`. A call's `function_call` item carries its namespace back.
+  - Tools go as plain `function` tools under the app's own names, such as
+    `notes__read_note`. Plan usage reserves namespaces like `notes`, and
+    refuses a namespace of that name (checked live on 2026-10-20).
   - `tool_choice` keeps `auto`, `none` and `required`; one named function
     becomes `required`.
   - `parallel_tool_calls` passes, and `reasoning_effort` becomes
     `reasoning.effort`.
   - Every other member is dropped, such as `temperature`, `max_tokens` and
     `chat_template_kwargs`.
-- **The answer comes back in the shape the app asked for:**
+- **The answer comes back in the shape the app asked for.** An unstored
+  response's `response.completed` has an empty `output`, so lodge
+  assembles the answer from the `response.output_item.done` events (and
+  from `output` when a provider fills it):
   - A chat completion is answered once `response.completed` (or
     `response.incomplete`) arrives:
     - text becomes `content`;
@@ -246,7 +249,8 @@ open-source and locally hosted apps
   - `system` messages become `developer` messages.
 
   A streamed request gets the events as they come. Otherwise the answer is
-  the response object of `response.completed`.
+  the response object of `response.completed`, with the stream's items as
+  its `output`.
 - **Errors:** plan usage errors answer in OpenAI's error shape, with the
   plan's `code`:
 

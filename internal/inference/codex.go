@@ -262,13 +262,12 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 	members map[string]jsontext.Value, stream bool, rec *Record) int {
 	ctx := r.Context()
 	var payload []byte
-	var names *toolNames
 	var chat *chatRequest
 	var err error
 	if endpoint == "/chat/completions" {
 		var body []byte
 		if body, err = json.Marshal(members); err == nil {
-			payload, names, chat, err = chatToResponses(body)
+			payload, chat, err = chatToResponses(body)
 		}
 	} else {
 		payload, err = sanitizeResponses(members)
@@ -359,7 +358,7 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		c := &chunker{w: w, flush: flush, names: names, created: s.now().Unix(),
+		c := &chunker{w: w, flush: flush, created: s.now().Unix(),
 			usage: chat.StreamOptions != nil && chat.StreamOptions.IncludeUsage}
 		finished := false
 		err := events(resp.Body, func(ev event, _ []byte) bool {
@@ -382,12 +381,16 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 
 	case chat != nil:
 		var final *responseObject
+		var items []outputItem
 		var failed *apiErr
 		_ = events(resp.Body, func(ev event, _ []byte) bool {
 			first()
 			if e, ok := ev.failure(); ok {
 				failed = &e
 				return false
+			}
+			if ev.Type == "response.output_item.done" && ev.Item != nil {
+				items = append(items, *ev.Item)
 			}
 			if ev.Type == "response.completed" || ev.Type == "response.incomplete" {
 				final = ev.Response
@@ -397,7 +400,7 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 		})
 		return s.answerWhole(w, final, failed, func(o *responseObject) any {
 			setUsage(o)
-			return chatCompletion(o, names, s.now().Unix())
+			return chatCompletion(o, items, s.now().Unix())
 		})
 
 	case stream:
@@ -426,8 +429,9 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 		return http.StatusOK
 
 	default:
-		var final jsontext.Value
+		var final map[string]jsontext.Value
 		var obj *responseObject
+		var items []jsontext.Value
 		var failed *apiErr
 		_ = events(resp.Body, func(ev event, raw []byte) bool {
 			first()
@@ -435,18 +439,27 @@ func (s *Server) forwardCodex(w http.ResponseWriter, r *http.Request, p *Provide
 				failed = &e
 				return false
 			}
-			if ev.Type == "response.completed" || ev.Type == "response.incomplete" {
-				var m map[string]jsontext.Value
-				if json.Unmarshal(raw, &m) == nil {
-					final = m["response"]
-				}
+			var m map[string]jsontext.Value
+			if json.Unmarshal(raw, &m) != nil {
+				return true
+			}
+			switch ev.Type {
+			case "response.output_item.done":
+				items = append(items, m["item"])
+			case "response.completed", "response.incomplete":
+				_ = json.Unmarshal(m["response"], &final)
 				obj = ev.Response
 				return false
 			}
 			return true
 		})
-		if obj != nil && len(final) == 0 {
+		if obj != nil && final == nil {
 			obj = nil
+		}
+		if obj != nil && len(obj.Output) == 0 && len(items) > 0 {
+			// An unstored response's completed event has no output: give
+			// the app the items its stream sent.
+			final["output"], _ = json.Marshal(items)
 		}
 		return s.answerWhole(w, obj, failed, func(o *responseObject) any {
 			setUsage(o)

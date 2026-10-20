@@ -22,50 +22,6 @@ var unsupported = []string{"background", "conversation", "max_output_tokens", "m
 	"multi_agent", "prompt", "prompt_cache_retention", "safety_identifier", "temperature", "top_logprobs", "top_p",
 	"truncation", "user", "previous_response_id"}
 
-// defaultNamespace holds the functions whose names name no app.
-const defaultNamespace = "functions"
-
-// toolNames maps the functions a Responses answer may call back to the
-// app's names: plan usage takes functions grouped in namespaces, so
-// "notes__read_note" goes as read_note in namespace notes.
-type toolNames struct {
-	byPair map[[2]string]string // {namespace, name} → the app's name
-	byName map[string][]string  // name → the app's names
-}
-
-// split is an app's function name as a namespace and a name.
-func split(full string) (ns, name string) {
-	if ns, name, ok := strings.Cut(full, "__"); ok && ns != "" && name != "" {
-		return ns, name
-	}
-	return defaultNamespace, full
-}
-
-func (n *toolNames) add(full string) {
-	ns, name := split(full)
-	n.byPair[[2]string{ns, name}] = full
-	n.byName[name] = append(n.byName[name], full)
-}
-
-// app names a called function as the app knows it.
-func (n *toolNames) app(ns, name string) string {
-	if ns == "" {
-		if a, b, ok := strings.Cut(name, "."); ok {
-			ns, name = a, b
-		}
-	}
-	if full, ok := n.byPair[[2]string{ns, name}]; ok {
-		return full
-	}
-	if list := n.byName[name]; len(list) == 1 {
-		return list[0]
-	}
-	if ns != "" && ns != defaultNamespace {
-		return ns + "__" + name
-	}
-	return name
-}
-
 // chatMessage is a chat completion's message, as lodge reads it.
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -163,12 +119,11 @@ func userContent(v jsontext.Value) (any, error) {
 
 // chatToResponses translates a chat completion request, whose model is
 // already the provider's, into a Responses request.
-func chatToResponses(body []byte) ([]byte, *toolNames, *chatRequest, error) {
+func chatToResponses(body []byte) ([]byte, *chatRequest, error) {
 	var in chatRequest
 	if err := json.Unmarshal(body, &in); err != nil {
-		return nil, nil, nil, fmt.Errorf("the body: %w", err)
+		return nil, nil, fmt.Errorf("the body: %w", err)
 	}
-	names := &toolNames{byPair: map[[2]string]string{}, byName: map[string][]string{}}
 	var instructions []string
 	input := []any{}
 	for i, m := range in.Messages {
@@ -176,7 +131,7 @@ func chatToResponses(body []byte) ([]byte, *toolNames, *chatRequest, error) {
 		case "system", "developer":
 			t, err := text(m.Content)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
 			}
 			if len(input) == 0 {
 				instructions = append(instructions, t)
@@ -186,30 +141,29 @@ func chatToResponses(body []byte) ([]byte, *toolNames, *chatRequest, error) {
 		case "user":
 			c, err := userContent(m.Content)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
 			}
 			input = append(input, map[string]any{"role": "user", "content": c})
 		case "assistant":
 			t, err := text(m.Content)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
 			}
 			if t != "" {
 				input = append(input, map[string]any{"role": "assistant", "content": t})
 			}
 			for _, tc := range m.ToolCalls {
-				ns, name := split(tc.Function.Name)
-				input = append(input, map[string]any{"type": "function_call", "call_id": tc.ID, "namespace": ns, "name": name,
+				input = append(input, map[string]any{"type": "function_call", "call_id": tc.ID, "name": tc.Function.Name,
 					"arguments": cmpString(tc.Function.Arguments, "{}")})
 			}
 		case "tool":
 			t, err := text(m.Content)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
 			}
 			input = append(input, map[string]any{"type": "function_call_output", "call_id": m.ToolCallID, "output": t})
 		default:
-			return nil, nil, nil, errUnsupported{fmt.Sprintf("messages[%d]'s role %q", i, m.Role)}
+			return nil, nil, errUnsupported{fmt.Sprintf("messages[%d]'s role %q", i, m.Role)}
 		}
 	}
 	out := map[string]any{"model": in.Model, "input": input, "store": false, "stream": true}
@@ -217,32 +171,20 @@ func chatToResponses(body []byte) ([]byte, *toolNames, *chatRequest, error) {
 		out["instructions"] = strings.Join(instructions, "\n\n")
 	}
 	if len(in.Tools) > 0 {
-		groups := map[string][]map[string]any{}
-		var order []string
+		// Plain functions, under the app's names: plan usage reserves
+		// namespaces such as notes, so tools are not grouped by app.
+		tools := make([]map[string]any, 0, len(in.Tools))
 		for _, t := range in.Tools {
 			if t.Type != "function" {
-				return nil, nil, nil, errUnsupported{"tools of type " + t.Type}
+				return nil, nil, errUnsupported{"tools of type " + t.Type}
 			}
-			names.add(t.Function.Name)
-			ns, name := split(t.Function.Name)
-			if _, ok := groups[ns]; !ok {
-				order = append(order, ns)
-			}
-			fn := map[string]any{"type": "function", "name": name, "description": t.Function.Description}
+			fn := map[string]any{"type": "function", "name": t.Function.Name, "description": t.Function.Description}
 			if len(t.Function.Parameters) > 0 {
 				fn["parameters"] = t.Function.Parameters
 			} else {
 				fn["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
 			}
-			groups[ns] = append(groups[ns], fn)
-		}
-		tools := make([]map[string]any, 0, len(order))
-		for _, ns := range order {
-			desc := "Tools of " + ns + "."
-			if ns == defaultNamespace {
-				desc = "Tools."
-			}
-			tools = append(tools, map[string]any{"type": "namespace", "name": ns, "description": desc, "tools": groups[ns]})
+			tools = append(tools, fn)
 		}
 		out["tools"] = tools
 	}
@@ -261,7 +203,7 @@ func chatToResponses(body []byte) ([]byte, *toolNames, *chatRequest, error) {
 		out["reasoning"] = map[string]string{"effort": in.ReasoningEffort}
 	}
 	b, err := json.Marshal(out)
-	return b, names, &in, err
+	return b, &in, err
 }
 
 func cmpString(a, b string) string {
@@ -301,17 +243,24 @@ func sanitizeResponses(members map[string]jsontext.Value) ([]byte, error) {
 
 // --- The stream back ---
 
+// outputItem is an item of a response's output: a message, or a function
+// call.
+type outputItem struct {
+	Type      string `json:"type"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Content   []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
+
 // event is one Responses stream event, as lodge reads it.
 type event struct {
-	Type  string `json:"type"`
-	Delta string `json:"delta"`
-	Item  *struct {
-		Type      string `json:"type"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-		Arguments string `json:"arguments"`
-	} `json:"item"`
+	Type     string          `json:"type"`
+	Delta    string          `json:"delta"`
+	Item     *outputItem     `json:"item"`
 	Response *responseObject `json:"response"`
 	// Error is an error event's, and Code and Message too for some.
 	Error   *apiErr `json:"error"`
@@ -333,19 +282,11 @@ type responseObject struct {
 	IncompleteDetails *struct {
 		Reason string `json:"reason"`
 	} `json:"incomplete_details"`
-	Error  *apiErr `json:"error"`
-	Output []struct {
-		Type      string `json:"type"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-		Arguments string `json:"arguments"`
-		Content   []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"output"`
-	Usage *struct {
+	Error *apiErr `json:"error"`
+	// Output is empty in an unstored response's response.completed: the
+	// items come as response.output_item.done events.
+	Output []outputItem `json:"output"`
+	Usage  *struct {
 		InputTokens  int64 `json:"input_tokens"`
 		OutputTokens int64 `json:"output_tokens"`
 		TotalTokens  int64 `json:"total_tokens"`
@@ -422,11 +363,15 @@ func planMessage(e apiErr) string {
 	return cmpString(e.Message, e.Code)
 }
 
-// chatCompletion assembles a finished response as a chat completion.
-func chatCompletion(r *responseObject, names *toolNames, created int64) map[string]any {
+// chatCompletion assembles a finished response as a chat completion, from
+// the items its stream sent, or else its output.
+func chatCompletion(r *responseObject, items []outputItem, created int64) map[string]any {
+	if len(items) == 0 {
+		items = r.Output
+	}
 	var b strings.Builder
 	var calls []map[string]any
-	for _, o := range r.Output {
+	for _, o := range items {
 		switch o.Type {
 		case "message":
 			for _, c := range o.Content {
@@ -436,7 +381,7 @@ func chatCompletion(r *responseObject, names *toolNames, created int64) map[stri
 			}
 		case "function_call":
 			calls = append(calls, map[string]any{"id": o.CallID, "type": "function",
-				"function": map[string]string{"name": names.app(o.Namespace, o.Name), "arguments": cmpString(o.Arguments, "{}")}})
+				"function": map[string]string{"name": o.Name, "arguments": cmpString(o.Arguments, "{}")}})
 		}
 	}
 	msg := map[string]any{"role": "assistant", "content": nil}
@@ -471,9 +416,9 @@ func finishReason(r *responseObject, called bool) string {
 type chunker struct {
 	w        io.Writer
 	flush    func()
-	names    *toolNames
 	created  int64
-	usage    bool // the app asked for a last chunk with usage
+	items    []outputItem // the finished items, for an answer without deltas
+	usage    bool         // the app asked for a last chunk with usage
 	id       string
 	model    string
 	started  bool
@@ -512,11 +457,15 @@ func (c *chunker) event(ev event) (done bool, err error) {
 		c.sentText = true
 		return false, c.chunk(map[string]any{"content": ev.Delta}, nil)
 	case "response.output_item.done":
-		if ev.Item == nil || ev.Item.Type != "function_call" {
+		if ev.Item == nil {
+			return false, nil
+		}
+		c.items = append(c.items, *ev.Item)
+		if ev.Item.Type != "function_call" {
 			return false, nil
 		}
 		call := map[string]any{"index": c.calls, "id": ev.Item.CallID, "type": "function",
-			"function": map[string]string{"name": c.names.app(ev.Item.Namespace, ev.Item.Name), "arguments": cmpString(ev.Item.Arguments, "{}")}}
+			"function": map[string]string{"name": ev.Item.Name, "arguments": cmpString(ev.Item.Arguments, "{}")}}
 		c.calls++
 		return false, c.chunk(map[string]any{"tool_calls": []any{call}}, nil)
 	case "response.completed", "response.incomplete":
@@ -526,7 +475,7 @@ func (c *chunker) event(ev event) (done bool, err error) {
 		}
 		if !c.sentText && c.calls == 0 {
 			// No deltas came: send the whole answer as one chunk.
-			whole := chatCompletion(r, c.names, c.created)
+			whole := chatCompletion(r, c.items, c.created)
 			msg := whole["choices"].([]map[string]any)[0]["message"].(map[string]any)
 			delta := map[string]any{}
 			if msg["content"] != nil {
