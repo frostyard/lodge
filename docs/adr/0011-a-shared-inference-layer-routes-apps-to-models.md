@@ -117,3 +117,4 @@ configuration, the queue, credentials and the usage log.
 - Shapes: [specs/app-contract.md](../specs/app-contract.md#inference), [design/overview.md](../design/overview.md#inference), [roadmap — Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer)
 - Builds on: [ADR-0003](0003-lodge-is-the-only-process-on-the-network.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: [ADR-0006](0006-agents-reach-each-app-through-its-own-mcp-endpoint.md) (the assistant's reach to other apps)
+- Followed by: [ADR-0015](0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md) (the Codex provider, after its terms were checked)

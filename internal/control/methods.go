@@ -10,6 +10,7 @@ import (
 	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/codexauth"
 	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
@@ -111,6 +112,10 @@ func (s *Server) call(ctx context.Context, method string, p jsontext.Value) (any
 		return s.usage(ctx, p)
 	case "lodge.providerKey":
 		return s.providerKey(ctx, p)
+	case "lodge.providerImport":
+		return s.providerImport(ctx, p)
+	case "lodge.providerModels":
+		return s.providerModels(ctx, p)
 	}
 	return nil, errorf(CodeMethodNotFound, "no method %q", method)
 }
@@ -404,4 +409,60 @@ func (s *Server) providerKey(ctx context.Context, p jsontext.Value) (any, error)
 	return struct {
 		Removed bool `json:"removed"`
 	}{in.Key == ""}, nil
+}
+
+// providerImport replaces a codex provider's sign-in with a login file's
+// (docs/specs/inference.md, The codex provider).
+func (s *Server) providerImport(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Provider string          `json:"provider"`
+		Login    codexauth.Login `json:"login"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	if s.d.Inference == nil {
+		return nil, errorf(CodeNotFound, "no provider %q", in.Provider)
+	}
+	switch err := s.d.Inference.ImportLogin(ctx, in.Provider, in.Login); {
+	case errors.Is(err, inference.ErrNoProvider):
+		return nil, errorf(CodeNotFound, "no provider %q in lodge's configuration", in.Provider)
+	case errors.Is(err, inference.ErrNotCodex):
+		return nil, errorf(CodeInvalidParams, "provider %s is not of type codex", in.Provider)
+	case err != nil:
+		return nil, errorf(CodeInvalidParams, "%v", err)
+	}
+	s.d.Log.Info("provider sign-in imported", "provider", in.Provider, "client", in.Login.ClientID)
+	return struct {
+		Account  string `json:"account"`
+		ClientID string `json:"client_id"`
+	}{cmpOr(in.Login.Email, in.Login.Account), in.Login.ClientID}, nil
+}
+
+// providerModels lists a provider's models.
+func (s *Server) providerModels(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Provider string `json:"provider"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	if s.d.Inference == nil {
+		return nil, errorf(CodeNotFound, "no provider %q", in.Provider)
+	}
+	list, err := s.d.Inference.Models(ctx, in.Provider)
+	switch {
+	case errors.Is(err, inference.ErrNoProvider):
+		return nil, errorf(CodeNotFound, "no provider %q in lodge's configuration", in.Provider)
+	case err != nil:
+		return nil, errorf(CodeConflict, "%v", err)
+	}
+	return list, nil
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

@@ -36,8 +36,10 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
   development build and packaging) and the inference layer are merged, and
   run on lodge's first host.
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
-  user's phone and Chrome's PDF viewer are not done, and the Copilot and
-  Codex providers are not built.
+  user's phone and Chrome's PDF viewer are not done. The Codex provider
+  (the owner's ChatGPT plan) is built
+  ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)),
+  and the Copilot provider is not.
 - The assistant, Porter, is designed (Phase 5). lodge's side of it, the
   roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
@@ -69,7 +71,7 @@ tells the app in headers, and moves the bytes.
    │    ├─ /device/<id>/…               the app's own auth  │    (HTTP/1.1; peer must be lodge)
    │    └─ CONTENT/<id>/…               sandboxed bytes ────┘
    ├─ internal/inference ◀── /run/lodge/inference.sock ◀── app daemons (peer uid → app)
-   │       └─▶ the local model (MODEL_HOST), later Copilot and Codex
+   │       └─▶ the local model (MODEL_HOST), the owner's ChatGPT plan (codex)
    ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid)
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
 
@@ -273,10 +275,18 @@ home-screen app. No service worker is registered.
   never the content.
 
 The first provider is the local model at `MODEL_HOST`, an `openai`
-provider. Copilot and Codex are accepted in the configuration but not
-built until their terms are checked, so they show as unavailable. A
-provider that lodge's host cannot reach is shown as unavailable, and its
-aliases fail at once.
+provider. A `codex` provider is the owner's ChatGPT plan, through Sign in
+with ChatGPT ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)):
+- **Signing in:** the owner signs in on their computer with `lodgectl
+  provider login` and imports the login file on lodge's host. lodge then
+  refreshes it.
+- **Translation:** lodge turns apps' chat completions into the Responses
+  requests that plan usage takes, and turns the answers back
+  ([specs/inference.md](../specs/inference.md#the-codex-provider)).
+
+Copilot is accepted in the configuration but not built until its terms are
+checked, so it shows as unavailable. A provider that lodge's host cannot
+reach is shown as unavailable, and its aliases fail at once.
 
 - The socket is made at start, beside the control socket, and served
   before the tailnet nodes join. lodge is in group `lodge-apps` to give it

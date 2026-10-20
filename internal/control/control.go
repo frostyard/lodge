@@ -25,6 +25,7 @@ import (
 	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/codexauth"
 	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
@@ -103,6 +104,8 @@ type Inference interface {
 	Status() ([]inference.ProviderStatus, string)
 	Usage(ctx context.Context, since time.Time) ([]inference.Sum, error)
 	SetKey(ctx context.Context, provider, key string) error
+	ImportLogin(ctx context.Context, provider string, l codexauth.Login) error
+	Models(ctx context.Context, provider string) ([]inference.Model, error)
 }
 
 // Server serves the control socket.

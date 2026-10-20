@@ -57,7 +57,11 @@ Everything in the map is built.
   - `internal/store`: lodge's SQLite database, which they live in.
   - `internal/apps`: manifests, bundles and health.
   - `internal/inference`: the inference socket, aliases, the queue,
-    providers and the usage log ([specs/inference.md](docs/specs/inference.md)).
+    providers and the usage log ([specs/inference.md](docs/specs/inference.md));
+    `responses.go` translates chat completions for a `codex` provider.
+  - `internal/codexauth`: Sign in with ChatGPT for a `codex` provider:
+    `lodgectl provider login`'s sign-in, the login file and its refresh
+    ([ADR-0015](docs/adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)).
   - `internal/agents`: the agents on lodge's host and their socket,
     `/run/lodge/agent.sock`, admitted by peer uid
     ([ADR-0014](docs/adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
