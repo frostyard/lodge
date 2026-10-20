@@ -179,8 +179,9 @@ func TestTheTailnetRefusesAgentTokens(t *testing.T) {
 
 // records keeps log records' attributes, for the MCP log line.
 type records struct {
-	mu   sync.Mutex
-	recs []map[string]string
+	mu      sync.Mutex
+	recs    []map[string]string
+	changed chan struct{} // closed at the next record, for await
 }
 
 func (r *records) Enabled(context.Context, slog.Level) bool { return true }
@@ -190,6 +191,10 @@ func (r *records) Handle(_ context.Context, rec slog.Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.recs = append(r.recs, m)
+	if r.changed != nil {
+		close(r.changed)
+		r.changed = nil
+	}
 	return nil
 }
 func (r *records) WithAttrs([]slog.Attr) slog.Handler { return r }
@@ -198,6 +203,10 @@ func (r *records) WithGroup(string) slog.Handler      { return r }
 func (r *records) find(msg string) []map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.findLocked(msg)
+}
+
+func (r *records) findLocked(msg string) []map[string]string {
 	var out []map[string]string
 	for _, m := range r.recs {
 		if m["msg"] == msg {
@@ -205,6 +214,31 @@ func (r *records) find(msg string) []map[string]string {
 		}
 	}
 	return out
+}
+
+// await returns msg's records once there are n of them, or those there
+// are after 5 seconds. The MCP line is logged once the response is done,
+// which can be after the client has read it.
+func (r *records) await(msg string, n int) []map[string]string {
+	deadline := time.After(5 * time.Second)
+	for {
+		r.mu.Lock()
+		out := r.findLocked(msg)
+		if len(out) >= n {
+			r.mu.Unlock()
+			return out
+		}
+		if r.changed == nil {
+			r.changed = make(chan struct{})
+		}
+		next := r.changed
+		r.mu.Unlock()
+		select {
+		case <-next:
+		case <-deadline:
+			return r.find(msg)
+		}
+	}
 }
 
 func TestAgentSocketProxy(t *testing.T) {
@@ -255,9 +289,9 @@ func TestAgentSocketProxy(t *testing.T) {
 		t.Error("the token's use was not recorded")
 	}
 	// The log names the agent's user in place of a node.
-	lines := logs.find("mcp")
+	lines := logs.await("mcp", 1)
 	if len(lines) != 1 || lines[0]["agent"] != "frostporter" || lines[0]["token"] != "porter" || lines[0]["status"] != "200" {
-		t.Errorf("the log: %v", lines)
+		t.Fatalf("the log: %v", lines)
 	}
 	if _, ok := lines[0]["node"]; ok {
 		t.Error("the log names a node")

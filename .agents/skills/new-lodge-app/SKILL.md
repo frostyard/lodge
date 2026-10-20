@@ -35,13 +35,13 @@ The contract it follows is
 
    The arguments are `DEST ID NAME [USER] [KEY] [MODULE] [LODGE_REF]`.
    `LODGE_REF` is what the web bundle pins `lodge-client` at: a client
-   release such as `client/v0.1.0` (the default), or a lodge commit.
+   release such as `client/v0.2.0` (the default), or a lodge commit.
    render.sh validates every value and refuses a directory that is not
    empty.
 3. **Pin the kit and test.** In the new directory:
 
    ```sh
-   go get github.com/frostyard/lodge/kit@v0.1.0
+   go get github.com/frostyard/lodge/kit@v0.2.0
    go mod tidy
    make check
    ```

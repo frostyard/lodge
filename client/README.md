@@ -10,7 +10,7 @@ Apps pin it to a release, a lodge tag `client/vX.Y.Z`, as a pnpm git
 dependency in this subdirectory:
 
 ```json
-"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.1.0&path:client"
+"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.2.0&path:client"
 ```
 
 Between releases an app may pin a pushed lodge commit in its place
