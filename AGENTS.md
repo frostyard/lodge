@@ -27,8 +27,8 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
 - the inference layer;
-- lodge's side of the assistant: the agent socket and the companion
-  (unreleased in the kit and the client until they are tagged).
+- lodge's side of the assistant: the agent socket and the companion,
+  released in `kit/v0.2.0` and `client/v0.2.0`.
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and

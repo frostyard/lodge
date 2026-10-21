@@ -7,12 +7,12 @@ decided on. frostnotes' M4 ([plan 0006](https://github.com/frostyard/frostnotes/
 runs notes inside lodge, and depends on Phases 1 and 2. frostmail's move
 is Phase 4.
 
-Status (2026-10-19):
+Status (2026-10-21):
 - **The ADRs were accepted on 2026-10-21.** Phases 1 to 3 were built
   ahead of that, on the user's go-ahead of 2026-10-18.
 - **Phase 1 is done.** The kit, with the RPC runtime extracted from the
-  apps, and the client are tagged `kit/v0.1.0` and `client/v0.1.0`, and
-  notesd and maild run on the kit.
+  apps, and the client are tagged (`kit/v0.1.0`, then `kit/v0.2.0` and
+  `client/v0.2.0`), and notesd and maild run on the kit.
 - **Phase 2's code is merged, and lodge runs on its first host.** Notes
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
   Lodge's security review ran on 2026-10-19, and each of its lodge findings
@@ -37,8 +37,10 @@ Status (2026-10-19):
 - **Phase 6 is built** (2026-10-19): the agent socket, with tokens bound
   to their route and the kit's client of it, and the companion, with the
   shell's panel and sheet, its button and chord, `context` and `ask`, and a
-  fake companion in the development build. Its checks on the VM and the
-  user's devices wait for the deployment.
+  fake companion in the development build. The agent socket was checked
+  on lodge's host on 2026-10-19, with Porter's notes and mail tokens
+  (Porter's roadmap, Phase 1). The companion's checks on the user's
+  desktop and phone wait for the deployment.
 
 Nothing changes on the user's machines without the user's go-ahead.
 

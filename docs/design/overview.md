@@ -43,8 +43,9 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 - The assistant, Porter, is designed (Phase 5). lodge's side of it, the
   roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
-  is built: the agent socket and the companion. Its checks on the user's
-  devices wait for the deployment.
+  is built and released in v0.2.0: the agent socket and the companion. The
+  agent socket was checked on lodge's host (2026-10-19); the companion's
+  checks on the user's devices wait for the deployment.
 
 This document is rewritten as each phase lands.
 
