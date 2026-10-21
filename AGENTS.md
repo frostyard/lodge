@@ -21,8 +21,8 @@ the canonical paths; keep content tool-agnostic.
 
 ## Status
 
-Pre-release. The founding documents date from 2026-10-18 and are all
-Proposed. Phases 1 to 3 and 6 are built:
+Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
+2026-10-21. Phases 1 to 3 and 6 are built:
 - the kit and the client, released as `kit/v0.2.0` and `client/v0.2.0`;
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;

@@ -1,6 +1,6 @@
 # 0014 — Agents on lodge's host use a local agent socket
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-19
 
 ## Context

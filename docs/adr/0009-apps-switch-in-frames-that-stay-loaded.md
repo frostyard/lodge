@@ -1,6 +1,6 @@
 # 0009 — Apps switch in frames that stay loaded
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-18
 
 ## Context

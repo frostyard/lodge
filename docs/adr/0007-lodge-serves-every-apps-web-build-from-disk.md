@@ -1,6 +1,6 @@
 # 0007 — lodge serves every app's web build from disk
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-18
 
 ## Context
