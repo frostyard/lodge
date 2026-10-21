@@ -395,12 +395,14 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   `contentLinks` and `mcp`. It is also an agent on the agent socket, with
   a notes token scoped to `Reading/` for save-as-note
   ([its ADR-0004](https://github.com/frostyard/frostread/blob/main/docs/adr/0004-save-as-note-goes-through-notes-mcp-on-the-agent-socket.md),
-  Proposed). Its fetcher is the kit's `netguard`
+  Accepted by Brian, 2026-10-21). Its fetcher is the kit's `netguard`
   ([ADR-0017](../adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)),
   and its web app is the first on `@frostyard/lodge-ui`
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md)). It is built
-  on 2026-10-21 and waits for review; the repository is private until the
-  owner opens it.
+  on 2026-10-21, and **deployed on lodge's host the same day** for the
+  owner's daily use, beside notes, mail and Porter: frostread is the
+  second name in `agents`, and its notes token is scoped to `Reading/` in
+  the owner's vault. The repository is private until the owner opens it.
 - **The shared UI package.** `@frostyard/lodge-ui` 0.1.0 is built with
   frostmail's token values unchanged
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
