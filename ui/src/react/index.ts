@@ -3,6 +3,7 @@
 // needs neither.
 export { cx } from "./cx.js";
 export { IconButton, type IconButtonProps, iconButtonClass } from "./IconButton.js";
+export { Menu, type MenuEntry, type MenuProps } from "./Menu.js";
 export { Sheet, type SheetProps } from "./Sheet.js";
 export { Splitter, type SplitterProps } from "./Splitter.js";
 export { useNarrow } from "./useNarrow.js";

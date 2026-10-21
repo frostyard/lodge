@@ -26,7 +26,7 @@ values unchanged, so an app that moves to it looks the same.
 
 The package is ESM source that an app's bundler compiles. Its only runtime
 dependency is `@fontsource-variable/inter`; `react` (^19) and
-`lucide-react` (^1) are optional peer dependencies, and only `./react` uses
+`lucide-react` (^1) and `react-dom` (^19) are optional peer dependencies, and only `./react` uses
 them.
 
 ### Tokens
@@ -95,6 +95,7 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
 | --- | --- |
 | `IconButton` | A button with `label` (its accessible name), `keys` (in the tooltip), `icon` (a lucide component), `size` (28 or 24), `pressed`, `disabled`, `onClick`; 44px under a coarse pointer |
 | `Splitter` | A focusable `role="separator"` with `orientation`, `label`, `value` (as `aria-valuenow`), `onStart`, `onMove(delta)`, `onEnd`; arrow keys move it 16px |
+| `Menu` | A menu at a point, or a narrow window's sheet (`sheet`): `MenuEntry` rows are an item (`id`, `label`, `icon`, `keys`, `checked`, `disabled`), a separator, or a submenu (`id`, `label`, `icon`, `disabled`, `items`); `onSelect` and `onClose`; the arrow keys move, ArrowRight opens a submenu, ArrowLeft and Escape close one level, Enter chooses, Tab and a press outside close; focus returns to what had it. It portals onto the body, so react-dom is an optional peer |
 | `Sheet` | A modal frame with `title` (`aria-labelledby`), `description` (`aria-describedby`), `onClose`, `closeLabel`; Escape, the close button and the overlay close it; focus moves in and returns |
 | `useNarrow()` | `isNarrow` as a hook, following the window |
 | `cx(...parts)` | Joins the class names that are set |
