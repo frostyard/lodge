@@ -363,10 +363,11 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   a page that is open. Phase 5 left it deferred: Porter is pull, not push,
   in v1. Take it up, with an ADR, when an app needs notifications while
   lodge is closed.
-- **The desktop apps.** frostmail's Tauri app could become a lodge client
-  over a WebSocket with its node's identity, or give way to the home-screen
-  app. frostnotes' Tauri app stays local-first against its own notesd.
-  Decide by Phase 4.
+- *Answered 2026-10-21:* **the desktop apps.** frostmail's Tauri app
+  is a lodge client over a WebSocket with its node's identity
+  ([frostmail ADR-0041](https://github.com/frostyard/frostmail/blob/main/docs/adr/0041-maild-runs-as-a-lodge-app.md));
+  frostnotes' stays local-first against its own notesd
+  ([frostnotes ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md)).
 - **Packaging.** Debs through apt-publisher, or a sysext, with the
   `sysusers.d` entries and socket units. Phase 2 deploys with the units
   alone. Decide before Phase 4 brings a second app.
