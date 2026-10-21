@@ -2,38 +2,39 @@
    600 CSS pixels up, a 36 px bar below, and frames that fill the rest,
    inside the safe area. The companion (shell.md, The companion) is a
    400 px panel on the right from 600 pixels, never over half the window,
-   and a full-height sheet below. */
+   and a full-height sheet below.
+
+   The look comes from @frostyard/lodge-ui (docs/specs/shell.md, Colours;
+   lodge ADR-0018): its tokens, its base layer and Inter. The shell sets
+   data-theme, which the tokens read, so one block maps the shell's own
+   names to them for both schemes. Inter is the package's dependency, but
+   a `link:` dependency brings no node_modules of its own, so main.ts
+   imports the font itself (the package's fonts.css would do it). */
+@import "@frostyard/lodge-ui/tokens.css";
+@import "@frostyard/lodge-ui/base.css";
 
 :root {
-  color-scheme: light;
-  --bg: #f4f1ea;
-  --chrome: #e9e4d8;
-  --fg: #1f2328;
-  --muted: #6a6f76;
-  --line: #d3ccbc;
-  --accent: #2f6f5e;
-  --amber: #c98a12;
-  --red: #c4372f;
-  --grey: #9aa0a6;
-  --panel: #fffdf8;
-  --shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+  --bg: var(--bg-window);
+  --chrome: var(--bg-sidebar);
+  --fg: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--separator);
+  --amber: var(--flag-2);
+  --red: var(--flag-1);
+  --grey: var(--text-tertiary);
+  --panel: var(--bg-window);
+  --shadow: var(--popover-shadow);
+  /* --accent is the package's own name, so it needs no mapping here. */
   font:
-    15px / 1.4 system-ui,
-    -apple-system,
-    "Segoe UI",
+    15px / 1.4 "Inter Variable",
+    system-ui,
     sans-serif;
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #1b1d1f;
-  --chrome: #232629;
-  --fg: #e8e6e1;
-  --muted: #9ba1a6;
-  --line: #34383c;
-  --accent: #6cc3a8;
-  --panel: #2a2d31;
-  --shadow: 0 8px 32px rgb(0 0 0 / 0.5);
+/* The package's base layer sets 13px/18px for the apps; the shell keeps
+   its 15px (docs/specs/shell.md, Colours). */
+body {
+  font: inherit;
 }
 
 * {

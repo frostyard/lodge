@@ -43,6 +43,38 @@ and built in the roadmap's
   `env(safe-area-inset-*)`, so every frame lies inside the safe area, and
   apps need no insets of their own.
 
+### Colours and type
+
+The shell draws in the look its apps draw in, `@frostyard/lodge-ui`
+([lodge ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
+[ui-package.md](ui-package.md)). It imports the package's `tokens.css` and
+`base.css`, and Inter at 15px (the apps use 13px; the shell keeps the
+larger size it had).
+
+The shell's own names map onto the tokens in one block, and the tokens
+resolve the light or dark value from the `data-theme` the shell sets
+([Theme](#theme)):
+
+| The shell's name | The token | Where it draws |
+| --- | --- | --- |
+| `--bg` | `--bg-window` | frames, the current app's button, the covering notice |
+| `--chrome` | `--bg-sidebar` | the rail, the bar, the page's background |
+| `--fg` | `--text-primary` | text |
+| `--muted` | `--text-secondary` | names, secondary text |
+| `--line` | `--separator` | hairlines, hover |
+| `--accent` | `--accent` | the current app's bar, focus rings, lodge's state |
+| `--amber` | `--flag-2` | a degraded app's mark |
+| `--red` | `--flag-1` | a stopped app's mark |
+| `--grey` | `--text-tertiary` | a disabled app's mark |
+| `--panel` | `--bg-window` | the switcher, the menu, notices |
+| `--shadow` | `--popover-shadow` | the switcher and the menu |
+
+- **The manifest names the same colours**, as ADR-0008 requires:
+  `background_color` is the window's background (`#ffffff`), and
+  `theme_color` the chrome (`#f2f2f4`).
+- **The home-screen icons** are drawn from the accent (`#007aff`) and the
+  window's background (`#ffffff`), by `scripts/icons.mjs`.
+
 ### The switcher
 
 - **It opens on its shortcut,** by default **Ctrl+\`**: Ctrl with the key
