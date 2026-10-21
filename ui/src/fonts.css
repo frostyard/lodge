@@ -1,0 +1,7 @@
+/* Inter, bundled by the app's build: lodge's CSP allows a font from the
+   app's own path, never a remote one (docs/specs/lodge-http.md, Headers).
+
+   Import it after tokens.css. The dependency is @fontsource-variable/inter,
+   which this package declares, so an app needs no font dependency of its
+   own. */
+@import "@fontsource-variable/inter";

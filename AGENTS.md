@@ -5,8 +5,9 @@ frostnotes, frostmail, and later a personal-assistant agent. It gives them
 one address with a quick switcher, and each app runs in a frame that stays
 loaded. lodge is the only process on the network. Each app is a daemon on a
 Unix socket behind it. lodge also holds what the apps share: the Go kit
-(`kit/`), the frontend library `@frostyard/lodge-client` (`client/`), an MCP
-endpoint per app, and an inference layer. Start at
+(`kit/`), the frontend library `@frostyard/lodge-client` (`client/`), the
+shared look `@frostyard/lodge-ui` (`ui/`), an MCP endpoint per app, and an
+inference layer. Start at
 [docs/README.md](docs/README.md). The architecture is in
 [docs/design/overview.md](docs/design/overview.md), and the contract with
 apps is [docs/specs/app-contract.md](docs/specs/app-contract.md). The
@@ -28,7 +29,10 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
   packaging;
 - the inference layer;
 - lodge's side of the assistant: the agent socket and the companion,
-  released in `kit/v0.2.0` and `client/v0.2.0`.
+  released in `kit/v0.2.0` and `client/v0.2.0`;
+- the shared UI package, `@frostyard/lodge-ui` 0.1.0, with the tokens and
+  the first React primitives
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md), Proposed).
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
@@ -92,7 +96,11 @@ Everything in the map is built.
     dialer's check after DNS), `Dialer`, `Transport` and `Name`
     ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)).
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
-  `shell/`: the shell page's UI, on the client's shell half. Both are
+  `ui/`: `@frostyard/lodge-ui`, the look the apps share: the design tokens,
+  the Tailwind theme over them, the base layer, and the React primitives,
+  pinned by `ui/vX.Y.Z`
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)).
+  `shell/`: the shell page's UI, on the client's shell half. All three are
   TypeScript, built in an nsl machine.
 - `packaging/`: the systemd unit, sysusers.d and tmpfiles.d entries, the
   install script (`make dist`, `make install`) and an app's unit
@@ -121,8 +129,8 @@ Everything in the map is built.
 - Tests run unfiltered (`go test ./...`, frostyard/core ADR-0038). A test
   that needs a real tailnet, the network or root skips unless
   `LODGE_LIVE_<WHAT>=1` is set, and never runs inside the gate.
-- Never run pnpm, node or cargo on the host. `client/` and `shell/` build in
-  the nsl machine `lodge` (`dev/nsl/provision.sh`), as frostnotes' app
+- Never run pnpm, node or cargo on the host. `client/`, `ui/` and `shell/`
+  build in the nsl machine `lodge` (`dev/nsl/provision.sh`), as frostnotes' app
   does.
 - Fix a lint finding rather than loosening `.golangci.yml`.
 

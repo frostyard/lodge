@@ -1,0 +1,33 @@
+/* The base layer every app takes: the page fills the frame, 13px on 18px
+   Inter, a focus ring, and no text selection except where an app allows it.
+   It is frostmail's, unchanged (app/src/app.css, the base layer at commit
+   4328cb7), apart from the font stack, which is written out so that the
+   layer also works for a page that does not import theme.css.
+
+   Import it after tokens.css (and after accents.css, if the app takes it).
+   It carries no preflight: the app owns its preflight. */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg-window);
+    color: var(--text-primary);
+    font-family: "Inter Variable", system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 18px;
+    cursor: default;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+}

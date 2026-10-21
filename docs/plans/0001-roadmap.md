@@ -386,6 +386,13 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 - Badges in the rail, such as unread mail.
 - Settings in the shell (sessions, tokens), over a WebSocket of lodge's own.
 - The inference layer in a process of its own, behind the same socket.
+- **The shared UI package.** `@frostyard/lodge-ui` 0.1.0 is built with
+  frostmail's token values unchanged
+  ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
+  [ui-package.md](../specs/ui-package.md)): frostmail and frostnotes move to
+  the tokens with no visual change, then the shell and Porter, then each
+  React primitive in a minor release, and the look change last, as token
+  values only.
 
 ## Open questions
 
@@ -410,11 +417,13 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   ([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md)).
   (Codex is resolved by
   [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md).)
-- **Where the client is published:** npm, GitHub Packages, or a release
-  tarball pinned with its hash. Decide in Phase 1.
+- *Answered 2026-10-21:* **where the client is published.** Git tags, with
+  the apps pinning `client/vX.Y.Z` and `ui/vX.Y.Z` as pnpm git
+  dependencies: no registry, no CI token
+  ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md)).
 
 ## References
 
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md) and [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md), [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) and [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md) (Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)

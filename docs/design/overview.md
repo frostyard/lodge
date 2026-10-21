@@ -28,7 +28,8 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/lodge-http.md](../specs/lodge-http.md),
 [specs/lodge-client.md](../specs/lodge-client.md),
 [specs/shell.md](../specs/shell.md),
-[specs/inference.md](../specs/inference.md).
+[specs/inference.md](../specs/inference.md),
+[specs/ui-package.md](../specs/ui-package.md).
 
 **Status: Phases 1 to 3 and 6 built (2026-10-19).**
 - The kit and the client are released as `kit/v0.2.0` and `client/v0.2.0`.
@@ -342,8 +343,19 @@ allow a login or a node, issue a token, or reload the apps
   pull in Tailscale.
 - **`client/`** is `@frostyard/lodge-client`: the app half and the shell
   half of the frame protocol.
+- **`ui/`** is `@frostyard/lodge-ui`, the look the apps share: the design
+  tokens as CSS custom properties (light and dark, and the density
+  tokens), the domain accents apart from them, the Tailwind v4 theme over
+  the tokens with the shared type roles, a base layer, Inter, and React
+  primitives in a `./react` subpath. `./theme` is framework-free, for the
+  shell and Porter too. It carries no preflight and never imports Tailwind
+  as a whole, and every app bundles its own copy at build time
+  ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
+  [ui-package.md](../specs/ui-package.md)). Version 0.1.0 carries
+  frostmail's values unchanged; the apps move to it one at a time, and the
+  look change comes later as token values only.
 
-Apps pin both to a published lodge commit or release.
+Apps pin all three to a published lodge commit or release.
 
 ### Testing
 

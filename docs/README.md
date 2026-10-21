@@ -35,6 +35,7 @@ frostyard/core's
 - [0015 — Codex uses the owner's ChatGPT plan through Sign in with ChatGPT](adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)
 - [0016 — Copilot uses the owner's Copilot plan through GitHub's device sign-in](adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Proposed)
 - [0017 — The kit guards outbound fetches against inside addresses](adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md) (Proposed)
+- [0018 — A UI package beside the client](adr/0018-a-ui-package-beside-the-client.md) (Proposed)
 
 ### Design
 
@@ -47,6 +48,7 @@ frostyard/core's
 - [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, the companion's messages, and the library's API
 - [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history, the companion
 - [The inference layer](specs/inference.md) — lodge's side of the inference socket: the caller, providers, aliases and allow-lists, the queue, credentials, availability and the usage log
+- [The UI package](specs/ui-package.md) — `@frostyard/lodge-ui`: its exports, the token names, the theme, the rules and how an app consumes it
 
 ### Plans
 
