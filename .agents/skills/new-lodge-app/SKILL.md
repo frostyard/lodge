@@ -61,7 +61,16 @@ The contract it follows is
    `build/lodge-root`. `LODGE_DESTDIR=DIR` stages into a lodge root that
    other apps share, and replaces only this app's own files. lodge's
    development build runs it from there (`--root`, `LODGE_ROOT`).
-6. **Grow the app.**
+6. **Draw the app's icon.** `web/public/icon.svg` is a placeholder, a
+   dashed grey square with a plus sign. lodge shows it, notes it in
+   `lodgectl apps` and warns in its log while the attribute
+   `data-lodge-placeholder` is in the file. Replace the whole file with an
+   SVG in the suite's frame: copy the chamfered tile of frostmail's
+   `app/src-tauri/icons/icon.svg`
+   ([its ADR-0015](https://github.com/frostyard/frostmail/blob/main/docs/adr/0015-use-a-frostyard-mail-icon.md)),
+   and draw the app's own object on it. The rail shows it at 22 pixels,
+   on light and dark themes.
+7. **Grow the app.**
    - **Methods** go into `schema/rpc` and into `api/rpc.go`, which follows
      the schema by hand. To generate it instead, copy a first app's
      `tools/rpcgen` (frostmail's caller semantics are the simpler), point
@@ -72,7 +81,7 @@ The contract it follows is
      each one's manifest flag in `packaging/lodge/app.json`, and
      `CheckRules` checks the two agree.
    - **Inference** is `kit/inference`.
-7. **Verify:** `make check` passes in the new repository, and so does lodge's
+8. **Verify:** `make check` passes in the new repository, and so does lodge's
    `make check` here, whose `internal/scaffoldcheck` renders this scaffold
    and runs the same rules.
 

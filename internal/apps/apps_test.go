@@ -263,3 +263,17 @@ func TestAtMostOneCompanion(t *testing.T) {
 		}
 	}
 }
+
+func TestPlaceholderIcon(t *testing.T) {
+	root := t.TempDir()
+	scaffold := `<svg xmlns="http://www.w3.org/2000/svg" ` + apps.PlaceholderIcon + `="replace me" viewBox="0 0 24 24"/>`
+	apptest.Install(t, root, "tasks", nil, map[string]string{"icon.svg": scaffold})
+	apptest.Install(t, root, "notes", nil, nil)
+	r := load(t, root)
+	if a, _ := r.Get("tasks"); !a.Enabled() || len(a.Notes) != 1 || !strings.Contains(a.Notes[0], "web/icon.svg is the scaffold's placeholder") {
+		t.Errorf("tasks: enabled %v, notes %q", a.Enabled(), a.Notes)
+	}
+	if a, _ := r.Get("notes"); !a.Enabled() || len(a.Notes) != 0 {
+		t.Errorf("notes: enabled %v, notes %q", a.Enabled(), a.Notes)
+	}
+}

@@ -6,6 +6,7 @@
 package apps
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json/v2"
@@ -39,6 +40,11 @@ type Manifest = manifest.Manifest
 
 // ValidID reports whether id may name an app.
 func ValidID(id string) bool { return manifest.ValidID(id) }
+
+// PlaceholderIcon marks the new-lodge-app scaffold's icon
+// (.agents/skills/new-lodge-app/template/web/public/icon.svg.tmpl). An app
+// that still ships it stays enabled, with a note and a warning in the log.
+const PlaceholderIcon = "data-lodge-placeholder"
 
 // servable is a path lodge's file rules serve: every segment a plain name.
 var servable = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$`)
@@ -309,8 +315,24 @@ func (r *Registry) loadOne(id string) App {
 	default:
 		a.Key = m.Key
 		a.State, a.Reason = Down, "not polled yet"
+		if placeholder(web, m.Icon) {
+			a.Notes = append(a.Notes, fmt.Sprintf("its icon web/%s is the scaffold's placeholder", m.Icon))
+			r.log.Warn("app ships the scaffold's placeholder icon", "app", id, "icon", "web/"+m.Icon)
+		}
 	}
 	return a
+}
+
+// placeholder reports whether the icon at rel under dir is the scaffold's.
+// It reads at most 64 KiB; an icon it cannot read is not a placeholder.
+func placeholder(dir, rel string) bool {
+	f, err := os.Open(filepath.Join(dir, rel))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	return err == nil && bytes.Contains(b, []byte(PlaceholderIcon))
 }
 
 // loose reads what it can of a manifest that does not load, so the rail

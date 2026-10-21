@@ -114,6 +114,9 @@ A missing bool is `false`. Notes' manifest:
   constraint, its `contract` is not a major lodge speaks, or `web/index.html`
   or its icon is missing. lodge logs why, the rail shows it, and every route
   of that app answers 503. The other apps are unaffected.
+- An icon that carries the attribute `data-lodge-placeholder` is the
+  new-lodge-app scaffold's placeholder. The app stays enabled. lodge logs
+  a warning on each load, and `lodgectl apps` notes it.
 - When two manifests claim one `user`, both are disabled. When two claim one
   `key`, both lose the key and stay enabled. When two set `companion`,
   neither is the companion, and both stay enabled. In each case `lodgectl
