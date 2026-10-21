@@ -92,6 +92,9 @@ Everything in the map is built.
     ([ADR-0012](docs/adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
   - `kit/inference`: an app daemon's client of the inference socket
     (models, chat completions and responses, streamed or not).
+  - `kit/netguard`: the outbound address guard: `Public`, `Control` (a
+    dialer's check after DNS), `Dialer`, `Transport` and `Name`
+    ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)).
 - `client/`: `@frostyard/lodge-client`, which every app bundle includes.
   `ui/`: `@frostyard/lodge-ui`, the look the apps share: the design tokens,
   the Tailwind theme over them, the base layer, and the React primitives,

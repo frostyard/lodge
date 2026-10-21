@@ -332,6 +332,11 @@ allow a login or a node, issue a token, or reload the apps
     ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md));
   - `/health`;
   - the MCP-session helper;
+  - an outbound address guard, `kit/netguard`, for a fetch of a URL the app
+    was given: it refuses loopback, private, link-local, tailnet and other
+    non-public addresses after DNS, on each connection, so a redirect is
+    refused too
+    ([ADR-0017](../adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md));
   - an inference client.
 
   It never imports `tailscale.com` or lodge's `internal/`, so apps do not
