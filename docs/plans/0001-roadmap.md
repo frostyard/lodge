@@ -31,9 +31,8 @@ Status (2026-10-21):
 - **Phase 5 is designed** (2026-10-19). The assistant is Porter. lodge's
   side is [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
   and [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md),
-  both Proposed, with their specs written and marked not built. Porter's
-  own ADRs and design doc are in frostyard/porter, which is not published
-  yet.
+  built in Phase 6. Porter's own ADRs and design doc are in
+  [frostyard/porter](https://github.com/frostyard/porter).
 - **Phase 6 is built** (2026-10-19): the agent socket, with tokens bound
   to their route and the kit's client of it, and the companion, with the
   shell's panel and sheet, its button and chord, `context` and `ask`, and a
