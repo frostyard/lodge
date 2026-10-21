@@ -115,6 +115,11 @@ can change any of them:
 </Sheet>
 ```
 
+A sheet that draws no heading takes `ariaLabel` instead of `title` (the type
+requires one of the two); `role="alertdialog"` is for a confirmation; and
+`portal` renders the sheet onto `document.body`, for a frame drawn inside a
+scroll or overflow container. A portal needs react-dom, an optional peer.
+
 ```tsx
 <IconButton label="Search" keys="Ctrl + F" icon={Search} onClick={openSearch} />
 <Sheet title="Add a feed" description="The feed's address." onClose={close}>
