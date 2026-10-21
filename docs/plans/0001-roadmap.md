@@ -86,7 +86,10 @@ from what frostnotes and frostmail already share.
 - **`client/`, `@frostyard/lodge-client`:** the app half and the shell half
   of [lodge-client.md](../specs/lodge-client.md). It is built and tested in
   an nsl machine, with its toolchain pinned and verified (frostyard/core
-  ADR-0023).
+  ADR-0023). 0.3.0 adds [the `rpc` subpath](../specs/lodge-client.md#the-rpc-subpath),
+  the TypeScript counterpart of the kit's `kit/jsonrpc`
+  ([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)),
+  so the apps can share the session instead of each copying it.
 - **Published and pinned.** Apps pin both to a published lodge commit or
   release, never to a local path. Once the user approves publishing the
   repository, the kit is tagged `kit/v0.1.0`, and the client is released at

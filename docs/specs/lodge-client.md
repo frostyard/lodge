@@ -24,6 +24,7 @@ the shell's half in Phase 2. [The companion's](#the-companion) additions
 `companion`) were made on 2026-10-19, additively in major 1, and built in
 the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
+[The `rpc` subpath](#the-rpc-subpath) was added in 0.3.0, on 2026-10-21.
 
 ## Interface
 
@@ -256,6 +257,53 @@ lodge.on("ask", ({ app, prompt }) => {});               // in the companion
   checks, answers `ready` with the frame's role, and drops the companion
   frame's `route`, `context` and `ask`.
 
+### The rpc subpath
+
+`@frostyard/lodge-client/rpc`, in `client/src/rpc.ts`, is the client of an
+app's `/api`: JSON-RPC 2.0 over the WebSocket that lodge proxies, and the
+TypeScript counterpart of the kit's `kit/jsonrpc`
+([ADR-0012](../adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
+It adds no runtime dependency.
+
+```ts
+import { connectLodgeAPI, JsonRpcSession } from "@frostyard/lodge-client/rpc";
+
+const api = await connectLodgeAPI(lodge, { hello: { protocol: 1, client: "read-web" } });
+const counts = await api.call<Counts>("counts", {});
+api.onEvent(({ event, data }) => {
+  if (event === "items.changed") refetch(data);
+});
+```
+
+- **`Transport`** is `call(method, params)`, `onEvent(handler)` and
+  `onClose(handler)`, each returning its unsubscribe, and an optional
+  `blobURL(hash, ext)` for an app that loads files by hash.
+- **`JsonRpcSession`** implements it over a line channel:
+  `new JsonRpcSession(sendLine, { blobURL? })`, and `receive(line)` for each
+  line that arrives. A call's answer arrives by id; an error rejects with
+  an **`RPCError`**, whose `code`, `message` and `data` are the daemon's.
+  `close(reason)` fails the pending calls and tells the close handlers once.
+- **Events are the kit's envelope.** A notification of method `event`
+  carries `params` as `{ seq?, event, data? }` — the `EventEnvelope` — and
+  the session hands that to its handlers. Another notification is dropped.
+- **`connectLodgeAPI(lodge, opts)`** opens `lodge.apiURL()` and keeps it
+  open:
+  - it resolves once the first connection is ready, and rejects when that
+    first attempt fails, so the app shows the failure and calls it again;
+  - when `opts.hello` is given, `rpc.hello` is sent after each open, and
+    the transport is ready only after its answer, so a reconnect sends it
+    again;
+  - a visible page sends `rpc.ping` every 30 s (lodge ends a session after
+    90 s without a frame), and at once when it becomes visible;
+  - a connection that drops reconnects with a delay that doubles from 1 s
+    to 30 s; a page that is hidden waits for visibility instead;
+  - a call made while the socket is down rejects with `CodeNotConnected`;
+  - `close()` closes the socket and stops reconnecting.
+  - `opts` also takes the document and the WebSocket constructor, for
+    tests, and `blobURL`.
+- **Version:** 0.3.0 adds the subpath; the library keeps its no-runtime-
+  dependencies rule, and an app that does not import it takes none of it.
+
 ## Rules
 
 - Both sides check the origin and the source of every message, and drop
@@ -267,6 +315,8 @@ lodge.on("ask", ({ app, prompt }) => {});               // in the companion
 - A frame sends a context as a pointer, never another frame's content.
 - A contract-major mismatch stops one frame's messages, not the shell.
 - Unknown messages are dropped, so a major grows by addition only.
+- The `rpc` subpath's session never reorders or debounces: each line is a
+  message, and each call is one id.
 
 ## Derived artifacts
 
