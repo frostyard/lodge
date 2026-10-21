@@ -7,8 +7,9 @@ which bundles its own copy at build time.
 Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md). Where
 it fits: [design/overview.md](../design/overview.md#the-kit-and-the-client).
 
-**Status:** version 0.1.0, written on 2026-10-21. It carries frostmail's
-values unchanged, so an app that moves to it looks the same.
+**Status:** version 0.2.0, written on 2026-10-21. 0.1.0 carries frostmail's
+values unchanged, so an app that moves to it looks the same; 0.2.0 adds the
+Sheet's options.
 
 ## Interface
 
@@ -95,7 +96,7 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
 | --- | --- |
 | `IconButton` | A button with `label` (its accessible name), `keys` (in the tooltip), `icon` (a lucide component), `size` (28 or 24), `pressed`, `disabled`, `onClick`; 44px under a coarse pointer |
 | `Splitter` | A focusable `role="separator"` with `orientation`, `label`, `value` (as `aria-valuenow`), `onStart`, `onMove(delta)`, `onEnd`; arrow keys move it 16px |
-| `Sheet` | A modal frame with `title` (`aria-labelledby`), `description` (`aria-describedby`), `onClose`, `closeLabel`; Escape, the close button and the overlay close it; focus moves in and returns |
+| `Sheet` | A modal frame with `title` (`aria-labelledby`), `description` (`aria-describedby`), `onClose`, `closeLabel`; Escape, the close button and the overlay close it; focus moves in and returns. Options: `width` (a number of pixels or a CSS length, 480 by default), `className` (classes for the frame), `showClose` (default true), `closeOnOverlay` (default true; a form sets false), `initialFocus` (`"first"` for the first field, a ref, or the frame by default) and `titleClassName` (default `font-semibold text-empty`) |
 | `useNarrow()` | `isNarrow` as a hook, following the window |
 | `cx(...parts)` | Joins the class names that are set |
 
@@ -108,6 +109,10 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
    `tailwindcss`, then this package.
 3. **No React in the CSS, and none in `theme.ts`.**
 4. **`theme.css` maps only names `tokens.css` or `accents.css` define.**
+4a. **A Sheet option changes only what it names.** `width` and `className`
+   change the frame; `showClose`, `closeOnOverlay` and `initialFocus` change
+   what opens and closes it; `titleClassName` changes the heading. The
+   defaults are 0.1.0's behaviour.
 5. **Sharing is at build time.** Each app bundles its own copy; nothing is
    served from a shared path at run time.
 6. **An app adds `@source "../node_modules/@frostyard/lodge-ui/src";` to its

@@ -1,6 +1,6 @@
 {
   "name": "@frostyard/lodge-ui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "lodge's shared look: the design tokens, the Tailwind theme over them, and the React primitives that frostmail, frostnotes and frostread share.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/frostyard/lodge.git", "directory": "ui" },
