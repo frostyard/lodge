@@ -5,11 +5,15 @@
    and a full-height sheet below.
 
    The look comes from @frostyard/lodge-ui (docs/specs/shell.md, Colours;
-   lodge ADR-0018): its tokens, its base layer and Inter. The shell sets
-   data-theme, which the tokens read, so one block maps the shell's own
-   names to them for both schemes. Inter is the package's dependency, but
-   a `link:` dependency brings no node_modules of its own, so main.ts
-   imports the font itself (the package's fonts.css would do it). */
+   lodge ADR-0018): its tokens, its base layer and Inter. The base layer
+   sets the shell's 13px on 18px, as it does every app's (Brian, 2026-10-21);
+   the shell does not take a larger size back. Its chrome is sized from the
+   package's density tokens (--control-h, --row-h, --pad-x), which grow on a
+   coarse pointer. The shell sets data-theme, which the tokens read, so one
+   block maps the shell's own names to them for both schemes. Inter is the
+   package's dependency, but a `link:` dependency brings no node_modules of
+   its own, so main.ts imports the font itself (the package's fonts.css
+   would do it). */
 @import "@frostyard/lodge-ui/tokens.css";
 @import "@frostyard/lodge-ui/base.css";
 
@@ -25,16 +29,6 @@
   --panel: var(--bg-window);
   --shadow: var(--popover-shadow);
   /* --accent is the package's own name, so it needs no mapping here. */
-  font:
-    15px / 1.4 "Inter Variable",
-    system-ui,
-    sans-serif;
-}
-
-/* The package's base layer sets 13px/18px for the apps; the shell keeps
-   its 15px (docs/specs/shell.md, Colours). */
-body {
-  font: inherit;
 }
 
 * {
@@ -71,7 +65,9 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 6px 0;
+  /* The rail stays 48px (shell.md, Layout); its buttons take the control
+     height, so the padding is what is left of the 48. */
+  padding: calc((48px - var(--control-h)) / 2) 0;
   background: var(--chrome);
   border-right: 1px solid var(--line);
   min-height: 0;
@@ -105,8 +101,8 @@ button {
 .menu-button,
 .companion-button {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: var(--control-h);
+  height: var(--control-h);
   display: grid;
   place-items: center;
   border: 0;
@@ -146,7 +142,6 @@ button {
   border-radius: 6px;
   background: var(--line);
   font-weight: 600;
-  font-size: 13px;
 }
 
 .app-button:has(.mark[data-state="disabled"]) .app-icon {
@@ -223,7 +218,7 @@ button {
   gap: 1em;
   align-items: center;
   justify-content: center;
-  padding: 0.5em 1em;
+  padding: calc(var(--pad-x) / 2) var(--pad-x);
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
@@ -248,7 +243,8 @@ button {
 
 .reload,
 .menu-buttons button {
-  padding: 0.3em 1em;
+  min-height: var(--control-h);
+  padding: 0 var(--pad-x);
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
@@ -316,7 +312,8 @@ button {
 
 .switcher-filter {
   width: 100%;
-  padding: 0.75em 1em;
+  min-height: var(--control-h);
+  padding: 0 var(--pad-x);
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
@@ -337,9 +334,10 @@ button {
   position: relative;
   display: grid;
   grid-template-columns: 22px 1fr auto auto;
-  gap: 0.75em;
+  gap: var(--pad-x);
   align-items: center;
-  padding: 0.5em 0.75em;
+  min-height: var(--row-h);
+  padding: 0 var(--pad-x);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -374,17 +372,17 @@ button {
 }
 
 .switcher-empty {
-  padding: 0.5em 0.75em;
+  padding: calc(var(--pad-x) / 2) var(--pad-x);
   color: var(--muted);
 }
 
 /* The menu. */
 .menu {
   position: fixed;
-  left: 56px;
+  left: calc(48px + 8px);
   bottom: max(8px, env(safe-area-inset-bottom));
   width: 260px;
-  padding: 0.5em 1em;
+  padding: var(--pad-x);
   background: var(--panel);
   border-radius: 10px;
   box-shadow: var(--shadow);
@@ -393,11 +391,11 @@ button {
 
 .menu fieldset {
   border: 0;
-  padding: 0.25em 0;
+  padding: calc(var(--pad-x) / 4) 0;
   margin: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5em 1em;
+  gap: calc(var(--pad-x) / 2) var(--pad-x);
 }
 
 .menu legend {
@@ -408,10 +406,9 @@ button {
 
 .menu-shortcut {
   width: 100%;
-  padding: 0.3em 0.5em;
-  font:
-    13px ui-monospace,
-    monospace;
+  min-height: var(--control-h);
+  padding: 0 var(--pad-x);
+  font-family: ui-monospace, monospace;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--bg);
@@ -426,14 +423,15 @@ button {
 .menu-why {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
 }
 
 /* The narrow layout: a bar at the top. */
 @media (max-width: 599.98px) {
   .lodge {
     grid-template-columns: 1fr;
-    grid-template-rows: 36px 1fr;
+    /* The bar is 36px on a fine pointer; its buttons take the control
+       height, which is 44 on a coarse one (shell.md, Layout). */
+    grid-template-rows: max(36px, var(--control-h)) 1fr;
   }
 
   .rail {
@@ -454,9 +452,9 @@ button {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 0.5em;
-    height: 32px;
-    padding: 0 8px;
+    gap: calc(var(--pad-x) / 2);
+    height: var(--control-h);
+    padding: 0 calc(var(--pad-x) / 2);
     border: 0;
     border-radius: 8px;
     background: transparent;
@@ -495,6 +493,8 @@ button {
     display: block;
     flex: none;
     width: 100%;
+    /* 24px is the handle the spec draws; a finger gets the control height
+       (shell.md, Layout), below. */
     height: 24px;
     padding: 0;
     border: 0;
@@ -522,6 +522,14 @@ button {
     right: max(8px, env(safe-area-inset-right));
     top: calc(40px + env(safe-area-inset-top));
     bottom: auto;
+  }
+}
+
+/* A finger gets the control height for the companion's handle, where the
+   sheet's handle is the way out (shell.md, Layout). */
+@media (pointer: coarse) {
+  .companion-handle {
+    height: var(--control-h);
   }
 }
 

@@ -33,7 +33,7 @@ and built in the roadmap's
 | Width | Chrome | The app's frame |
 | --- | --- | --- |
 | 600 CSS pixels and wider | a rail at the left edge, 48 pixels wide: one button per installed app (icon, its state, its name as a tooltip), then lodge's own state | fills the rest |
-| narrower than 600 | a bar at the top, 36 pixels high: the current app's icon and name, which opens the switcher on a tap, and lodge's state | fills the rest |
+| narrower than 600 | a bar at the top, 36 pixels high (44 on a coarse pointer, for its buttons): the current app's icon and name, which opens the switcher on a tap, and lodge's state | fills the rest |
 
 - Apps in the rail and the switcher are ordered by `name`.
 - A disabled app is shown greyed, and opens a panel with its reason
@@ -48,8 +48,21 @@ and built in the roadmap's
 The shell draws in the look its apps draw in, `@frostyard/lodge-ui`
 ([lodge ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
 [ui-package.md](ui-package.md)). It imports the package's `tokens.css` and
-`base.css`, and Inter at 15px (the apps use 13px; the shell keeps the
-larger size it had).
+`base.css`, so its type is the apps' type: **Inter at 13px on 18px**. Brian
+decided on 2026-10-21 that the shell's type is 13px, as its apps' is; before
+that the shell took 15px back after the base layer.
+
+- **Density comes from the package's tokens** (`docs/specs/ui-package.md`,
+  Tokens). The shell sizes its chrome from them where it would otherwise
+  write a size by hand: `--control-h` for a button, an input or a handle,
+  `--row-h` for a switcher row, and `--pad-x` for horizontal padding. On a
+  coarse pointer the package gives 44px, 44px and 12px, so every touch
+  target is at least 44px.
+- **The layout's fixed sizes stay**: the 48px rail, the 400px companion
+  panel (or half the window), and the 36px narrow bar. The bar is 36px on
+  a fine pointer and grows to the control height, 44px, on a coarse one,
+  because its buttons are touch targets. The companion's handle is 24px on
+  a fine pointer and 44px on a coarse one, for the same reason.
 
 The shell's own names map onto the tokens in one block, and the tokens
 resolve the light or dark value from the `data-theme` the shell sets
@@ -187,7 +200,7 @@ current, and is told what that app shows.
   | Width | The companion | The current app's frame |
   | --- | --- | --- |
   | 600 CSS pixels and wider | a panel at the right edge, the full height, 400 pixels wide or half the window, whichever is less, with a 1-pixel border on its left | fills the rest, between the rail and the panel |
-  | narrower than 600 | a sheet over the frame and the bar, the full height and width inside the safe area, with a handle 24 pixels high at its top | stays loaded beneath it, `inert` while the sheet is up |
+  | narrower than 600 | a sheet over the frame and the bar, the full height and width inside the safe area, with a handle 24 pixels high at its top (44 on a coarse pointer) | stays loaded beneath it, `inert` while the sheet is up |
 
   - **The sheet closes** on a tap on its handle, or a drag of the handle
     down by more than 80 pixels. A shorter drag springs back.
