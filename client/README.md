@@ -29,5 +29,34 @@ if (lodge.companion !== null) lodge.ask("What is due here?"); // "Ask about this
 In the companion's own frame, `lodge.role` is `"companion"`, and
 `lodge.on("context")` and `lodge.on("ask")` hear the current app's.
 
+## The rpc subpath
+
+An app's API is JSON-RPC 2.0 over the WebSocket lodge proxies at
+`lodge.apiURL()`. `@frostyard/lodge-client/rpc` is its client, the
+TypeScript counterpart of the kit's `kit/jsonrpc`
+([ADR-0012](../docs/adr/0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)).
+It adds no dependency.
+
+```ts
+import { connectLodgeAPI } from "@frostyard/lodge-client/rpc";
+
+const api = await connectLodgeAPI(lodge, { hello: { protocol: 1, client: "notes-web" } });
+const counts = await api.call<Counts>("counts", {});
+api.onEvent(({ event, data }) => {
+  if (event === "items.changed") refetch(data);
+});
+```
+
+- It opens only while the page is visible, pings `rpc.ping` every 30 s so
+  lodge keeps the session (which ends after 90 s without a frame), and
+  reconnects with a growing delay after a drop.
+- `hello` is sent after every open, when given, and the transport is ready
+  only after its answer.
+- It resolves on the first ready connection and rejects when that first
+  attempt fails; a call made while the socket is down rejects with
+  `CodeNotConnected`.
+- `JsonRpcSession` is the session alone, for a channel of your own, and
+  `RPCError` carries the daemon's `code`, `message` and `data`.
+
 Build and test only in the nsl machine (`make client-check`;
 [dev/nsl/provision.sh](../dev/nsl/provision.sh)), never on the host.
