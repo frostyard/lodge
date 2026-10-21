@@ -2,11 +2,12 @@
    them through the Tailwind theme in theme.css, or directly as custom
    properties; never a literal colour.
 
-   The colour values are frostmail's, unchanged
-   (app/src/styles/tokens.css at commit 4328cb7, 2026-10-21), with the generic
-   extras from frostnotes (app/src/styles/tokens.css at commit 059442d). A
-   change to a value is a look change: it ships as a minor release before
-   1.0 and says so in the changelog.
+   The colour values are frostmail's (app/src/styles/tokens.css at commit
+   4328cb7, 2026-10-21), with the generic extras from frostnotes
+   (app/src/styles/tokens.css at commit 059442d), and one exception: the
+   accent, its contrast colour and the focus ring are frostyard's cold blue
+   (ADR-0019). A change to a value is a look change: it ships as a minor
+   release before 1.0 and says so in the changelog.
 
    The domain tokens (flags, quotes, avatars) are in accents.css, so an app
    that does not use them does not take them. */
@@ -21,13 +22,13 @@
   --text-secondary: #6e6e73;
   --text-tertiary: #a1a1a6;
   --separator: #e3e3e6;
-  --accent: #007aff;
+  --accent: #2c6380;
   --accent-contrast: #ffffff;
   --selection-inactive: #e4e4e7;
   --selection-sidebar: #dcdce0;
   --badge-bg: #e5e5ea;
   --badge-text: #6e6e73;
-  --focus-ring: rgb(0 122 255 / 0.5);
+  --focus-ring: rgb(44 99 128 / 0.75);
 
   /* Frostnotes' generic extras. */
   --bg-code: #f5f5f7;
@@ -56,13 +57,13 @@
     --text-secondary: #a1a1a6;
     --text-tertiary: #6e6e73;
     --separator: #3a3a3c;
-    --accent: #0a84ff;
-    --accent-contrast: #ffffff;
+    --accent: #47b8ef;
+    --accent-contrast: #02131f;
     --selection-inactive: #3a3a3c;
     --selection-sidebar: #3a3a3c;
     --badge-bg: #3a3a3c;
     --badge-text: #a1a1a6;
-    --focus-ring: rgb(10 132 255 / 0.6);
+    --focus-ring: rgb(71 184 239 / 0.7);
     --bg-code: #2a2a2c;
     --bg-highlight: rgb(255 214 10 / 0.3);
     --popover-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
@@ -79,13 +80,13 @@
   --text-secondary: #a1a1a6;
   --text-tertiary: #6e6e73;
   --separator: #3a3a3c;
-  --accent: #0a84ff;
-  --accent-contrast: #ffffff;
+  --accent: #47b8ef;
+  --accent-contrast: #02131f;
   --selection-inactive: #3a3a3c;
   --selection-sidebar: #3a3a3c;
   --badge-bg: #3a3a3c;
   --badge-text: #a1a1a6;
-  --focus-ring: rgb(10 132 255 / 0.6);
+  --focus-ring: rgb(71 184 239 / 0.7);
   --bg-code: #2a2a2c;
   --bg-highlight: rgb(255 214 10 / 0.3);
   --popover-shadow: 0 8px 24px rgb(0 0 0 / 0.5);

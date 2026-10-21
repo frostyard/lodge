@@ -129,4 +129,5 @@ names, the rules and how an app consumes it.
 
 - Shapes: [specs/ui-package.md](../specs/ui-package.md), [design/overview.md](../design/overview.md#the-kit-and-the-client), the roadmap's [later work](../plans/0001-roadmap.md)
 - Builds on: [ADR-0007](0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0012](0012-the-kit-shares-the-rpc-runtime-not-the-generator.md)
+- Extended by: [ADR-0019](0019-the-accent-is-frostyards-cold-blue.md) (the accent's values)
 - External: frostnotes [ADR-0011](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0011-look-like-frostmails-sibling-with-obsidians-layout.md), frostnotes [ADR-0025](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0025-patch-what-costs-the-editor-its-frames.md)

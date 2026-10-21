@@ -46,6 +46,18 @@ colour.
 | Density | `--control-h`, `--row-h`, `--pad-x` |
 | Domain (`accents.css`) | `--flag-1` to `--flag-7`, `--quote-1` to `--quote-3`, `--avatar-0` to `--avatar-7` |
 
+The accent is frostyard's cold blue
+([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md)):
+
+| Token | Light | Dark | Contrast |
+| --- | --- | --- | --- |
+| `--accent` | `#2c6380` | `#47b8ef` | 6.56:1 on the light window, 7.44:1 on the dark |
+| `--accent-contrast` | `#ffffff` | `#02131f` | 6.56:1 on the light accent, 8.40:1 on the dark |
+| `--focus-ring` | `rgb(44 99 128 / 0.75)` | `rgb(71 184 239 / 0.7)` | about 3.7:1 and 4.3:1 on the window |
+
+`--flag-5` is Apple's blue flag, not a tint of the accent, and keeps its
+own values.
+
 - **Light** is the `:root` block; **dark** comes from
   `prefers-color-scheme: dark` under `:root:not([data-theme="light"])`, and
   from `[data-theme="dark"]`, which lodge's shell sets.

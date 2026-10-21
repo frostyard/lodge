@@ -8,6 +8,11 @@
 // its light value, and this package writes that value in both dark blocks so
 // that they are complete.
 //
+// The accent, its contrast colour and the focus ring are not frostmail's:
+// they are frostyard's cold blue, chosen on 2026-10-21 (ADR-0019), and this
+// fixture holds them at that decision's values. Every other token below is
+// frostmail's.
+//
 // frostnotes: app/src/styles/tokens.css at commit
 // 059442da0eee8127c43d6dd175627c4b087976ef (2026-10-21), the generic extras
 // only. Its domain extras (--bg-tag, --callout-cyan) stay in that app.
@@ -25,13 +30,13 @@ export const frostmail: Record<string, Value> = {
   "--text-secondary": { light: "#6e6e73", dark: "#a1a1a6" },
   "--text-tertiary": { light: "#a1a1a6", dark: "#6e6e73" },
   "--separator": { light: "#e3e3e6", dark: "#3a3a3c" },
-  "--accent": { light: "#007aff", dark: "#0a84ff" },
-  "--accent-contrast": { light: "#ffffff" },
+  "--accent": { light: "#2c6380", dark: "#47b8ef" },
+  "--accent-contrast": { light: "#ffffff", dark: "#02131f" },
   "--selection-inactive": { light: "#e4e4e7", dark: "#3a3a3c" },
   "--selection-sidebar": { light: "#dcdce0", dark: "#3a3a3c" },
   "--badge-bg": { light: "#e5e5ea", dark: "#3a3a3c" },
   "--badge-text": { light: "#6e6e73", dark: "#a1a1a6" },
-  "--focus-ring": { light: "rgb(0 122 255 / 0.5)", dark: "rgb(10 132 255 / 0.6)" },
+  "--focus-ring": { light: "rgb(44 99 128 / 0.75)", dark: "rgb(71 184 239 / 0.7)" },
   "--flag-1": { light: "#ff3b30", dark: "#ff453a" },
   "--flag-2": { light: "#ff9500", dark: "#ff9f0a" },
   "--flag-3": { light: "#ffcc00", dark: "#ffd60a" },
