@@ -167,3 +167,59 @@ describe("Sheet's options", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Send" }));
   });
 });
+
+describe("Sheet's name, role and portal", () => {
+  it("is named by ariaLabel when it draws no heading", () => {
+    render(
+      <Sheet ariaLabel="Manage vaults" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect(screen.getByRole("dialog", { name: "Manage vaults" })).toBeDefined();
+    expect(screen.queryByRole("heading")).toBeNull();
+  });
+
+  it("cannot be built without a title or an ariaLabel", () => {
+    // @ts-expect-error one of the two names is required
+    const nameless = <Sheet onClose={vi.fn()} />;
+    void nameless;
+  });
+
+  it("takes an alertdialog role", () => {
+    render(
+      <Sheet title="Delete?" role="alertdialog" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect(screen.getByRole("alertdialog", { name: "Delete?" })).toBeDefined();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("portals onto the body when it is asked to", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      <Sheet title="Settings" portal onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+      { container },
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+    container.remove();
+  });
+
+  it("stays where it is rendered by default", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      <Sheet title="Settings" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+      { container },
+    );
+    expect(container.contains(screen.getByRole("dialog"))).toBe(true);
+    container.remove();
+  });
+});

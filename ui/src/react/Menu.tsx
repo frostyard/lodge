@@ -111,6 +111,62 @@ function rowClass(highlighted: boolean, disabled: boolean, sheet: boolean): stri
   );
 }
 
+/** ARIA_KEYS are the modifier and key names aria-keyshortcuts takes. */
+const ARIA_KEYS: Record<string, string> = {
+  ctrl: "Control",
+  control: "Control",
+  alt: "Alt",
+  option: "Alt",
+  shift: "Shift",
+  meta: "Meta",
+  cmd: "Meta",
+  command: "Meta",
+  super: "Meta",
+  esc: "Escape",
+  escape: "Escape",
+  enter: "Enter",
+  return: "Enter",
+  tab: "Tab",
+  space: "Space",
+  delete: "Delete",
+  backspace: "Backspace",
+  insert: "Insert",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+  backquote: "`",
+  comma: ",",
+  period: ".",
+  slash: "/",
+  backslash: "\\",
+  semicolon: ";",
+  quote: "'",
+  minus: "-",
+  equal: "=",
+};
+
+/** ariaKeys converts displayed keys ("Ctrl + Shift + K") to aria-keyshortcuts' form, or "" when a part has no name there. */
+export function ariaKeys(keys: string): string {
+  const parts = keys
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (parts.length === 0) return "";
+  const converted = parts.map((part, index) => {
+    const lower = part.toLowerCase();
+    if (/^f([1-9]|1[0-9]|2[0-4])$/.test(lower)) return part.toUpperCase();
+    // The last part may be any one character: a letter, a digit, a comma.
+    if (index === parts.length - 1 && part.length === 1) return part;
+    return ARIA_KEYS[lower] ?? "";
+  });
+  return converted.some((part) => part === "") ? "" : converted.join("+");
+}
+
 /** Menu is a popup menu with keyboard navigation, submenus and a sheet form. */
 export function Menu(props: MenuProps) {
   const { items, x = 0, y = 0, label = "Menu", sheet = false } = props;
@@ -283,10 +339,15 @@ export function Menu(props: MenuProps) {
         ) : null}
       </>
     );
+    const shortcuts = entry.kind === "item" && entry.keys !== undefined ? ariaKeys(entry.keys) : "";
     const common = {
       type: "button" as const,
       ref: attachRow(depth, index),
       className: rowClass(highlighted, disabled, sheet),
+      // The row is named by its label alone: the keys are a visual hint, and
+      // aria-keyshortcuts carries them where ARIA has a name for each part.
+      "aria-label": entry.label,
+      "aria-keyshortcuts": shortcuts === "" ? undefined : shortcuts,
       "aria-disabled": disabled ? true : undefined,
       "data-highlighted": highlighted ? "true" : undefined,
       "data-open": open ? "true" : undefined,

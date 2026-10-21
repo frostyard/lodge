@@ -8,12 +8,12 @@
 // fixed, so it covers the frame the app fills.
 import { X } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject, useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import { cx } from "./cx.js";
 import { IconButton } from "./IconButton.js";
 
-export interface SheetProps {
-  /** The heading, which names the dialog (aria-labelledby). */
-  title: string;
+/** SheetBase is what every sheet takes, with or without a heading. */
+export interface SheetBaseProps {
   /** A sentence under the heading (aria-describedby), when there is one. */
   description?: string;
   /** Escape, the close button, or a click on the overlay. */
@@ -35,8 +35,24 @@ export interface SheetProps {
   initialFocus?: "first" | RefObject<HTMLElement | null>;
   /** Classes for the title, in place of the package's size and weight. */
   titleClassName?: string;
+  /** What the dialog is called when no heading is drawn (aria-label). */
+  role?: "dialog" | "alertdialog";
+  /**
+   * Render onto the document's body instead of in place, for a sheet drawn
+   * inside a scroll container or an overflow-hidden frame. It needs
+   * react-dom, an optional peer.
+   */
+  portal?: boolean;
   children: ReactNode;
 }
+
+/**
+ * SheetProps needs a name: a title, drawn as the heading, or an ariaLabel
+ * for a sheet whose frame has no heading (a settings dialog, a vault
+ * manager). One of the two is required.
+ */
+export type SheetProps = SheetBaseProps &
+  ({ title: string; ariaLabel?: string } | { title?: string; ariaLabel: string });
 
 /** FIELDS are what "first" prefers: a place to type. */
 const FIELDS = "input:not([type='hidden']), select, textarea";
@@ -60,6 +76,7 @@ function firstFocusable(root: HTMLElement): HTMLElement | null {
 export function Sheet(props: SheetProps) {
   const {
     title,
+    ariaLabel,
     description,
     onClose,
     closeLabel = "Close",
@@ -69,6 +86,8 @@ export function Sheet(props: SheetProps) {
     closeOnOverlay = true,
     initialFocus,
     titleClassName = "font-semibold text-empty",
+    role = "dialog",
+    portal = false,
     children,
   } = props;
   const titleId = useId();
@@ -105,13 +124,15 @@ export function Sheet(props: SheetProps) {
     if (closeOnOverlay && event.target === event.currentTarget) onClose();
   };
 
-  return (
+  const sheet = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-backdrop" onPointerDown={onPointerDown}>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useAriaPropsSupportedByRole: the role is a prop, dialog or alertdialog, and both take these attributes */}
       <div
         ref={frame}
-        role="dialog"
+        role={role}
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-labelledby={title === undefined ? undefined : titleId}
+        aria-label={title === undefined ? ariaLabel : undefined}
         aria-describedby={description === undefined ? undefined : descriptionId}
         tabIndex={-1}
         onKeyDown={onKeyDown}
@@ -121,12 +142,18 @@ export function Sheet(props: SheetProps) {
           className,
         )}
       >
-        <div className="flex items-start justify-between gap-4">
-          <h2 id={titleId} className={titleClassName}>
-            {title}
-          </h2>
-          {showClose && <IconButton label={closeLabel} icon={X} size={24} onClick={onClose} />}
-        </div>
+        {title === undefined && !showClose ? null : (
+          <div
+            className={title === undefined ? "flex items-start justify-end" : "flex items-start justify-between gap-4"}
+          >
+            {title === undefined ? null : (
+              <h2 id={titleId} className={titleClassName}>
+                {title}
+              </h2>
+            )}
+            {showClose && <IconButton label={closeLabel} icon={X} size={24} onClick={onClose} />}
+          </div>
+        )}
         {description === undefined ? null : (
           <p id={descriptionId} className="mt-2 text-secondary text-sidebar-row">
             {description}
@@ -136,4 +163,5 @@ export function Sheet(props: SheetProps) {
       </div>
     </div>
   );
+  return portal ? createPortal(sheet, document.body) : sheet;
 }

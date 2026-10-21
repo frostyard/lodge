@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Search } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Menu, type MenuEntry } from "../src/react/index.js";
+import { ariaKeys } from "../src/react/Menu.js";
 
 afterEach(cleanup);
 
@@ -103,5 +104,44 @@ describe("Menu", () => {
     expect(menu.className).toContain("bottom-0");
     expect(menu.className).toContain("inset-x-0");
     expect(screen.getByRole("menuitem", { name: /Open/ }).className).toContain("h-11");
+  });
+});
+
+describe("a menu row's name", () => {
+  it("is its label alone, with the keys in aria-keyshortcuts", () => {
+    render(<Menu items={items()} onSelect={vi.fn()} onClose={vi.fn()} />);
+    const open = screen.getByRole("menuitem", { name: "Open" });
+    expect(open.getAttribute("aria-keyshortcuts")).toBe("Control+O");
+    // No row takes its keys into its name.
+    expect(screen.queryByRole("menuitem", { name: /Ctrl/ })).toBeNull();
+  });
+
+  it("leaves aria-keyshortcuts off when a part of the keys has no ARIA name", () => {
+    render(
+      <Menu
+        items={[{ kind: "item", id: "x", label: "Compose", keys: "Ctrl+Shift+Whatever" }]}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const compose = screen.getByRole("menuitem", { name: "Compose" });
+    expect(compose.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+});
+
+describe("ariaKeys", () => {
+  it("converts displayed keys to aria-keyshortcuts' names", () => {
+    expect(ariaKeys("Ctrl+Shift+K")).toBe("Control+Shift+K");
+    expect(ariaKeys("Ctrl + Alt + A")).toBe("Control+Alt+A");
+    expect(ariaKeys("Ctrl+,")).toBe("Control+,");
+    expect(ariaKeys("Ctrl+Shift+Backquote")).toBe("Control+Shift+`");
+    expect(ariaKeys("Delete")).toBe("Delete");
+    expect(ariaKeys("F2")).toBe("F2");
+    expect(ariaKeys("Meta+ArrowLeft")).toBe("Meta+ArrowLeft");
+  });
+
+  it("answers nothing when a part has no name there", () => {
+    expect(ariaKeys("Ctrl+Shift+Whatever")).toBe("");
+    expect(ariaKeys("")).toBe("");
   });
 });
