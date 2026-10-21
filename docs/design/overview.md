@@ -78,7 +78,7 @@ tells the app in headers, and moves the bytes.
    ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid)
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
 
- notesd (user frostnotes) · maild (user frostmail) · porterd (user frostporter)
+ notesd (user frostnotes) · maild (user frostmail) · readd (user frostread) · porterd (user frostporter)
 ```
 
 **One host per lodge.** lodge and every app it hosts share one host,
@@ -96,6 +96,7 @@ works from behind it.
 | lodge | `lodge` | `lodge`, `lodge-apps`, `lodge-agents` | `/var/lib/lodge/`: tsnet state, allow-lists, tokens, provider credentials |
 | notesd | `frostnotes` | `lodge-apps` | its vaults' state; its socket is `frostnotes:lodge` 0660 |
 | maild | `frostmail` | `lodge-apps` | mail, its accounts' credentials |
+| readd, the reader | `frostread` | `lodge-apps`, `lodge-agents` | feeds, items and saved links; a notes MCP token scoped to `Reading/` |
 | porterd, the assistant | `frostporter` | `lodge-apps`, `lodge-agents` | its own state (its thread), and an MCP token for each app it uses |
 
 - lodge can open every app's socket (group `lodge`), and nothing else of
@@ -198,6 +199,10 @@ it.
 [lodge-http.md](../specs/lodge-http.md#the-agent-socket)). Porter, the
 assistant, is the first: an app that owns none of the user's data, and
 reaches notes and mail only through their MCP, with one token per app.
+readd, the reader, is the second: it owns its feeds, and it also reaches
+notes through notes' MCP with a token scoped to `Reading/`, for its
+save-as-note
+([frostread ADR-0004](https://github.com/frostyard/frostread/blob/main/docs/adr/0004-save-as-note-goes-through-notes-mcp-on-the-agent-socket.md)).
 
 - lodge admits a connection only when its peer's uid is one of the agents
   that `/etc/lodge/config.json` names. That uid stands in for `Host`,

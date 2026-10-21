@@ -277,6 +277,14 @@ as Porter, the assistant: an app daemon that owns no data of the user's,
 and reads and writes the other apps only through their MCP
 ([ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
 
+An app that owns data of its own may also be an agent there, for another
+app's MCP, with its own scoped token: readd, the reader, uses notes' MCP
+with a token scoped to `Reading/` to write the article it saves
+([frostread ADR-0004](https://github.com/frostyard/frostread/blob/main/docs/adr/0004-save-as-note-goes-through-notes-mcp-on-the-agent-socket.md)).
+Nothing else changes: the agent is a local user, its token is issued for
+it on the control socket, and the called app sees the caller as it does
+any other agent.
+
 - **Where.** `/run/lodge/agent.sock`, owner `lodge`, group `lodge-agents`,
   0660, or `DIR/run/lodge/agent.sock` under `LODGE_ROOT`.
 - **Who.** The agent's system user MUST be in group `lodge-agents`, and be

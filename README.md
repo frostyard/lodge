@@ -1,8 +1,8 @@
 # lodge
 
 A tailnet-only web shell for frostyard's first-party apps. One address on
-your tailnet opens Notes, Mail and, later, an assistant. A quick switcher
-moves between them, and each app stays loaded in its frame
+your tailnet opens Notes, Mail and Read, and the assistant. A quick
+switcher moves between them, and each app stays loaded in its frame
 ([overview](docs/design/overview.md)).
 
 - **lodge is the only process on the network.** It joins your tailnet as a
@@ -24,8 +24,11 @@ is [docs/specs/app-contract.md](docs/specs/app-contract.md).
 
 Pre-release. The design documents date from 2026-10-18 to 2026-10-20 and are accepted.
 The kit and the client are released as `kit/v0.2.0` and `client/v0.2.0`,
-and lodge v1 and its inference layer are built. The order of work is the
-[roadmap](docs/plans/0001-roadmap.md).
+and lodge v1 and its inference layer are built. Notes and Mail run behind
+it; Read, the reader in
+[frostyard/frostread](https://github.com/frostyard/frostread), is built and
+waits for review, and its repository is private for now. The order of work
+is the [roadmap](docs/plans/0001-roadmap.md).
 
 ## Develop
 
