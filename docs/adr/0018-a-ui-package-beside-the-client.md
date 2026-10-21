@@ -1,6 +1,6 @@
 # 0018 — A UI package beside the client
 
-- **Status:** Proposed
+- **Status:** Accepted (Brian, 2026-10-21)
 - **Date:** 2026-10-21
 
 ## Context

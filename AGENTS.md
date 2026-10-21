@@ -33,7 +33,7 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
   released in `kit/v0.2.0` and `client/v0.2.0`;
 - the shared UI package, `@frostyard/lodge-ui` 0.1.0, with the tokens and
   the first React primitives
-  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md), Proposed).
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md), Accepted).
 - **frostread, the third app, is built and deployed on lodge's host on
   2026-10-21** ([its PRs](https://github.com/frostyard/frostread/pulls)); the
   repository is private until the owner opens it. Its reader is lodge's
