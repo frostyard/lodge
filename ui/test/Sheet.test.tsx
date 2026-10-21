@@ -2,6 +2,7 @@
 // closed by Escape, the close button or the overlay, which takes focus and
 // gives it back.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Sheet } from "../src/react/index.js";
 
@@ -69,5 +70,100 @@ describe("Sheet", () => {
     sheet.unmount();
     expect(document.activeElement).toBe(opener);
     page.unmount();
+  });
+});
+
+describe("Sheet's options", () => {
+  it("takes a width in pixels or as a CSS length", () => {
+    const { rerender } = render(
+      <Sheet title="Add a feed" width={360} onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect((screen.getByRole("dialog") as HTMLElement).style.width).toBe("360px");
+    rerender(
+      <Sheet title="Add a feed" width="42rem" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect((screen.getByRole("dialog") as HTMLElement).style.width).toBe("42rem");
+  });
+
+  it("is 480 pixels wide unless it is told otherwise", () => {
+    render(
+      <Sheet title="Settings" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect((screen.getByRole("dialog") as HTMLElement).style.width).toBe("480px");
+  });
+
+  it("takes classes for its frame and for its title", () => {
+    render(
+      <Sheet title="Time" className="rounded-[10px]" titleClassName="text-[13px] font-semibold" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    const frame = screen.getByRole("dialog") as HTMLElement;
+    expect(frame.className).toContain("rounded-xl");
+    expect(frame.className).toContain("rounded-[10px]");
+    expect(screen.getByRole("heading", { name: "Time" }).className).toBe("text-[13px] font-semibold");
+  });
+
+  it("draws its close button unless it is told not to", () => {
+    const { rerender } = render(
+      <Sheet title="Settings" showClose={false} onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    rerender(
+      <Sheet title="Settings" onClose={vi.fn()}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    expect(screen.getByRole("button", { name: "Close" })).toBeDefined();
+  });
+
+  it("keeps the overlay from closing it when a form asks", () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <Sheet title="Time" closeOnOverlay={false} onClose={onClose}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    const overlay = () => screen.getByRole("dialog").parentElement as HTMLElement;
+    fireEvent.pointerDown(overlay());
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(
+      <Sheet title="Time" onClose={onClose}>
+        <p>Body</p>
+      </Sheet>,
+    );
+    fireEvent.pointerDown(overlay());
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('starts focus on the first field with initialFocus="first"', () => {
+    render(
+      <Sheet title="Time" initialFocus="first" onClose={vi.fn()}>
+        <p>Body</p>
+        <input aria-label="Date" />
+      </Sheet>,
+    );
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Date" }));
+  });
+
+  it("starts focus where a ref says", () => {
+    const send = createRef<HTMLButtonElement>();
+    render(
+      <Sheet title="Time" initialFocus={send} onClose={vi.fn()}>
+        <p>Body</p>
+        <button type="button" ref={send}>
+          Send
+        </button>
+      </Sheet>,
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Send" }));
   });
 });

@@ -96,7 +96,24 @@ a submenu:
 `IconButton` takes a label, the keys it answers to, and a lucide icon.
 `Splitter` is a focusable separator that drags and moves 16px per arrow key.
 `Sheet` is a modal frame: an overlay over `--backdrop`, `role="dialog"`,
-Escape, and focus moved in and given back.
+Escape, and focus moved in and given back. Its defaults are a 480px frame,
+a close button, an overlay that closes it and focus on the frame; an app
+can change any of them:
+
+```tsx
+<Sheet
+  title="Time"
+  width={360}                       // a number of pixels, or a CSS length
+  className="rounded-[10px]"        // classes for the frame
+  titleClassName="text-[13px] font-semibold"
+  showClose={false}
+  closeOnOverlay={false}            // a form: only Escape or its buttons close it
+  initialFocus="first"              // the first field, else the first control
+  onClose={close}
+>
+  <input aria-label="Date" />
+</Sheet>
+```
 
 ```tsx
 <IconButton label="Search" keys="Ctrl + F" icon={Search} onClick={openSearch} />
