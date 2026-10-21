@@ -23,8 +23,9 @@ Status (2026-10-21):
 - **Phase 3 is merged,** and the `local` provider is reachable from lodge's
   host. The Codex adapter is built on Sign in with ChatGPT's plan usage
   ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md),
-  2026-10-20). The Copilot adapter is not built until its terms are
-  checked.
+  2026-10-20). The Copilot adapter is built on the owner's Copilot plan
+  ([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md),
+  Proposed, 2026-10-21), after the owner checked its terms.
 - **Phase 4:** the new-app skill is built. Mail's side is frostmail's
   [plan 0011](https://github.com/frostyard/frostmail/blob/main/docs/plans/0011-m8-mail-in-lodge.md),
   in progress.
@@ -219,7 +220,12 @@ and [design/overview.md](../design/overview.md#inference).
     open-source and locally hosted apps through Sign in with ChatGPT
     ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md);
     [specs/inference.md](../specs/inference.md#the-codex-provider)).
-  - **Copilot:** not checked yet.
+  - **Copilot: built (2026-10-21).** The owner checked Copilot's terms on
+    2026-10-21 and found this use acceptable. lodge uses the Copilot API
+    that the editors use, signed in with GitHub's device flow
+    ([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md);
+    [specs/inference.md](../specs/inference.md#the-copilot-provider)).
+    `TestCopilotLive` checks it against the owner's plan.
 - **The kit's inference client**, with `Lodge-Priority`.
 - **Done when:**
   - an app daemon streams a chat completion through `local`;
@@ -399,9 +405,10 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 - **Packaging.** Debs through apt-publisher, or a sysext, with the
   `sysusers.d` entries and socket units. Phase 2 deploys with the units
   alone. Decide before Phase 4 brings a second app.
-- **The Copilot adapter.** Subscription logins used from third-party
-  software are a terms-of-service grey area. Verify in Phase 3. (Codex is
-  resolved by
+- *Answered 2026-10-21:* **the Copilot adapter.** The owner read
+  Copilot's terms and found this use acceptable; Copilot is built
+  ([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md)).
+  (Codex is resolved by
   [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md).)
 - **Where the client is published:** npm, GitHub Packages, or a release
   tarball pinned with its hash. Decide in Phase 1.
@@ -409,5 +416,5 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 ## References
 
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md) and [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)

@@ -8,13 +8,16 @@ consumers are `internal/inference`, `cmd/lodgectl`, the owner who configures
 lodge, and every app daemon, whose side of the API is
 [app-contract.md](app-contract.md#inference). Rationale:
 [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md),
-and for the `codex` provider
-[ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md).
+for the `codex` provider
+[ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md),
+and for the `copilot` provider
+[ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md).
 Where it fits: [design/overview.md](../design/overview.md#inference).
 
 **Status:** written on 2026-10-19 for the
 [roadmap's](../plans/0001-roadmap.md#phase-3--the-inference-layer) Phase 3;
-the `codex` provider added on 2026-10-20.
+the `codex` provider added on 2026-10-20, and the `copilot` provider on
+2026-10-21.
 
 ## Interface
 
@@ -103,9 +106,9 @@ reload`, `SIGHUP`). Without it, lodge has no aliases.
 | --- | --- | --- | --- |
 | `providers.<name>` | object | — | a name of `[a-z][a-z0-9-]{0,31}` |
 | `.type` | string | yes | `openai` (any OpenAI-compatible server), `copilot` or `codex` |
-| `.baseURL` | string | for `openai` | an `http` or `https` URL whose path ends in `/v1`; for `codex`, optional, `https://api.openai.com/v1` when absent |
-| `.slots` | int | for `openai` and `codex` | 1 to 64: requests the provider runs at once |
-| `.home` | bool | no | the provider runs on the owner's own hardware; never for `codex` |
+| `.baseURL` | string | for `openai` | an `http` or `https` URL whose path ends in `/v1`; for `codex`, optional, `https://api.openai.com/v1` when absent; for `copilot`, optional, an `http` or `https` URL without a trailing slash that replaces the exchange's endpoint |
+| `.slots` | int | yes | 1 to 64: requests the provider runs at once |
+| `.home` | bool | no | the provider runs on the owner's own hardware; never for `codex` or `copilot` |
 | `aliases.<alias>` | object | — | `local`, `fast` or `smart` in contract 1 |
 | `.provider` | string | yes | a name in `providers` |
 | `.model` | string | yes | 1 to 256 visible ASCII characters, the provider's model |
@@ -114,11 +117,9 @@ reload`, `SIGHUP`). Without it, lodge has no aliases.
 - **`local` MUST map to a provider with `"home": true`.**
 - **`codex` is the owner's ChatGPT plan** through Sign in with ChatGPT
   ([The codex provider](#the-codex-provider)).
-- **`copilot` is not built.** Using a subscription's login from
-  third-party software is a grey area of its terms
-  ([ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md)).
-  lodge accepts the type so a configuration can name it, and shows such a
-  provider as unavailable, "not built: its terms are to verify".
+- **`copilot` is the owner's GitHub Copilot plan** through GitHub's device
+  sign-in and the Copilot API
+  ([The copilot provider](#the-copilot-provider)).
 - A configuration that breaks a rule is refused whole: lodge logs why,
   keeps serving everything else, has no aliases until a reload succeeds,
   and `lodgectl status` shows the reason.
@@ -133,6 +134,9 @@ reload`, `SIGHUP`). Without it, lodge has no aliases.
 - A `codex` provider has a sign-in instead of a key
   ([The codex provider](#the-codex-provider)). lodge keeps it in the same
   database, and shows only its account and client.
+- A `copilot` provider's key is a GitHub token of the owner's account
+  ([The copilot provider](#the-copilot-provider)). The Copilot tokens lodge
+  gets for it stay in memory only.
 
 ### The codex provider
 
@@ -266,6 +270,70 @@ open-source and locally hosted apps
     `provider_failed`, or a last error chunk when streaming.
   - lodge never retries on another provider and never switches billing.
 
+### The copilot provider
+
+The owner's GitHub Copilot plan, through the Copilot API that the editors
+use ([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md)).
+
+**The sign-in** runs on any computer, and needs no browser there and no
+running lodge: `lodgectl provider login NAME --copilot [--out FILE]`.
+- It runs GitHub's device flow: `POST https://github.com/login/device/code`
+  with `client_id=Iv1.b507a08c87ecfe98` (Copilot's editor client) and
+  `scope=read:user`.
+- It prints the verification URL and the user code, and opens the URL
+  when the computer has a browser. The owner enters the code in any
+  browser.
+- It polls `POST https://github.com/login/oauth/access_token` with
+  `grant_type=urn:ietf:params:oauth:grant-type:device_code`, at the
+  interval GitHub gives (at least 5 s), slower after `slow_down`, until it
+  gets a token, GitHub refuses (`access_denied`, `expired_token`), or 15
+  minutes pass.
+- It writes the GitHub token to `--out` (default
+  `lodge-NAME-github-token`), mode 0600.
+
+**The key:** `sudo lodgectl provider key NAME < FILE`. The owner deletes
+the file on both computers. The token does not expire; revoking lodge's
+authorization in GitHub's settings signs it out.
+
+**The exchange:** lodge sends `GET
+https://api.github.com/copilot_internal/v2/token` with `Authorization:
+token <GitHub token>` and the integration headers below.
+- The answer's `token` is the Copilot token, `expires_at` its expiry (Unix
+  seconds), `refresh_in` when to exchange again, `endpoints.api` the API's
+  base URL (`https://api.githubcopilot.com` when absent or not `https`),
+  and `sku` the plan, which `lodgectl status` shows.
+- lodge keeps the Copilot token in memory only. It exchanges again after
+  `refresh_in`, two minutes before `expires_at` at the latest, after the
+  API answers 401, and when the key changes. Exchanges are serialized.
+- **A refusal:** 401 or 404 makes the provider unavailable, "GitHub
+  refused the token (STATUS): sign in again with lodgectl provider login
+  NAME --copilot, then sudo lodgectl provider key NAME". 403 makes it
+  unavailable, "this GitHub account has no Copilot access". Any other
+  failure keeps a Copilot token that has not expired in use.
+
+**The integration headers,** on the exchange and on every request to the
+API: `Copilot-Integration-Id: vscode-chat`, `Editor-Version:
+vscode/1.107.0`, `Editor-Plugin-Version: copilot-chat/0.35.0` and
+`User-Agent: GitHubCopilotChat/0.35.0`.
+
+**Requests:**
+- `/v1/chat/completions` and `/v1/responses` go to `<api>/chat/completions`
+  and `<api>/responses` as the app sent them, with `model` set to the
+  alias's model, `Authorization: Bearer <Copilot token>`, the integration
+  headers, `Openai-Intent: conversation-edits`, and the app's `Accept`.
+- **`X-Initiator`** is `user` when the request's last message (or its
+  `input`, for a Responses request) is the user's, and `agent` otherwise,
+  such as after a tool result. It decides which requests count as premium
+  requests, and lodge never sends `agent` for a user's turn.
+- **On 401:** lodge exchanges again once, and sends the request again.
+- The answer passes through as an `openai` provider's does, and its usage
+  is logged the same way.
+- `lodgectl provider models NAME` lists `GET <api>/models`'s `data` ids and
+  names.
+
+`TestCopilotLive` checks the route against the owner's plan when it is run
+with `LODGE_LIVE_COPILOT=1` and `LODGE_COPILOT_TOKEN_FILE`.
+
 ### The queue
 
 Each provider has its own queue, of two classes: `Lodge-Priority:
@@ -283,18 +351,20 @@ interactive`, and `background` when the header is absent or anything else.
 
 ### Availability
 
-- lodge checks each `openai` and `codex` provider at start, every minute,
-  and at once after a request fails to reach it or a sign-in is imported:
-  `GET <baseURL>/models` with the key, or the sign-in's access token,
-  answered 2xx within 5 s. A `codex` provider without a sign-in, or signed
-  out, is unavailable with the command that fixes it.
+- lodge checks each provider at start, every minute, and at once after a
+  request fails to reach it, a key is set or a sign-in is imported: `GET
+  <baseURL>/models` with the key, the sign-in's access token or the
+  Copilot token, answered 2xx within 5 s. A `codex` or `copilot` provider
+  without a sign-in, signed out or refused, is unavailable with the
+  command that fixes it.
 - An unavailable provider's aliases list `"available": false`, and a
   request to one answers 503 at once, without queueing.
 - A provider not yet checked, just after start or a reload that changed
   it, is neither: a request for it waits for its first check, at most 6 s.
 - `lodgectl status` shows each provider: its type, whether it is
   available and why not, its slots, and how many requests run and wait;
-  and for `codex`, the account and client it is signed in as.
+  for `codex`, the account and client it is signed in as; and for
+  `copilot`, the plan of its last exchange.
 
 ### The usage log
 
@@ -314,8 +384,9 @@ interactive`, and `background` when the header is absent or anything else.
 | `lodgectl usage [--since DATE]` | `lodge.usage` | the sums above, since a day (UTC) or for all time |
 | `lodgectl provider key NAME` | `lodge.providerKey` | sets or removes a provider's key, from stdin; `notFound` for no such provider |
 | `lodgectl provider login NAME [flags]` | none | on a computer with a browser: signs a `codex` provider in and writes its login file ([The codex provider](#the-codex-provider)) |
+| `lodgectl provider login NAME --copilot [--out FILE]` | none | on any computer: GitHub's device flow for a `copilot` provider, writing the GitHub token's file ([The copilot provider](#the-copilot-provider)) |
 | `lodgectl provider import NAME` | `lodge.providerImport` | replaces a `codex` provider's sign-in with the login file on stdin |
-| `lodgectl provider models NAME` | `lodge.providerModels` | the provider's models: the plan's model slugs with `visibility` `list` for `codex`, `GET /models` ids for `openai`; `conflict` when the provider cannot answer |
+| `lodgectl provider models NAME` | `lodge.providerModels` | the provider's models: the plan's model slugs with `visibility` `list` for `codex`, `GET /models` ids for `openai` and `copilot`; `conflict` when the provider cannot answer |
 
 ## Rules
 
@@ -327,6 +398,8 @@ interactive`, and `background` when the header is absent or anything else.
   sign-in's token.
 - A `codex` request is unstored and streamed, and a plan usage error never
   falls back to another provider.
+- A `copilot` request's `X-Initiator` is `user` for a user's turn, and a
+  Copilot token is never stored.
 - An unavailable provider's alias fails at once, and never queues.
 - Background work never holds the last slot of a provider with more than
   one.
@@ -335,7 +408,7 @@ interactive`, and `background` when the header is absent or anything else.
 
 ## References
 
-- Rationale: [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md) (the `codex` provider), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) (a user per app)
+- Rationale: [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md) (the `codex` provider), [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (the `copilot` provider), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) (a user per app)
 - Context: [design/overview.md](../design/overview.md#inference)
 - Related: [app-contract.md](app-contract.md#inference) (the API apps call), [lodge-http.md](lodge-http.md#the-control-socket-and-lodgectl) (`lodgectl`)
 - Built in: [roadmap — Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer)

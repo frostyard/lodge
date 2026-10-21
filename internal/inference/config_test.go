@@ -20,7 +20,7 @@ const validConfig = `{"other": 1, "inference": {
   "providers": {
     "home": {"type": "openai", "baseURL": "http://192.0.2.10:8080/v1", "slots": 4, "home": true},
     "cloud": {"type": "openai", "baseURL": "https://api.example.com/v1", "slots": 8},
-    "copilot": {"type": "copilot"}
+    "copilot": {"type": "copilot", "slots": 4}
   },
   "aliases": {
     "local": {"provider": "home", "model": "MODEL"},
@@ -65,11 +65,19 @@ func TestConfigRules(t *testing.T) {
 		"unknown member":   {`{"inference": {"providers": {}, "aliases": {}, "keys": {}}}`, "unknown"},
 		"a key in config":  {`{"inference": {"providers": {"x": {"type": "copilot", "key": "sk-1"}}, "aliases": {}}}`, "unknown"},
 		"not json":         {`{`, "config.json"},
+		"copilot at home":  {`{"inference": {"providers": {"x": {"type": "copilot", "slots": 1, "home": true}}, "aliases": {}}}`, "not on the owner's own hardware"},
+		"codex at home":    {`{"inference": {"providers": {"x": {"type": "codex", "slots": 1, "home": true}}, "aliases": {}}}`, "not on the owner's own hardware"},
+		"copilot no slots": {`{"inference": {"providers": {"x": {"type": "copilot"}}, "aliases": {}}}`, "slots"},
+		"copilot slash":    {`{"inference": {"providers": {"x": {"type": "copilot", "baseURL": "https://api.example.com/", "slots": 1}}, "aliases": {}}}`, "trailing slash"},
 	} {
 		_, err := LoadConfig(writeConfig(t, c.body))
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want an error with %q", name, err, c.want)
 		}
+	}
+	// A copilot provider's baseURL needs no /v1.
+	if _, err := LoadConfig(writeConfig(t, `{"inference": {"providers": {"x": {"type": "copilot", "baseURL": "https://api.example.com", "slots": 2}}, "aliases": {}}}`)); err != nil {
+		t.Errorf("a copilot baseURL: %v", err)
 	}
 	// At the limits: 1 and 64 slots.
 	for _, slots := range []string{"1", "64"} {

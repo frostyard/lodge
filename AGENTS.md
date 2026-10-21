@@ -62,6 +62,9 @@ Everything in the map is built.
   - `internal/codexauth`: Sign in with ChatGPT for a `codex` provider:
     `lodgectl provider login`'s sign-in, the login file and its refresh
     ([ADR-0015](docs/adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)).
+  - `internal/copilotauth`: GitHub's device flow and the Copilot token
+    exchange for a `copilot` provider
+    ([ADR-0016](docs/adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md)).
   - `internal/agents`: the agents on lodge's host and their socket,
     `/run/lodge/agent.sock`, admitted by peer uid
     ([ADR-0014](docs/adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).

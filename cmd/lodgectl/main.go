@@ -54,6 +54,9 @@ const usage = `usage: lodgectl [--root DIR] [--json] COMMAND
   provider login NAME [--client-id ID] [--email EMAIL] [--port N] [--out FILE]
                                            on a computer with a browser: sign a codex provider in
                                            to your ChatGPT plan, and write its login file
+  provider login NAME --copilot [--out FILE]
+                                           on any computer: sign in to GitHub for a copilot
+                                           provider, and write the GitHub token's file
   provider import NAME                     on lodge's host: import a login file from stdin
   provider models NAME                     the models a provider offers
   version                                  lodgectl's version
