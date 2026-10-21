@@ -34,6 +34,7 @@ frostyard/core's
 - [0014 — Agents on lodge's host use a local agent socket](adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
 - [0015 — Codex uses the owner's ChatGPT plan through Sign in with ChatGPT](adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)
 - [0016 — Copilot uses the owner's Copilot plan through GitHub's device sign-in](adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Proposed)
+- [0017 — The kit guards outbound fetches against inside addresses](adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md) (Proposed)
 
 ### Design
 
