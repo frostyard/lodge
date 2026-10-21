@@ -189,6 +189,15 @@ export interface LodgeAPIOptions {
   hello?: { protocol: number; client: string };
   /** How often a visible page pings rpc.ping; 30 s by default. */
   pingEveryMs?: number;
+  /**
+   * How long an unanswered ping waits before the socket is closed as
+   * dropped, so the close handlers and the reconnect run. No timeout by
+   * default: a busy daemon (maild syncing a large mailbox, notesd scanning
+   * a vault) may answer late, and a library-wide default would drop healthy
+   * connections. An app that knows its daemon's worst case passes it, as
+   * frostnotes does with 10 s.
+   */
+  pingTimeoutMs?: number;
   /** The first retry delay after a drop; 1 s by default, doubling to 30 s. */
   retryMs?: number;
   /** The URL an app's file loads from by its hash; see Transport.blobURL. */
@@ -216,6 +225,7 @@ class LodgeConnection implements LodgeAPI {
   private readonly doc: VisibilityDocument;
   private readonly WS: typeof WebSocket;
   private readonly pingEveryMs: number;
+  private readonly pingTimeoutMs: number;
   private readonly retryMs: number;
   private readonly hello: { protocol: number; client: string } | undefined;
   private readonly hooks: Hooks;
@@ -228,6 +238,8 @@ class LodgeConnection implements LodgeAPI {
   private stopped = false;
   private retry: ReturnType<typeof setTimeout> | undefined;
   private pinger: ReturnType<typeof setInterval> | undefined;
+  private pingTimer: ReturnType<typeof setTimeout> | undefined;
+  private pinging = false;
   private backoff: number;
 
   constructor(lodge: { apiURL(): string }, options: LodgeAPIOptions, hooks: Hooks) {
@@ -235,6 +247,7 @@ class LodgeConnection implements LodgeAPI {
     this.doc = options.document ?? document;
     this.WS = options.webSocket ?? WebSocket;
     this.pingEveryMs = options.pingEveryMs ?? PING_MS;
+    this.pingTimeoutMs = options.pingTimeoutMs ?? 0;
     this.retryMs = options.retryMs ?? RETRY_MS;
     this.hello = options.hello;
     if (options.blobURL !== undefined) this.blobURL = options.blobURL;
@@ -307,6 +320,9 @@ class LodgeConnection implements LodgeAPI {
       this.session = null;
       this.readyNow = false;
       clearInterval(this.pinger);
+      clearTimeout(this.pingTimer);
+      this.pingTimer = undefined;
+      this.pinging = false;
       session.close(`the connection through lodge closed (${event.code})`);
       if (!this.everReady) {
         this.stopped = true;
@@ -340,6 +356,9 @@ class LodgeConnection implements LodgeAPI {
     this.stopped = true;
     clearTimeout(this.retry);
     clearInterval(this.pinger);
+    clearTimeout(this.pingTimer);
+    this.pingTimer = undefined;
+    this.pinging = false;
     this.doc.removeEventListener("visibilitychange", this.onVisibility);
     const socket = this.socket;
     this.socket = null;
@@ -355,8 +374,27 @@ class LodgeConnection implements LodgeAPI {
   private ping(): void {
     if (!this.readyNow || this.doc.visibilityState !== "visible") return;
     const session = this.session;
-    if (session === null) return;
-    session.call("rpc.ping", {}).catch(() => {});
+    const socket = this.socket;
+    if (session === null || socket === null || this.pinging) return;
+    if (this.pingTimeoutMs <= 0) {
+      session.call("rpc.ping", {}).catch(() => {});
+      return;
+    }
+    // One ping at a time: the next tick waits for this answer, and a ping
+    // unanswered for the timeout closes the socket as a drop, which ends
+    // the session and starts the reconnect.
+    this.pinging = true;
+    this.pingTimer = setTimeout(() => {
+      this.pingTimer = undefined;
+      this.pinging = false;
+      socket.close();
+    }, this.pingTimeoutMs);
+    const answered = () => {
+      clearTimeout(this.pingTimer);
+      this.pingTimer = undefined;
+      this.pinging = false;
+    };
+    session.call("rpc.ping", {}).then(answered, answered);
   }
 
   private onVisibility = (): void => {

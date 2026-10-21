@@ -50,6 +50,9 @@ api.onEvent(({ event, data }) => {
 - It opens only while the page is visible, pings `rpc.ping` every 30 s so
   lodge keeps the session (which ends after 90 s without a frame), and
   reconnects with a growing delay after a drop.
+- `pingTimeoutMs` closes a socket whose ping goes unanswered for that long,
+  as a drop, so the reconnect runs. It is off unless an app asks: pass
+  `10_000` for a phone that may sleep without closing its sockets.
 - `hello` is sent after every open, when given, and the transport is ready
   only after its answer.
 - It resolves on the first ready connection and rejects when that first

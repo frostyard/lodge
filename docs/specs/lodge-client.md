@@ -24,7 +24,8 @@ the shell's half in Phase 2. [The companion's](#the-companion) additions
 `companion`) were made on 2026-10-19, additively in major 1, and built in
 the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
-[The `rpc` subpath](#the-rpc-subpath) was added in 0.3.0, on 2026-10-21.
+[The `rpc` subpath](#the-rpc-subpath) was added in 0.3.0, on 2026-10-21,
+and its ping timeout in 0.3.1.
 
 ## Interface
 
@@ -295,6 +296,12 @@ api.onEvent(({ event, data }) => {
     again;
   - a visible page sends `rpc.ping` every 30 s (lodge ends a session after
     90 s without a frame), and at once when it becomes visible;
+  - with `pingTimeoutMs` set, a ping unanswered for that long closes the
+    socket as a drop, so the close handlers and the reconnect run; one ping
+    is in flight at a time. It is off by default: a busy daemon may answer
+    late, and a library-wide default would drop healthy connections. An app
+    that knows its daemon's worst case sets it, as frostnotes does (10 s,
+    for a phone that sleeps without a close);
   - a connection that drops reconnects with a delay that doubles from 1 s
     to 30 s; a page that is hidden waits for visibility instead;
   - a call made while the socket is down rejects with `CodeNotConnected`;

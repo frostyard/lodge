@@ -219,6 +219,87 @@ describe("connectLodgeAPI", () => {
     expect(pings()).toBe(2);
   });
 
+  it("closes a connection whose ping goes unanswered for pingTimeoutMs", async () => {
+    const view = fakeDocument();
+    const pending = connectLodgeAPI(
+      { apiURL: () => "wss://lodge.test/api" },
+      {
+        document: view.doc,
+        webSocket: FakeSocket as unknown as typeof WebSocket,
+        pingTimeoutMs: 1_000,
+      },
+    );
+    const socket = FakeSocket.made[0];
+    if (socket === undefined) throw new Error("no socket");
+    socket.open();
+    const api = await pending;
+    const closes: string[] = [];
+    api.onClose((reason) => closes.push(reason));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.sent.filter((text) => text.includes('"rpc.ping"'))).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(socket.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.closed).toBe(true);
+    expect(closes).toHaveLength(1);
+    expect(api.ready).toBe(false);
+
+    // The drop reconnects as any other: a new socket after the first delay.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.made).toHaveLength(2);
+  });
+
+  it("leaves a connection alone when the ping is answered", async () => {
+    const view = fakeDocument();
+    const pending = connectLodgeAPI(
+      { apiURL: () => "wss://lodge.test/api" },
+      {
+        document: view.doc,
+        webSocket: FakeSocket as unknown as typeof WebSocket,
+        pingTimeoutMs: 1_000,
+      },
+    );
+    const socket = FakeSocket.made[0];
+    if (socket === undefined) throw new Error("no socket");
+    socket.open();
+    await pending;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const ping = JSON.parse(socket.sent.find((text) => text.includes('"rpc.ping"')) ?? "{}") as { id: number };
+    socket.receive({ jsonrpc: "2.0", id: ping.id, result: {} });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.closed).toBe(false);
+  });
+
+  it("sends one ping at a time while one is unanswered", async () => {
+    const view = fakeDocument();
+    const pending = connectLodgeAPI(
+      { apiURL: () => "wss://lodge.test/api" },
+      {
+        document: view.doc,
+        webSocket: FakeSocket as unknown as typeof WebSocket,
+        pingTimeoutMs: 10_000,
+      },
+    );
+    const socket = FakeSocket.made[0];
+    if (socket === undefined) throw new Error("no socket");
+    socket.open();
+    await pending;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.sent.filter((text) => text.includes('"rpc.ping"'))).toHaveLength(1);
+  });
+
+  it("has no ping timeout unless the app asks for one", async () => {
+    const view = fakeDocument();
+    const { socket } = await opened(view);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(socket.closed).toBe(false);
+  });
+
   it("reconnects after a drop while visible, with a growing delay", async () => {
     const view = fakeDocument();
     const { api } = await opened(view);
