@@ -157,9 +157,14 @@ applyScheme(document.documentElement, null); // back to the system's scheme
 4. **A token change is a release.** Before 1.0, a value change is a minor
    and says so in the changelog; a new token is a minor; a removed or
    renamed token is a major.
-5. **No runtime dependency but the font.** React, lucide-react and
+5. **The accent is frostyard's cold blue**
+   ([ADR-0019](../docs/adr/0019-the-accent-is-frostyards-cold-blue.md)):
+   `#2c6380` in the light and `#47b8ef` in the dark, with
+   `--accent-contrast` and `--focus-ring` moving with it. A change of an
+   accent value is a minor release before 1.0 and says so in the changelog.
+6. **No runtime dependency but the font.** React, lucide-react and
    react-dom are optional peers.
-6. **Every app bundles its own copy.** lodge serves each app's web build
+7. **Every app bundles its own copy.** lodge serves each app's web build
    from disk, and no daemon serves a shared stylesheet
    ([ADR-0007](../docs/adr/0007-lodge-serves-every-apps-web-build-from-disk.md)).
 
