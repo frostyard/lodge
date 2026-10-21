@@ -1,0 +1,110 @@
+/* The shared design tokens (docs/specs/ui-package.md, Tokens). Components use
+   them through the Tailwind theme in theme.css, or directly as custom
+   properties; never a literal colour.
+
+   The colour values are frostmail's, unchanged
+   (app/src/styles/tokens.css at commit 4328cb7, 2026-10-21), with the generic
+   extras from frostnotes (app/src/styles/tokens.css at commit 059442d). A
+   change to a value is a look change: it ships as a minor release before
+   1.0 and says so in the changelog.
+
+   The domain tokens (flags, quotes, avatars) are in accents.css, so an app
+   that does not use them does not take them. */
+:root {
+  color-scheme: light dark;
+
+  --bg-window: #ffffff;
+  --bg-sidebar: #f2f2f4;
+  --bg-toolbar: #f7f7f8;
+  --bg-banner: #f5f5f7;
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #a1a1a6;
+  --separator: #e3e3e6;
+  --accent: #007aff;
+  --accent-contrast: #ffffff;
+  --selection-inactive: #e4e4e7;
+  --selection-sidebar: #dcdce0;
+  --badge-bg: #e5e5ea;
+  --badge-text: #6e6e73;
+  --focus-ring: rgb(0 122 255 / 0.5);
+
+  /* Frostnotes' generic extras. */
+  --bg-code: #f5f5f7;
+  --bg-highlight: rgb(255 204 0 / 0.4);
+  --popover-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  --backdrop: rgb(0 0 0 / 0.2);
+
+  /* Density: the three sizes an app's chrome uses, and nothing else. A
+     pointer-coarse (touch) screen takes the block below. These are not
+     colours, so the dark blocks do not set them. */
+  --control-h: 28px;
+  --row-h: 32px;
+  --pad-x: 10px;
+}
+
+/* Dark: the system's scheme, unless lodge's shell names one (data-theme).
+   The two dark blocks hold the same values: change them together
+   (test/tokens.test.ts checks it). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-window: #1e1e1e;
+    --bg-sidebar: #2a2a2c;
+    --bg-toolbar: #2c2c2e;
+    --bg-banner: #2c2c2e;
+    --text-primary: #f5f5f7;
+    --text-secondary: #a1a1a6;
+    --text-tertiary: #6e6e73;
+    --separator: #3a3a3c;
+    --accent: #0a84ff;
+    --accent-contrast: #ffffff;
+    --selection-inactive: #3a3a3c;
+    --selection-sidebar: #3a3a3c;
+    --badge-bg: #3a3a3c;
+    --badge-text: #a1a1a6;
+    --focus-ring: rgb(10 132 255 / 0.6);
+    --bg-code: #2a2a2c;
+    --bg-highlight: rgb(255 214 10 / 0.3);
+    --popover-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+    --backdrop: rgb(0 0 0 / 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-window: #1e1e1e;
+  --bg-sidebar: #2a2a2c;
+  --bg-toolbar: #2c2c2e;
+  --bg-banner: #2c2c2e;
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+  --text-tertiary: #6e6e73;
+  --separator: #3a3a3c;
+  --accent: #0a84ff;
+  --accent-contrast: #ffffff;
+  --selection-inactive: #3a3a3c;
+  --selection-sidebar: #3a3a3c;
+  --badge-bg: #3a3a3c;
+  --badge-text: #a1a1a6;
+  --focus-ring: rgb(10 132 255 / 0.6);
+  --bg-code: #2a2a2c;
+  --bg-highlight: rgb(255 214 10 / 0.3);
+  --popover-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+  --backdrop: rgb(0 0 0 / 0.4);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* A touch screen: a finger needs a larger target than a mouse pointer. */
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+    --row-h: 44px;
+    --pad-x: 12px;
+  }
+}

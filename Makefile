@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt shell-check shell-fmt shell-build
+.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -92,7 +92,7 @@ verify: ## Tidy, vet, format, lint and tests
 
 check: fmt verify ## Format, then verify (the developer gate)
 
-ci: verify race cross client-check shell-check ## verify plus the race detector, cross-builds, client/ and shell/ (nsl)
+ci: verify race cross client-check ui-check shell-check ## verify plus the race detector, cross-builds, client/, ui/ and shell/ (nsl)
 
 clean: ## Remove build output
 	rm -rf build dist coverage.out coverage.html
@@ -108,6 +108,12 @@ client-check: ## Lint (Biome), typecheck and test client/ (nsl)
 
 client-fmt: ## Format client/ and organize its imports with Biome (nsl)
 	$(IN_NSL) 'cd client && pnpm install --frozen-lockfile --silent && pnpm run fmt'
+
+ui-check: ## Lint (Biome), typecheck and test ui/ (nsl)
+	$(IN_NSL) 'cd ui && pnpm install --frozen-lockfile --silent && pnpm run check'
+
+ui-fmt: ## Format ui/ and organize its imports with Biome (nsl)
+	$(IN_NSL) 'cd ui && pnpm install --frozen-lockfile --silent && pnpm run fmt'
 
 # The shell (docs/specs/shell.md) uses client/'s shell half through a link:
 # dependency, and builds into shell/dist/, which installs at

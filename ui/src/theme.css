@@ -1,0 +1,86 @@
+/* The Tailwind v4 theme over the tokens: the utilities bg-window,
+   text-secondary, border-separator, text-flag-1 (with accents.css) and the
+   shared type roles text-sidebar-row, text-empty, text-reader-body and so
+   on (docs/specs/ui-package.md, Theme).
+
+   Import it after "tailwindcss/theme.css" or after "tailwindcss", never
+   instead of them: this file imports no Tailwind and carries no preflight.
+   The app owns its preflight (frostnotes ADR-0025). */
+@theme inline {
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+
+  --color-window: var(--bg-window);
+  --color-sidebar: var(--bg-sidebar);
+  --color-toolbar: var(--bg-toolbar);
+  --color-banner: var(--bg-banner);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-separator: var(--separator);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-selection-inactive: var(--selection-inactive);
+  --color-selection-sidebar: var(--selection-sidebar);
+  --color-badge: var(--badge-bg);
+  --color-badge-text: var(--badge-text);
+  --color-focus: var(--focus-ring);
+  --color-flag-1: var(--flag-1);
+  --color-flag-2: var(--flag-2);
+  --color-flag-3: var(--flag-3);
+  --color-flag-4: var(--flag-4);
+  --color-flag-5: var(--flag-5);
+  --color-flag-6: var(--flag-6);
+  --color-flag-7: var(--flag-7);
+  --color-quote-1: var(--quote-1);
+  --color-quote-2: var(--quote-2);
+  --color-quote-3: var(--quote-3);
+  --color-avatar-0: var(--avatar-0);
+  --color-avatar-1: var(--avatar-1);
+  --color-avatar-2: var(--avatar-2);
+  --color-avatar-3: var(--avatar-3);
+  --color-avatar-4: var(--avatar-4);
+  --color-avatar-5: var(--avatar-5);
+  --color-avatar-6: var(--avatar-6);
+  --color-avatar-7: var(--avatar-7);
+  --color-code: var(--bg-code);
+  --color-highlight: var(--bg-highlight);
+  --color-backdrop: var(--backdrop);
+  --shadow-popover: var(--popover-shadow);
+}
+
+@theme {
+  --text-list-sender: 13px;
+  --text-list-sender--line-height: 18px;
+  --text-list-sender--font-weight: 600;
+  --text-list-subject: 13px;
+  --text-list-subject--line-height: 18px;
+  --text-list-preview: 12px;
+  --text-list-preview--line-height: 16px;
+  --text-list-date: 12px;
+  --text-list-date--line-height: 16px;
+  --text-sidebar-row: 13px;
+  --text-sidebar-row--line-height: 18px;
+  --text-sidebar-section: 11px;
+  --text-sidebar-section--line-height: 14px;
+  --text-sidebar-section--font-weight: 600;
+  --text-reader-sender: 14px;
+  --text-reader-sender--line-height: 20px;
+  --text-reader-sender--font-weight: 600;
+  --text-reader-subject: 13px;
+  --text-reader-subject--line-height: 18px;
+  --text-reader-subject--font-weight: 600;
+  --text-reader-meta: 12px;
+  --text-reader-meta--line-height: 16px;
+  --text-reader-body: 14px;
+  --text-reader-body--line-height: 21px;
+  --text-toolbar-title: 13px;
+  --text-toolbar-title--line-height: 16px;
+  --text-toolbar-title--font-weight: 600;
+  --text-toolbar-subtitle: 11px;
+  --text-toolbar-subtitle--line-height: 14px;
+  --text-empty: 15px;
+  --text-empty--line-height: 20px;
+}
+
+/* A narrow window: the query of theme.ts's NARROW_QUERY. */
+@custom-variant narrow (@media (max-width: 599px));

@@ -1,0 +1,70 @@
+/* The domain tokens: a flag's colour, a quoted level, an avatar. They are
+   frostmail's, unchanged (app/src/styles/tokens.css at commit 4328cb7,
+   2026-10-21), and they are apart from tokens.css so that an app opts in.
+
+   Import it after tokens.css. The dark blocks hold the same values as each
+   other (test/tokens.test.ts checks it). */
+:root {
+  --flag-1: #ff3b30;
+  --flag-2: #ff9500;
+  --flag-3: #ffcc00;
+  --flag-4: #34c759;
+  --flag-5: #007aff;
+  --flag-6: #af52de;
+  --flag-7: #8e8e93;
+  --quote-1: #2e7bd6;
+  --quote-2: #2ea44f;
+  --quote-3: #c2410c;
+  --avatar-0: #5e5ce6;
+  --avatar-1: #0a84ff;
+  --avatar-2: #30b0c7;
+  --avatar-3: #34c759;
+  --avatar-4: #ff9f0a;
+  --avatar-5: #ff375f;
+  --avatar-6: #bf5af2;
+  --avatar-7: #8e8e93;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --flag-1: #ff453a;
+    --flag-2: #ff9f0a;
+    --flag-3: #ffd60a;
+    --flag-4: #30d158;
+    --flag-5: #0a84ff;
+    --flag-6: #bf5af2;
+    --flag-7: #98989d;
+    --quote-1: #5aa0f0;
+    --quote-2: #4cc76a;
+    --quote-3: #f0884a;
+    --avatar-0: #5e5ce6;
+    --avatar-1: #0a84ff;
+    --avatar-2: #30b0c7;
+    --avatar-3: #34c759;
+    --avatar-4: #ff9f0a;
+    --avatar-5: #ff375f;
+    --avatar-6: #bf5af2;
+    --avatar-7: #8e8e93;
+  }
+}
+
+:root[data-theme="dark"] {
+  --flag-1: #ff453a;
+  --flag-2: #ff9f0a;
+  --flag-3: #ffd60a;
+  --flag-4: #30d158;
+  --flag-5: #0a84ff;
+  --flag-6: #bf5af2;
+  --flag-7: #98989d;
+  --quote-1: #5aa0f0;
+  --quote-2: #4cc76a;
+  --quote-3: #f0884a;
+  --avatar-0: #5e5ce6;
+  --avatar-1: #0a84ff;
+  --avatar-2: #30b0c7;
+  --avatar-3: #34c759;
+  --avatar-4: #ff9f0a;
+  --avatar-5: #ff375f;
+  --avatar-6: #bf5af2;
+  --avatar-7: #8e8e93;
+}
