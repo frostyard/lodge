@@ -348,7 +348,10 @@ allow a login or a node, issue a token, or reload the apps
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
   [ui-package.md](../specs/ui-package.md)). Version 0.1.0 carries
   frostmail's values unchanged; the apps move to it one at a time, and the
-  look change comes later as token values only.
+  look change comes later as token values only. **The shell takes the same
+  look**: its cream and green, on `system-ui`, became the package's tokens
+  and Inter ([shell.md](../specs/shell.md#colours-and-type)), with its
+  manifest colours and home-screen icons moved with them.
 
 Apps pin all three to a published lodge commit or release.
 

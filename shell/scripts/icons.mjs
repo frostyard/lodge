@@ -5,8 +5,10 @@
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
-const GREEN = [0x2f, 0x6f, 0x5e];
-const CREAM = [0xf4, 0xf1, 0xea];
+// Lodge-ui's accent and window background, in the light scheme
+// (docs/specs/shell.md, Colours; the manifest names the same colours).
+const ACCENT = [0x00, 0x7a, 0xff];
+const BACKGROUND = [0xff, 0xff, 0xff];
 const HOUSE = [
   [256, 104],
   [72, 264],
@@ -40,8 +42,8 @@ function sample(x, y, maskable) {
   // A maskable icon fills the square and keeps the drawing in the middle 80 %.
   const [u, v] = maskable ? [(x - 256) / 0.8 + 256, (y - 256) / 0.8 + 256] : [x, y];
   const door = u >= DOOR[0] && u <= DOOR[2] && v >= DOOR[1] && v <= DOOR[3];
-  if (!door && inPolygon(u, v, HOUSE)) return [...CREAM, 255];
-  return [...GREEN, 255];
+  if (!door && inPolygon(u, v, HOUSE)) return [...BACKGROUND, 255];
+  return [...ACCENT, 255];
 }
 
 function render(size, maskable) {
