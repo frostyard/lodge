@@ -1,13 +1,14 @@
 # frostyard/lodge
 
 lodge is a tailnet-only web shell for frostyard's first-party apps:
-frostnotes, frostmail, and later a personal-assistant agent. It gives them
-one address with a quick switcher, and each app runs in a frame that stays
-loaded. lodge is the only process on the network. Each app is a daemon on a
-Unix socket behind it. lodge also holds what the apps share: the Go kit
-(`kit/`), the frontend library `@frostyard/lodge-client` (`client/`), the
-shared look `@frostyard/lodge-ui` (`ui/`), an MCP endpoint per app, and an
-inference layer. Start at
+frostnotes, frostmail, frostread and the personal-assistant agent Porter.
+It gives them one address with a quick switcher, and each app runs in a
+frame that stays loaded. lodge is the only process on the network. Each
+app is a daemon on a Unix socket behind it. lodge also holds what the apps
+share: the Go kit (`kit/`), the frontend library
+`@frostyard/lodge-client` (`client/`), the shared look
+`@frostyard/lodge-ui` (`ui/`), an MCP endpoint per app, and an inference
+layer. Start at
 [docs/README.md](docs/README.md). The architecture is in
 [docs/design/overview.md](docs/design/overview.md), and the contract with
 apps is [docs/specs/app-contract.md](docs/specs/app-contract.md). The
@@ -33,6 +34,13 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
 - the shared UI package, `@frostyard/lodge-ui` 0.1.0, with the tokens and
   the first React primitives
   ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md), Proposed).
+- **frostread, the third app, is built on 2026-10-21** and waits for
+  review ([its PRs](https://github.com/frostyard/frostread/pulls)); the
+  repository is private until the owner opens it. Its reader is lodge's
+  app `read`; its fetcher uses the kit's `netguard`
+  ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)),
+  and its web app is the first on the UI package
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)).
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
