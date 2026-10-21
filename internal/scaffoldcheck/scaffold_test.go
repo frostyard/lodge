@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/frostyard/lodge/internal/apps"
 )
 
 // root is the repository's root, from this package's directory.
@@ -101,7 +103,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 			"web/vite.config.ts":      `base: "/app/tasks/"`,
 			"web/src/main.ts":         `connectLodge({ app: "tasks" })`,
 			"web/index.html":          `<script type="module" src="/src/main.ts"></script>`,
-			"web/public/icon.svg":     `<svg`,
+			"web/public/icon.svg":     apps.PlaceholderIcon,
 			"web/pnpm-workspace.yaml": `storeDir:`,
 			"Makefile":                `--outDir ../build/web`,
 		} {
