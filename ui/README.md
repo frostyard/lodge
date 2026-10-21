@@ -26,8 +26,9 @@ Between releases an app may pin a pushed lodge commit instead
 (`#<commit>&path:ui`). The shell takes it from the checkout, with
 `link:../ui`, as it does for `client/`.
 
-**The dependencies React and lucide-react are optional peers**, so an app
-that takes only the CSS or `./theme` installs neither.
+**The dependencies React, lucide-react and react-dom are optional peers**,
+so an app that takes only the CSS or `./theme` installs none of them. The
+`Menu` is the one that needs react-dom: it portals onto the body.
 
 ### CSS
 
@@ -70,6 +71,26 @@ Without it, a utility that only the package's components use (`size-7`,
 
 ```tsx
 import { IconButton, Sheet, Splitter, cx, useNarrow } from "@frostyard/lodge-ui/react";
+```
+
+`Menu` is a menu at a point, or a narrow window's sheet; its rows are an
+item with an icon, a check mark, keys and a disabled state, a separator, or
+a submenu:
+
+```tsx
+<Menu
+  label="Message"
+  x={x}
+  y={y}
+  onSelect={(id) => run(id)}
+  onClose={close}
+  items={[
+    { kind: "item", id: "open", label: "Open", keys: "Ctrl + O" },
+    { kind: "item", id: "unread", label: "Mark as Unread", checked: unread },
+    { kind: "separator" },
+    { kind: "submenu", label: "Move to", items: [{ kind: "item", id: "inbox", label: "Inbox" }] },
+  ]}
+/>
 ```
 
 `IconButton` takes a label, the keys it answers to, and a lucide icon.
@@ -126,8 +147,8 @@ applyScheme(document.documentElement, null); // back to the system's scheme
 4. **A token change is a release.** Before 1.0, a value change is a minor
    and says so in the changelog; a new token is a minor; a removed or
    renamed token is a major.
-5. **No runtime dependency but the font.** React and lucide-react are
-   optional peers.
+5. **No runtime dependency but the font.** React, lucide-react and
+   react-dom are optional peers.
 6. **Every app bundles its own copy.** lodge serves each app's web build
    from disk, and no daemon serves a shared stylesheet
    ([ADR-0007](../docs/adr/0007-lodge-serves-every-apps-web-build-from-disk.md)).

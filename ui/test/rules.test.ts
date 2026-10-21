@@ -58,6 +58,6 @@ describe("the sources", () => {
     expect(pkg.type).toBe("module");
     expect(pkg.sideEffects).toEqual(["*.css"]);
     expect(Object.keys(pkg.dependencies ?? {})).toEqual(["@fontsource-variable/inter"]);
-    expect(pkg.peerDependencies).toEqual({ "lucide-react": "^1", react: "^19" });
+    expect(pkg.peerDependencies).toEqual({ "lucide-react": "^1", react: "^19", "react-dom": "^19" });
   });
 });
