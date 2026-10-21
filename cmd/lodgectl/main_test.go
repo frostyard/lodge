@@ -218,4 +218,8 @@ func TestProviderImport(t *testing.T) {
 	if code, _, _ := lodgectl(t, root, "provider", "login"); code != 2 {
 		t.Errorf("provider login without a name: exit %d", code)
 	}
+	if code, _, errs := lodgectl(t, root, "provider", "login", "copilot", "--copilot", "--client-id", "x"); code != 2 ||
+		!strings.Contains(errs, "--copilot takes only --out") {
+		t.Errorf("provider login --copilot with a codex flag: %d %q", code, errs)
+	}
 }

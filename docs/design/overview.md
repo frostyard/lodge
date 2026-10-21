@@ -39,7 +39,8 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
   user's phone and Chrome's PDF viewer are not done. The Codex provider
   (the owner's ChatGPT plan) is built
   ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)),
-  and the Copilot provider is not.
+  and so is the Copilot provider (the owner's Copilot plan,
+  [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md), Proposed).
 - The assistant, Porter, is designed (Phase 5). lodge's side of it, the
   roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
@@ -285,9 +286,18 @@ with ChatGPT ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-
   requests that plan usage takes, and turns the answers back
   ([specs/inference.md](../specs/inference.md#the-codex-provider)).
 
-Copilot is accepted in the configuration but not built until its terms are
-checked, so it shows as unavailable. A provider that lodge's host cannot
-reach is shown as unavailable, and its aliases fail at once.
+A `copilot` provider is the owner's GitHub Copilot plan, through the
+Copilot API that the editors use
+([ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md), Proposed):
+- **Signing in:** `lodgectl provider login NAME --copilot` runs GitHub's
+  device flow on any computer, and the owner sets the GitHub token as the
+  provider's key on lodge's host.
+- **Requests:** lodge trades that token for a short-lived Copilot token,
+  kept in memory, and sends apps' requests to the OpenAI-compatible API
+  unchanged ([specs/inference.md](../specs/inference.md#the-copilot-provider)).
+
+A provider that lodge's host cannot reach is shown as unavailable, and its
+aliases fail at once.
 
 - The socket is made at start, beside the control socket, and served
   before the tailnet nodes join. lodge is in group `lodge-apps` to give it

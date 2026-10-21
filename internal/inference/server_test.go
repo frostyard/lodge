@@ -514,7 +514,7 @@ func TestAvailability(t *testing.T) {
 		byName[p.Name] = p
 	}
 	if !byName["home"].Available || byName["down"].Available || byName["down"].Reason != "cannot be reached" ||
-		!strings.Contains(byName["copilot"].Reason, "not built") {
+		!strings.Contains(byName["copilot"].Reason, "not signed in") {
 		t.Errorf("status = %+v", byName)
 	}
 	start := time.Now()

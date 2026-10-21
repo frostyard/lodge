@@ -88,8 +88,17 @@ func (c Config) Validate() error {
 			bad("provider name %q must match [a-z][a-z0-9-]{0,31}", name)
 		}
 		switch p.Type {
-		case TypeOpenAI, TypeCodex:
-			if p.Type == TypeOpenAI || p.BaseURL != "" {
+		case TypeOpenAI, TypeCodex, TypeCopilot:
+			switch {
+			case p.Type == TypeCopilot && p.BaseURL != "":
+				// The Copilot API has no /v1: its base is the exchange's
+				// endpoint, which a configuration may replace (tests).
+				u, err := url.Parse(p.BaseURL)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" ||
+					u.User != nil || strings.HasSuffix(p.BaseURL, "/") {
+					bad("provider %s: baseURL %q must be an http or https URL without a trailing slash", name, p.BaseURL)
+				}
+			case p.Type == TypeOpenAI || (p.Type == TypeCodex && p.BaseURL != ""):
 				u, err := url.Parse(p.BaseURL)
 				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || !strings.HasSuffix(u.Path, "/v1") ||
 					u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -99,10 +108,9 @@ func (c Config) Validate() error {
 			if p.Slots < 1 || p.Slots > 64 {
 				bad("provider %s: slots must be 1 to 64", name)
 			}
-			if p.Type == TypeCodex && p.Home {
-				bad("provider %s: a codex provider is OpenAI's, not on the owner's own hardware", name)
+			if p.Type != TypeOpenAI && p.Home {
+				bad("provider %s: a %s provider is a subscription's, not on the owner's own hardware", name, p.Type)
 			}
-		case TypeCopilot:
 		default:
 			bad("provider %s: type %q is not openai, copilot or codex", name, p.Type)
 		}

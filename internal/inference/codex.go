@@ -204,7 +204,7 @@ type Model struct {
 }
 
 // Models lists a provider's models: the slugs the signed-in plan offers
-// for codex, or GET /models' ids for openai.
+// for codex, or GET /models' ids for openai and copilot.
 func (s *Server) Models(ctx context.Context, provider string) ([]Model, error) {
 	p, ok := s.state().providers[provider]
 	if !ok {
@@ -220,6 +220,8 @@ func (s *Server) Models(ctx context.Context, provider string) ([]Model, error) {
 		tok = t
 	case TypeOpenAI:
 		tok = s.key(ctx, provider)
+	case TypeCopilot:
+		return s.copilotModels(ctx, p)
 	default:
 		return nil, fmt.Errorf("provider %s is not built", provider)
 	}
