@@ -15,9 +15,9 @@ Status (2026-10-21):
   `client/v0.2.0`), and notesd and maild run on the kit.
 - **Phase 2's code is merged, and lodge runs on its first host.** Notes
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
-  Lodge's security review ran on 2026-10-19, and each of its lodge findings
-  is fixed with a test. Its report is not in this repository, and the
-  inference layer and the kit's later pieces landed after it. Claude Code's
+  Lodge's security review ran on 2026-10-19; its findings, fixes and tests
+  are recorded in [Phase 2](#phase-2--lodge-v1-with-notes-as-its-only-app).
+  The inference layer and the kit's later pieces landed after it. Claude Code's
   two checks passed on 2026-10-19; the other checks on the user's devices
   are still to come.
 - **Phase 3 is merged,** and the `local` provider is reachable from lodge's
@@ -132,6 +132,33 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
   and notes' socket, `sysusers.d` entries and the install layout.
 - **lodge's security review,** before notes moves behind it. Each finding
   gets a test, as M4's did.
+  **Result (2026-10-19):** an independent, read-only review of lodge and
+  of notes' and mail's lodge sides, at the refs before Phase 2 merged. No
+  HIGH finding. Each finding, its fix and its test:
+
+  | Finding | Fix | Test |
+  | --- | --- | --- |
+  | M1 (notes) notes' MCP handler leaked notesd connections | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestASessionHoldsOneConnectionUntilItEnds` |
+  | M2 unbounded connections, headers and device bodies | `1c7e23c`: 64 connections per address and 1,024 in all, 64 KiB of headers, `Connection: close` on refusals, 30 s per read of a device body, 128 connections to an app; notes' part accepted by the user (2026-10-21) | `TestLimitPerPeer`, `TestLimitTotal`, `TestRefusalsCloseTheConnection`, `TestHeaderLimit`, `TestDeviceBodyDeadline` |
+  | L1 device and agent responses carried no policy | `1c7e23c`: `default-src 'none'; sandbox`, `frame-ancestors 'none'`, `X-Frame-Options` | `TestDeviceAndAgentResponsesAreConfined` |
+  | L2 an app's `script-src` covered its `x/` reads; upgrades on `x/` | `1c7e23c`: scripts and styles from `assets/` only; upgrades refused off the session and device routes | `TestUpgradesRefusedOutsideSessionsAndDevices` |
+  | L3 nothing checked who serves an app socket | `1c7e23c`: the socket's owner and peer must be the manifest's user; `/run/lodge/apps` must be root's | `TestSocketPeerMustBeTheManifestUser`, `TestManifestUserMustExist`, `TestCheckSocketDir` |
+  | L4 no packaging | `packaging/` (`f7f7880`), with the auth key removed after the first start | `internal/packagecheck` |
+  | L5 content named by a bare hash was an oracle to the tailnet | notes names content by a MAC under its own key (frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent)); [lodge-http.md](../specs/lodge-http.md#content-routes) says that same-site is the whole tailnet | `TestContentServesBlobsWithinTheirLimits`, `TestTheContentKeyIsKept` (notes) |
+  | N1 revocation re-checked a stream by the token's name | `1c7e23c`: by the token's row | `TestMCPRevocationIsByRow` |
+  | N2 the login URL went to the journal | `1c7e23c` | `TestLoginURLNeverLogged`, `TestLoginNeededLoggedWithoutKey` |
+  | N3 device requests named the peer without the own-address check | `1c7e23c` | `TestDevice` |
+  | N4 the content policy lacked `base-uri` and `form-action` | `1c7e23c` | `TestContentChecks`, `TestContentLinksPolicy` |
+  | N5 (notes) `POST /sync/hub` was an oracle and a log flood | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestTheRelocationProof`, `TestAPeerHasItsBucketOfRequests` (notes) |
+  | N6 (notes) any peer could fill the pairing slots | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestANodeMayHaveTwoPairingsWaiting` (notes) |
+  | N7 (kit) MCP sessions were swept only when a request came | `2017aec`: a ticker | the kit's `mcpsession` tests |
+  | N8 the `nm` check missed the shipped, stripped binary | `1c7e23c` | `TestShippedBuildHoldsNoE2EIdentity` |
+
+  It found sound: identity by WhoIs alone, the browser checks, content
+  isolation, tokens and revocation, the control socket and the e2e hook.
+  Its report stays outside the repository, because it names local paths.
+  The inference layer, the agent socket, the companion and the Codex
+  sign-in came after it.
 - **Checks on the user's devices and clients:**
   - whether WebKit on iOS sends `Sec-Fetch-Site` on a WebSocket handshake
     (M4 review M3);
