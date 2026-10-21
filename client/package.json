@@ -1,6 +1,6 @@
 {
   "name": "@frostyard/lodge-client",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The frame protocol between lodge's shell and its apps: the app half, the shell half, and the client of an app's API.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/frostyard/lodge.git", "directory": "client" },
