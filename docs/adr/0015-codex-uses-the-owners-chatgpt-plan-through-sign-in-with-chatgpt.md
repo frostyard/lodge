@@ -1,6 +1,6 @@
 # 0015 — Codex uses the owner's ChatGPT plan through Sign in with ChatGPT
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-20
 
 ## Context

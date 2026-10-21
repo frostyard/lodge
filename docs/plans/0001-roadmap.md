@@ -7,18 +7,17 @@ decided on. frostnotes' M4 ([plan 0006](https://github.com/frostyard/frostnotes/
 runs notes inside lodge, and depends on Phases 1 and 2. frostmail's move
 is Phase 4.
 
-Status (2026-10-19):
-- **The ADRs are all still Proposed.** Accepting them is the user's call.
-  Phases 1 to 3 were built ahead of that, on the user's go-ahead of
-  2026-10-18.
+Status (2026-10-21):
+- **The ADRs were accepted on 2026-10-21.** Phases 1 to 3 were built
+  ahead of that, on the user's go-ahead of 2026-10-18.
 - **Phase 1 is done.** The kit, with the RPC runtime extracted from the
-  apps, and the client are tagged `kit/v0.1.0` and `client/v0.1.0`, and
-  notesd and maild run on the kit.
+  apps, and the client are tagged (`kit/v0.1.0`, then `kit/v0.2.0` and
+  `client/v0.2.0`), and notesd and maild run on the kit.
 - **Phase 2's code is merged, and lodge runs on its first host.** Notes
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
-  Lodge's security review ran on 2026-10-19, and each of its lodge findings
-  is fixed with a test. Its report is not in this repository, and the
-  inference layer and the kit's later pieces landed after it. Claude Code's
+  Lodge's security review ran on 2026-10-19; its findings, fixes and tests
+  are recorded in [Phase 2](#phase-2--lodge-v1-with-notes-as-its-only-app).
+  The inference layer and the kit's later pieces landed after it. Claude Code's
   two checks passed on 2026-10-19; the other checks on the user's devices
   are still to come.
 - **Phase 3 is merged,** and the `local` provider is reachable from lodge's
@@ -32,14 +31,15 @@ Status (2026-10-19):
 - **Phase 5 is designed** (2026-10-19). The assistant is Porter. lodge's
   side is [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
   and [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md),
-  both Proposed, with their specs written and marked not built. Porter's
-  own ADRs and design doc are in frostyard/porter, which is not published
-  yet.
+  built in Phase 6. Porter's own ADRs and design doc are in
+  [frostyard/porter](https://github.com/frostyard/porter).
 - **Phase 6 is built** (2026-10-19): the agent socket, with tokens bound
   to their route and the kit's client of it, and the companion, with the
   shell's panel and sheet, its button and chord, `context` and `ask`, and a
-  fake companion in the development build. Its checks on the VM and the
-  user's devices wait for the deployment.
+  fake companion in the development build. The agent socket was checked
+  on lodge's host on 2026-10-19, with Porter's notes and mail tokens
+  (Porter's roadmap, Phase 1). The companion's checks on the user's
+  desktop and phone wait for the deployment.
 
 Nothing changes on the user's machines without the user's go-ahead.
 
@@ -131,6 +131,33 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
   and notes' socket, `sysusers.d` entries and the install layout.
 - **lodge's security review,** before notes moves behind it. Each finding
   gets a test, as M4's did.
+  **Result (2026-10-19):** an independent, read-only review of lodge and
+  of notes' and mail's lodge sides, at the refs before Phase 2 merged. No
+  HIGH finding. Each finding, its fix and its test:
+
+  | Finding | Fix | Test |
+  | --- | --- | --- |
+  | M1 (notes) notes' MCP handler leaked notesd connections | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestASessionHoldsOneConnectionUntilItEnds` |
+  | M2 unbounded connections, headers and device bodies | `1c7e23c`: 64 connections per address and 1,024 in all, 64 KiB of headers, `Connection: close` on refusals, 30 s per read of a device body, 128 connections to an app; notes' part accepted by the user (2026-10-21) | `TestLimitPerPeer`, `TestLimitTotal`, `TestRefusalsCloseTheConnection`, `TestHeaderLimit`, `TestDeviceBodyDeadline` |
+  | L1 device and agent responses carried no policy | `1c7e23c`: `default-src 'none'; sandbox`, `frame-ancestors 'none'`, `X-Frame-Options` | `TestDeviceAndAgentResponsesAreConfined` |
+  | L2 an app's `script-src` covered its `x/` reads; upgrades on `x/` | `1c7e23c`: scripts and styles from `assets/` only; upgrades refused off the session and device routes | `TestUpgradesRefusedOutsideSessionsAndDevices` |
+  | L3 nothing checked who serves an app socket | `1c7e23c`: the socket's owner and peer must be the manifest's user; `/run/lodge/apps` must be root's | `TestSocketPeerMustBeTheManifestUser`, `TestManifestUserMustExist`, `TestCheckSocketDir` |
+  | L4 no packaging | `packaging/` (`f7f7880`), with the auth key removed after the first start | `internal/packagecheck` |
+  | L5 content named by a bare hash was an oracle to the tailnet | notes names content by a MAC under its own key (frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent)); [lodge-http.md](../specs/lodge-http.md#content-routes) says that same-site is the whole tailnet | `TestContentServesBlobsWithinTheirLimits`, `TestTheContentKeyIsKept` (notes) |
+  | N1 revocation re-checked a stream by the token's name | `1c7e23c`: by the token's row | `TestMCPRevocationIsByRow` |
+  | N2 the login URL went to the journal | `1c7e23c` | `TestLoginURLNeverLogged`, `TestLoginNeededLoggedWithoutKey` |
+  | N3 device requests named the peer without the own-address check | `1c7e23c` | `TestDevice` |
+  | N4 the content policy lacked `base-uri` and `form-action` | `1c7e23c` | `TestContentChecks`, `TestContentLinksPolicy` |
+  | N5 (notes) `POST /sync/hub` was an oracle and a log flood | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestTheRelocationProof`, `TestAPeerHasItsBucketOfRequests` (notes) |
+  | N6 (notes) any peer could fill the pairing slots | frostnotes' [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#phase-6--security-review-planner-an-independent-agent) | `TestANodeMayHaveTwoPairingsWaiting` (notes) |
+  | N7 (kit) MCP sessions were swept only when a request came | `2017aec`: a ticker | the kit's `mcpsession` tests |
+  | N8 the `nm` check missed the shipped, stripped binary | `1c7e23c` | `TestShippedBuildHoldsNoE2EIdentity` |
+
+  It found sound: identity by WhoIs alone, the browser checks, content
+  isolation, tokens and revocation, the control socket and the e2e hook.
+  Its report stays outside the repository, because it names local paths.
+  The inference layer, the agent socket, the companion and the Codex
+  sign-in came after it.
 - **Checks on the user's devices and clients:**
   - whether WebKit on iOS sends `Sec-Fetch-Site` on a WebSocket handshake
     (M4 review M3);
@@ -364,10 +391,11 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   a page that is open. Phase 5 left it deferred: Porter is pull, not push,
   in v1. Take it up, with an ADR, when an app needs notifications while
   lodge is closed.
-- **The desktop apps.** frostmail's Tauri app could become a lodge client
-  over a WebSocket with its node's identity, or give way to the home-screen
-  app. frostnotes' Tauri app stays local-first against its own notesd.
-  Decide by Phase 4.
+- *Answered 2026-10-21:* **the desktop apps.** frostmail's Tauri app
+  is a lodge client over a WebSocket with its node's identity
+  ([frostmail ADR-0041](https://github.com/frostyard/frostmail/blob/main/docs/adr/0041-maild-runs-as-a-lodge-app.md));
+  frostnotes' stays local-first against its own notesd
+  ([frostnotes ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md)).
 - **Packaging.** Debs through apt-publisher, or a sysext, with the
   `sysusers.d` entries and socket units. Phase 2 deploys with the units
   alone. Decide before Phase 4 brings a second app.
@@ -381,5 +409,5 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 ## References
 
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)

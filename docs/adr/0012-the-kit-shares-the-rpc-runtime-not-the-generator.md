@@ -1,6 +1,6 @@
 # 0012 — The kit shares the RPC runtime, not the generator
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21)
 - **Date:** 2026-10-19
 
 ## Context

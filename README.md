@@ -22,7 +22,7 @@ Apps build on the Go kit (`kit/`) and the frontend library
 `@frostyard/lodge-client` (`client/`). The contract between lodge and an app
 is [docs/specs/app-contract.md](docs/specs/app-contract.md).
 
-Pre-release. The design documents date from 2026-10-18 and are Proposed.
+Pre-release. The design documents date from 2026-10-18 to 2026-10-20 and are accepted.
 The kit and the client are released as `kit/v0.2.0` and `client/v0.2.0`,
 and lodge v1 and its inference layer are built. The order of work is the
 [roadmap](docs/plans/0001-roadmap.md).

@@ -23,7 +23,8 @@ Build and install:
    `shell/dist/`, and `make install DESTDIR=/tmp/stage` stages it.
 3. The first start reads `TS_AUTHKEY` from `/etc/lodge/lodge.env` (root,
    0600; never committed). Without one, `sudo lodgectl status` shows each
-   node's login URL.
+   node's login URL. Later starts need no key: remove `TS_AUTHKEY` from
+   `/etc/lodge/lodge.env` after the first start.
 4. `sudo systemctl enable --now lodge`, then `sudo lodgectl allow login …`
    and `sudo lodgectl allow node …`.
 5. An agent on this host, such as Porter: its user joins `lodge-agents`,
