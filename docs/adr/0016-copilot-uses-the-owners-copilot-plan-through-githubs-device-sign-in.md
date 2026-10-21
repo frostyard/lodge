@@ -1,6 +1,6 @@
 # 0016 — Copilot uses the owner's Copilot plan through GitHub's device sign-in
 
-- **Status:** Proposed
+- **Status:** Accepted (Brian, 2026-10-21)
 - **Date:** 2026-10-21
 
 ## Context
