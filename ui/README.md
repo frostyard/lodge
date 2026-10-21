@@ -93,6 +93,11 @@ a submenu:
 />
 ```
 
+A row is named by its label alone: the keys at its right are drawn for the
+eye, and `aria-keyshortcuts` carries them in ARIA's form
+(`Control+Shift+K`) when every part has a name there.
+```
+
 `IconButton` takes a label, the keys it answers to, and a lucide icon.
 `Splitter` is a focusable separator that drags and moves 16px per arrow key.
 `Sheet` is a modal frame: an overlay over `--backdrop`, `role="dialog"`,
