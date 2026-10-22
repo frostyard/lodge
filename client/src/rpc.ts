@@ -215,7 +215,12 @@ export const MAX_RETRY_MS = 30_000;
 
 interface Hooks {
   firstReady(): void;
-  firstFailure(message: string): void;
+  /**
+   * firstFailure ends the first attempt, before the connection is ever
+   * ready. A failed rpc.hello passes the call's own error, so its RPCError
+   * reaches the caller with its code.
+   */
+  firstFailure(err: unknown): void;
 }
 
 /** LodgeConnection is LodgeAPI over one socket at a time. */
@@ -270,7 +275,7 @@ class LodgeConnection implements LodgeAPI {
     } catch (err) {
       if (!this.everReady) {
         this.stopped = true;
-        this.hooks.firstFailure(errorText(err));
+        this.hooks.firstFailure(err);
         return;
       }
       this.retryLater();
@@ -304,8 +309,10 @@ class LodgeConnection implements LodgeAPI {
       }
       session.call("rpc.hello", this.hello).then(opened, (err: unknown) => {
         if (this.socket !== socket) return;
+        // The hello's own error first: the close below reaches firstFailure
+        // too, and the first one wins.
+        if (!this.everReady) this.hooks.firstFailure(err);
         socket.close();
-        if (!this.everReady) this.hooks.firstFailure(errorText(err));
       });
     };
     socket.onmessage = (event) => {
@@ -327,7 +334,7 @@ class LodgeConnection implements LodgeAPI {
       if (!this.everReady) {
         this.stopped = true;
         this.doc.removeEventListener("visibilitychange", this.onVisibility);
-        this.hooks.firstFailure(`cannot reach the app's API through lodge (${event.code})`);
+        this.hooks.firstFailure(new Error(`cannot reach the app's API through lodge (${event.code})`));
         return;
       }
       this.retryLater();
@@ -422,19 +429,16 @@ class LodgeConnection implements LodgeAPI {
  * visible so lodge keeps its session (which ends after 90 s without a
  * frame), and reconnects with a growing delay after a drop. It resolves
  * once the first connection is ready, and rejects when that first attempt
- * fails: call it again to retry.
+ * fails: call it again to retry. A failed rpc.hello rejects with that
+ * call's own RPCError, so the caller has its code, such as a protocol
+ * mismatch's.
  */
 export function connectLodgeAPI(lodge: { apiURL(): string }, options: LodgeAPIOptions = {}): Promise<LodgeAPI> {
   return new Promise((resolve, reject) => {
     const connection = new LodgeConnection(lodge, options, {
       firstReady: () => resolve(connection),
-      firstFailure: (message) => reject(new Error(message)),
+      firstFailure: (err) => reject(err instanceof Error ? err : new Error(String(err))),
     });
     connection.connect();
   });
-}
-
-/** errorText is an error as a message. */
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

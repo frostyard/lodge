@@ -15,6 +15,8 @@ dependency in this subdirectory:
 
 Between releases an app may pin a pushed lodge commit in its place
 (`#<commit>&path:client`). The Go kit has its own tags, `kit/vX.Y.Z`.
+What each release changed is in the [changelog](CHANGELOG.md); older
+versions are in the git tags `client/vX.Y.Z`.
 
 ```ts
 import { connectLodge } from "@frostyard/lodge-client";
@@ -57,7 +59,9 @@ api.onEvent(({ event, data }) => {
   only after its answer.
 - It resolves on the first ready connection and rejects when that first
   attempt fails; a call made while the socket is down rejects with
-  `CodeNotConnected`.
+  `CodeNotConnected`. A failed `rpc.hello` rejects with that call's own
+  `RPCError`, so its `code` reaches you, such as a protocol mismatch's
+  1003 ([changelog](CHANGELOG.md)).
 - `JsonRpcSession` is the session alone, for a channel of your own, and
   `RPCError` carries the daemon's `code`, `message` and `data`.
 

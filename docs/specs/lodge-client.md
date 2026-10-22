@@ -25,7 +25,8 @@ the shell's half in Phase 2. [The companion's](#the-companion) additions
 the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 [The `rpc` subpath](#the-rpc-subpath) was added in 0.3.0, on 2026-10-21,
-and its ping timeout in 0.3.1.
+its ping timeout in 0.3.1, and the `rpc.hello` failure's own error in
+0.3.2 ([its changelog](../../client/CHANGELOG.md)).
 
 ## Interface
 
@@ -291,6 +292,11 @@ api.onEvent(({ event, data }) => {
   open:
   - it resolves once the first connection is ready, and rejects when that
     first attempt fails, so the app shows the failure and calls it again;
+  - a failed `rpc.hello` rejects with that call's own **`RPCError`**, so
+    the caller has its `code` (1003, a protocol mismatch) and the
+    daemon's message. Another failure rejects with a plain `Error`: the
+    WebSocket constructor's own, or `cannot reach the app's API through lodge
+    (<code>)` when the socket closes before it is ready;
   - when `opts.hello` is given, `rpc.hello` is sent after each open, and
     the transport is ready only after its answer, so a reconnect sends it
     again;
@@ -308,8 +314,11 @@ api.onEvent(({ event, data }) => {
   - `close()` closes the socket and stops reconnecting.
   - `opts` also takes the document and the WebSocket constructor, for
     tests, and `blobURL`.
-- **Version:** 0.3.0 adds the subpath; the library keeps its no-runtime-
-  dependencies rule, and an app that does not import it takes none of it.
+- **Version:** 0.3.0 adds the subpath, and 0.3.2 makes a failed
+  `rpc.hello` reject with its `RPCError`
+  ([changelog](../../client/CHANGELOG.md)); the library keeps its
+  no-runtime-dependencies rule, and an app that does not import it takes
+  none of it.
 
 ## Rules
 
