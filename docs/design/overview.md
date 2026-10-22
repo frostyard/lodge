@@ -32,7 +32,8 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/ui-package.md](../specs/ui-package.md).
 
 **Status: Phases 1 to 3 and 6 built (2026-10-19).**
-- The kit and the client are released as `kit/v0.2.0` and `client/v0.2.0`.
+- The kit, the client and the UI package are tagged up to `kit/v0.3.0`,
+  `client/v0.3.2` and `ui/v0.6.0` (2026-10-22).
 - lodge v1 (the nodes, the gateway, the control socket, the shell, the
   development build and packaging) and the inference layer are merged, and
   run on lodge's first host.
@@ -41,13 +42,15 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
   (the owner's ChatGPT plan) is built
   ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)),
   and so is the Copilot provider (the owner's Copilot plan,
-  [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md), Proposed).
-- The assistant, Porter, is designed (Phase 5). lodge's side of it, the
-  roadmap's
+  [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md), Accepted by Brian, 2026-10-21).
+- The assistant, Porter, is designed (Phase 5) and built in
+  [frostyard/porter](https://github.com/frostyard/porter). lodge's side of
+  it, the roadmap's
   [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket),
   is built and released in v0.2.0: the agent socket and the companion. The
-  agent socket was checked on lodge's host (2026-10-19); the companion's
-  checks on the user's devices wait for the deployment.
+  agent socket was checked on lodge's host (2026-10-19). Porter is deployed
+  on lodge's host (2026-10-20); the companion's checks on the user's devices
+  are not recorded yet.
 
 This document is rewritten as each phase lands.
 
@@ -357,11 +360,12 @@ allow a login or a node, issue a token, or reload the apps
   shell and Porter too. It carries no preflight and never imports Tailwind
   as a whole, and every app bundles its own copy at build time
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
-  [ui-package.md](../specs/ui-package.md)). Version 0.1.0 carries
-  frostmail's values unchanged; the apps move to it one at a time, and the
-  look change comes later as token values only
+  [ui-package.md](../specs/ui-package.md)). Version 0.1.0 carried
+  frostmail's values unchanged; the apps moved to it one at a time, and
+  0.5.0 made the look change as token values only
   ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md): the accent
-  is frostyard's cold blue). **The shell takes the same look**: its cream and green, on `system-ui`, became the package's tokens
+  is frostyard's cold blue). The latest is 0.6.0, which adds
+  `WindowControls` and `Prompt`. **The shell takes the same look**: its cream and green, on `system-ui`, became the package's tokens
   and Inter ([shell.md](../specs/shell.md#colours-and-type)), with its
   manifest colours and home-screen icons moved with them.
 

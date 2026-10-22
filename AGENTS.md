@@ -25,15 +25,19 @@ the canonical paths; keep content tool-agnostic.
 
 Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
 2026-10-21. Phases 1 to 3 and 6 are built:
-- the kit and the client, released as `kit/v0.2.0` and `client/v0.2.0`;
+- the kit and the client, tagged up to `kit/v0.3.0` (with `netguard`) and
+  `client/v0.3.2` (with the `rpc` subpath since `client/v0.3.0`);
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
 - the inference layer;
 - lodge's side of the assistant: the agent socket and the companion,
   released in `kit/v0.2.0` and `client/v0.2.0`;
-- the shared UI package, `@frostyard/lodge-ui` 0.1.0, with the tokens and
-  the first React primitives
-  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md), Accepted).
+- the shared UI package, `@frostyard/lodge-ui`, tagged up to `ui/v0.6.0`
+  (2026-10-22): the tokens, the React primitives, and frostyard's cold-blue
+  accent since 0.5.0
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md) and
+  [ADR-0019](docs/adr/0019-the-accent-is-frostyards-cold-blue.md), both
+  Accepted).
 - **frostread, the third app, is built and deployed on lodge's host on
   2026-10-21** ([its PRs](https://github.com/frostyard/frostread/pulls)); the
   repository is private until the owner opens it. Its reader is lodge's
@@ -41,6 +45,9 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
   ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)),
   and its web app is the first on the UI package
   ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)).
+- **Porter, the assistant, runs on lodge's host** on the agent socket and
+  the companion (deployed from 2026-10-20;
+  [its Deployments](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md#deployments)).
 The checks on the user's devices and Phase 4 (mail, in frostmail) are in
 progress. The order of work is the [roadmap](docs/plans/0001-roadmap.md). The kit is extracted from
 [frostyard/frostnotes](https://github.com/frostyard/frostnotes) and
