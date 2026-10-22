@@ -346,4 +346,48 @@ describe("connectLodgeAPI", () => {
     FakeSocket.made[0]?.ended(1006);
     await expect(pending).rejects.toThrow("cannot reach");
   });
+
+  it("rejects with a plain Error when the socket closes before it opens", async () => {
+    const view = fakeDocument();
+    const pending = connectLodgeAPI(
+      { apiURL: () => "wss://lodge.test/api" },
+      {
+        document: view.doc,
+        webSocket: FakeSocket as unknown as typeof WebSocket,
+      },
+    );
+    FakeSocket.made[0]?.ended(1006);
+    await expect(pending).rejects.toBeInstanceOf(Error);
+    await pending.catch((err: Error) => {
+      expect(err).not.toBeInstanceOf(RPCError);
+      expect(err.message).toBe("cannot reach the app's API through lodge (1006)");
+    });
+  });
+
+  it("rejects with the RPCError of a failed rpc.hello, its code and message", async () => {
+    const view = fakeDocument();
+    const pending = connectLodgeAPI(
+      { apiURL: () => "wss://lodge.test/api" },
+      {
+        document: view.doc,
+        webSocket: FakeSocket as unknown as typeof WebSocket,
+        hello: { protocol: 1, client: "read-web" },
+      },
+    );
+    const socket = FakeSocket.made[0];
+    if (socket === undefined) throw new Error("no socket");
+    socket.open();
+    expect(line(socket).method).toBe("rpc.hello");
+    socket.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: 1003, message: "the protocol differs: this app speaks 2" },
+    });
+    await expect(pending).rejects.toBeInstanceOf(RPCError);
+    await pending.catch((err: RPCError) => {
+      expect(err.code).toBe(1003);
+      expect(err.message).toBe("the protocol differs: this app speaks 2");
+    });
+    expect(socket.closed).toBe(true);
+  });
 });
