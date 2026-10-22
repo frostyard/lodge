@@ -7,12 +7,13 @@ decided on. frostnotes' M4 ([plan 0006](https://github.com/frostyard/frostnotes/
 runs notes inside lodge, and depends on Phases 1 and 2. frostmail's move
 is Phase 4.
 
-Status (2026-10-21):
+Status (2026-10-22):
 - **The ADRs were accepted on 2026-10-21.** Phases 1 to 3 were built
   ahead of that, on the user's go-ahead of 2026-10-18.
 - **Phase 1 is done.** The kit, with the RPC runtime extracted from the
   apps, and the client are tagged (`kit/v0.1.0`, then `kit/v0.2.0` and
-  `client/v0.2.0`), and notesd and maild run on the kit.
+  `client/v0.2.0`; the latest are `kit/v0.3.0` and `client/v0.3.2`), and
+  notesd and maild run on the kit.
 - **Phase 2's code is merged, and lodge runs on its first host.** Notes
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
   Lodge's security review ran on 2026-10-19; its findings, fixes and tests
@@ -39,8 +40,9 @@ Status (2026-10-21):
   shell's panel and sheet, its button and chord, `context` and `ask`, and a
   fake companion in the development build. The agent socket was checked
   on lodge's host on 2026-10-19, with Porter's notes and mail tokens
-  (Porter's roadmap, Phase 1). The companion's checks on the user's
-  desktop and phone wait for the deployment.
+  (Porter's roadmap, Phase 1). Porter is deployed on lodge's host
+  (2026-10-20). The companion's checks on the user's desktop and phone are
+  not recorded yet.
 
 Nothing changes on the user's machines without the user's go-ahead.
 
@@ -403,13 +405,14 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   owner's daily use, beside notes, mail and Porter: frostread is the
   second name in `agents`, and its notes token is scoped to `Reading/` in
   the owner's vault. The repository is private until the owner opens it.
-- **The shared UI package.** `@frostyard/lodge-ui` 0.1.0 is built with
+- **The shared UI package.** `@frostyard/lodge-ui` is built: 0.1.0 with
   frostmail's token values unchanged
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
-  [ui-package.md](../specs/ui-package.md)): frostmail and frostnotes move to
-  the tokens with no visual change, then the shell and Porter, then each
-  React primitive in a minor release, and the look change last, as token
-  values only.
+  [ui-package.md](../specs/ui-package.md)). frostmail, frostnotes, the
+  shell, frostread and Porter moved to it; the React primitives came in
+  minor releases, and 0.5.0 made the look change as token values only
+  ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md)). The
+  latest is `ui/v0.6.0` (2026-10-22).
 
 ## Open questions
 
