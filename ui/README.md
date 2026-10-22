@@ -8,7 +8,7 @@ primitives the apps use
 
 Version 0.1.0 carries frostmail's values unchanged, so that an app that
 moves to it looks the same. A change to a value is a look change, and ships
-as a release of its own.
+as a release of its own. [CHANGELOG.md](CHANGELOG.md) lists every version.
 
 It is ESM source with no build step, and each app's bundler compiles it. The
 CSS and `./theme` need neither React nor an icon set; `./react` needs both.
@@ -28,7 +28,8 @@ Between releases an app may pin a pushed lodge commit instead
 
 **The dependencies React, lucide-react and react-dom are optional peers**,
 so an app that takes only the CSS or `./theme` installs none of them. The
-`Menu` is the one that needs react-dom: it portals onto the body.
+`Menu` and the `Prompt` need react-dom: they portal onto the body (so does a
+`Sheet` that takes `portal`).
 
 ### CSS
 
@@ -71,6 +72,7 @@ Without it, a utility that only the package's components use (`size-7`,
 
 ```tsx
 import { IconButton, Sheet, Splitter, cx, useNarrow } from "@frostyard/lodge-ui/react";
+// Also: Menu, Prompt, highlight, WindowControls, windowPlatform.
 ```
 
 `Menu` is a menu at a point, or a narrow window's sheet; its rows are an
@@ -96,7 +98,6 @@ a submenu:
 A row is named by its label alone: the keys at its right are drawn for the
 eye, and `aria-keyshortcuts` carries them in ARIA's form
 (`Control+Shift+K`) when every part has a name there.
-```
 
 `IconButton` takes a label, the keys it answers to, and a lucide icon.
 `Splitter` is a focusable separator that drags and moves 16px per arrow key.
@@ -130,6 +131,44 @@ scroll or overflow container. A portal needs react-dom, an optional peer.
 <Sheet title="Add a feed" description="The feed's address." onClose={close}>
   <input aria-label="Feed address" />
 </Sheet>
+```
+
+`WindowControls` is the window's three buttons for an app that draws its own
+title bar on the desktop. `onWindow` takes the apps' own commands, so an
+app's handler can be passed as it is; `platform` is `"linux"` (the apps'
+`IconButton`s, the default) or `"windows"` (flat caption buttons, 46px wide,
+Close red on hover), and `windowPlatform()` reads it from the navigator:
+
+```tsx
+<WindowControls
+  maximized={maximized}
+  platform={windowPlatform()}
+  onWindow={(command) => run(command)} // { kind: "minimize" | "toggleMaximize" | "close" }
+/>
+```
+
+`Prompt` is the frame of a quick switcher, a command palette or a chooser:
+a focused query field, a list that the arrows and the pointer choose from,
+and a footer of keys. The app keeps its own commands, data and ranking, and
+draws a row with `renderItem` (`highlight` marks the matched text):
+
+```tsx
+<Prompt<Note>
+  label="Quick switcher"
+  placeholder="Find or create a note…"
+  query={query}
+  onQuery={setQuery}
+  items={results}
+  itemKey={(note) => note.id}
+  renderItem={(note) => <span>{highlight(note.title, note.ranges)}</span>}
+  onEnter={(note, mods) => open(note, mods.ctrl)} // note is undefined for an empty list
+  onClose={close}
+  instructions={[
+    { keys: "↵", text: "to open" },
+    { keys: "esc", text: "to dismiss" },
+  ]}
+  emptyText="No notes found."
+/>
 ```
 
 ### The scheme and the narrow window

@@ -7,9 +7,13 @@ which bundles its own copy at build time.
 Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md). Where
 it fits: [design/overview.md](../design/overview.md#the-kit-and-the-client).
 
-**Status:** version 0.4.0, written on 2026-10-21. 0.1.0 carries frostmail's
-values unchanged, so an app that moves to it looks the same; 0.2.0 adds the
-Sheet's options; 0.3.0 adds `Menu`.
+**Status:** version 0.6.0, written on 2026-10-22. The
+[changelog](../../ui/CHANGELOG.md) has every version. 0.1.0 carries
+frostmail's values unchanged, so an app that moves to it looks the same;
+0.2.0 adds the Sheet's options; 0.3.0 adds `Menu`; 0.4.0 adds the Sheet's
+`ariaLabel`, `role` and `portal`; 0.5.0 makes the accent frostyard's cold
+blue ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md));
+0.6.0 adds `WindowControls` and `Prompt`.
 
 ## Interface
 
@@ -110,6 +114,9 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
 | `Splitter` | A focusable `role="separator"` with `orientation`, `label`, `value` (as `aria-valuenow`), `onStart`, `onMove(delta)`, `onEnd`; arrow keys move it 16px |
 | `Menu` | A menu at a point, or a narrow window's sheet (`sheet`): `MenuEntry` rows are an item (`id`, `label`, `icon`, `keys`, `checked`, `disabled`), a separator, or a submenu (`id`, `label`, `icon`, `disabled`, `items`); `onSelect` and `onClose`; the arrow keys move, ArrowRight opens a submenu, ArrowLeft and Escape close one level, Enter chooses, Tab and a press outside close; focus returns to what had it. A row is named by its label alone (`aria-label`), and `aria-keyshortcuts` carries its keys in ARIA's form (`Control+Shift+K`) when each part has a name there. It portals onto the body, so react-dom is an optional peer |
 | `Sheet` | A modal frame named by its `title` (`aria-labelledby`), or by `ariaLabel` when it draws no heading (one of the two is required by the type), with `description` (`aria-describedby`), `onClose`, `closeLabel`; Escape, the close button and the overlay close it; focus moves in and returns. Options: `width` (a number of pixels or a CSS length, 480 by default), `className` (classes for the frame), `showClose` (default true), `closeOnOverlay` (default true; a form sets false), `initialFocus` (`"first"` for the first field, a ref, or the frame by default) and `titleClassName` (default `font-semibold text-empty`). `role` is `"dialog"` by default and takes `"alertdialog"`; `portal` (default false) renders it onto the document's body, for a frame inside a scroll or overflow container, and needs react-dom |
+| `WindowControls` | The window's 3 buttons, Minimize, Maximize (Restore when `maximized`) and Close, in a `role="group"` named "Window controls": `maximized`, `onWindow(command)`, `platform` (`"linux"` by default, or `"windows"`) and `className`. A `WindowCommand` is `{ kind: "minimize" }`, `{ kind: "toggleMaximize" }` or `{ kind: "close" }`, kinds that frostmail's and frostnotes' own command types already hold. `"linux"` draws the apps' `IconButton`s (28px, a 4px gap); `"windows"` draws flat buttons 46px wide and the row's height, with no gap and no rounding, and a red Close on hover. The group is not a drag region |
+| `windowPlatform(nav?)` | `"windows"` when `navigator.userAgentData?.platform` or `navigator.userAgent` says Windows, `"linux"` otherwise and when there is no navigator; it never throws |
+| `Prompt<T>` | A modal frame for a quick switcher, a command palette or a chooser, named by `label` (`role="dialog"`, `aria-modal`): a focused query field (`query`, `onQuery`, `placeholder`), a listbox of `items` (`itemKey`, `renderItem`, `emptyText`) and a footer of `instructions` (`{ keys, text }`). ArrowDown and ArrowUp move the selection, wrapping; Enter or a click calls `onEnter(item, mods)` with the Ctrl, Alt and Shift state (`item` is `undefined` for an empty list); Escape and a press on the dimmed window call `onClose`; Tab stays in the field; focus moves in and returns. The app keeps its commands, data and ranking. `highlight(text, ranges, from?)` draws matched `PromptRange`s in the accent, bold. It portals onto the body, so react-dom is an optional peer |
 | `useNarrow()` | `isNarrow` as a hook, following the window |
 | `cx(...parts)` | Joins the class names that are set |
 
@@ -127,6 +134,12 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
    change the frame; `showClose`, `closeOnOverlay` and `initialFocus` change
    what opens and closes it; `titleClassName` changes the heading. The
    defaults are 0.1.0's behaviour.
+4d. **The default `WindowControls` platform keeps the look of 0.5.0.** `"linux"`
+   draws what frostmail and frostnotes drew before: a `flex shrink-0
+   items-center gap-1` row of three 28px `IconButton`s. The `"windows"`
+   platform changes only how the 3 buttons look: the buttons, their names,
+   their order and the commands are the same. Its Close red, `#c42b1c`, is
+   Windows' own colour, not a token.
 5. **Sharing is at build time.** Each app bundles its own copy; nothing is
    served from a shared path at run time.
 6. **An app adds `@source "../node_modules/@frostyard/lodge-ui/src";` to its
@@ -162,5 +175,5 @@ shell takes the package from the checkout with `link:../ui`, as it does for
 ## References
 
 - Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md)
-- Context: [design/overview.md](../design/overview.md#the-kit-and-the-client); the package's own README is `ui/README.md`
+- Context: [design/overview.md](../design/overview.md#the-kit-and-the-client); the package's own README is [ui/README.md](../../ui/README.md), and its history is [ui/CHANGELOG.md](../../ui/CHANGELOG.md)
 - Builds on: [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md)

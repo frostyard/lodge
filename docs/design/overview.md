@@ -352,7 +352,8 @@ allow a login or a node, issue a token, or reload the apps
   tokens as CSS custom properties (light and dark, and the density
   tokens), the domain accents apart from them, the Tailwind v4 theme over
   the tokens with the shared type roles, a base layer, Inter, and React
-  primitives in a `./react` subpath. `./theme` is framework-free, for the
+  primitives in a `./react` subpath (`IconButton`, `Splitter`, `Sheet`, `Menu`,
+  `Prompt`, `WindowControls` and `useNarrow`). `./theme` is framework-free, for the
   shell and Porter too. It carries no preflight and never imports Tailwind
   as a whole, and every app bundles its own copy at build time
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
