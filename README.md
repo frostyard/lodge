@@ -27,8 +27,8 @@ The kit, the client and the UI package are tagged up to `kit/v0.3.0`,
 `client/v0.3.2` and `ui/v0.6.0`, and lodge v1 and its inference layer are
 built. Notes and Mail run behind it; Read, the reader in
 [frostyard/frostread](https://github.com/frostyard/frostread), is built and
-runs behind it too (since 2026-10-21), and its repository is private for
-now. Porter, the assistant in
+runs behind it too (since 2026-10-21). Its repository is public since
+2026-10-23. Porter, the assistant in
 [frostyard/porter](https://github.com/frostyard/porter), runs beside them
 (since 2026-10-20). The order of work
 is the [roadmap](docs/plans/0001-roadmap.md).

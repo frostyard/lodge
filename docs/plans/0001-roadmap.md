@@ -404,7 +404,7 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   on 2026-10-21, and **deployed on lodge's host the same day** for the
   owner's daily use, beside notes, mail and Porter: frostread is the
   second name in `agents`, and its notes token is scoped to `Reading/` in
-  the owner's vault. The repository is private until the owner opens it.
+  the owner's vault. The repository is public since 2026-10-23.
 - **The shared UI package.** `@frostyard/lodge-ui` is built: 0.1.0 with
   frostmail's token values unchanged
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
