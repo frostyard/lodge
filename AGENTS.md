@@ -40,7 +40,7 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
   Accepted).
 - **frostread, the third app, is built and deployed on lodge's host on
   2026-10-21** ([its PRs](https://github.com/frostyard/frostread/pulls)); the
-  repository is private until the owner opens it. Its reader is lodge's
+  repository is public since 2026-10-23. Its reader is lodge's
   app `read`; its fetcher uses the kit's `netguard`
   ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)),
   and its web app is the first on the UI package
