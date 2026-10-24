@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build
+.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build vulncheck
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -6,6 +6,8 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 # golangci-lint's release, read from mise.toml (frostyard/core ADR-0043).
 GOLANGCI_LINT_VERSION := $(strip $(shell sed -n 's/^golangci-lint = "\(.*\)"/\1/p' mise.toml))
+# govulncheck's release; the Go checksum database verifies the module.
+GOVULNCHECK_VERSION := v1.9.0
 # The Go modules: lodge, and the kit app daemons import (kit/go.mod). Every
 # gate runs in each.
 MODULES := . kit
@@ -89,6 +91,11 @@ verify: ## Tidy, vet, format, lint and tests
 	test -z "$$(gofmt -l $(GO_FILES))"
 	$(MAKE) --no-print-directory lint
 	$(MAKE) --no-print-directory test
+
+# Needs the network, and a new upstream advisory can fail it, so it is in no
+# gate (check, verify, ci); CI runs it as its own job.
+vulncheck: ## Report reachable vulnerabilities (govulncheck; needs the network)
+	$(call IN_MODULES,go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...)
 
 check: fmt verify ## Format, then verify (the developer gate)
 

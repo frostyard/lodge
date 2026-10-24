@@ -1,5 +1,6 @@
-.PHONY: help build fmt vet test check web-build lodge-package clean
+.PHONY: help build fmt vet test check vulncheck web-build lodge-package clean
 
+GOVULNCHECK_VERSION := v1.9.0
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -19,6 +20,10 @@ test: ## Run the Go tests, the app contract's socket rules among them
 	go test ./...
 
 check: fmt vet test ## Format, vet and test
+
+# Needs the network, so it is not part of check.
+vulncheck: ## Report reachable vulnerabilities (govulncheck; needs the network)
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 # The web bundle builds in an nsl machine with Node (lodge's
 # dev/nsl/provision.sh), never on the host, for lodge's /app/__ID__/.

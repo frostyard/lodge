@@ -40,6 +40,7 @@ Requirements: Go 1.27 and `mise install` (golangci-lint) on the host.
 ```sh
 make check   # format, tidy, vet, lint, tests (and the docs' links)
 make ci      # check's verify, plus the race detector and cross-builds
+make vulncheck   # govulncheck on both modules (network; CI runs it, no gate does)
 make build   # build/lodge
 ```
 
