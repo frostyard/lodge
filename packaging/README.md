@@ -79,7 +79,7 @@ While lodge is stopped, no browser and no agent reaches any app.
    ```sh
    v=$(/opt/lodge/bin/lodge --version | cut -d' ' -f2)
    sudo sh -c "umask 077; tar -czpf /root/lodge-rollback-$v-$(date -u +%Y%m%dT%H%MZ).tar.gz \
-     /var/lib/lodge /etc/lodge /opt/lodge/bin /etc/systemd/system/lodge.service /usr/share/lodge/shell"
+     /var/lib/lodge /etc/lodge /opt/lodge/bin/lodge /opt/lodge/bin/lodgectl /etc/systemd/system/lodge.service /usr/share/lodge/shell"
    ```
 
    Keep the old `make dist` tarball too.
@@ -103,20 +103,27 @@ tarball, a rebuild of the earlier commit, or the rollback archive.
 2. Install the old version in one of these ways:
    - Run `install.sh PREFIX=/opt/lodge` from the earlier tarball or the
      rebuild.
-   - Or restore the installed files from the rollback archive. This does not
-     touch the state or the configuration:
+   - Or restore lodge's installed files from the rollback archive. This does not
+     touch the state, the configuration or other binaries in `/opt/lodge/bin`:
 
      ```sh
      sudo rm -rf /usr/share/lodge/shell
-     sudo tar -xzpf ARCHIVE -C / --exclude=var/lib/lodge --exclude=etc/lodge
+     sudo tar -xzpf ARCHIVE -C / opt/lodge/bin/lodge opt/lodge/bin/lodgectl \
+       etc/systemd/system/lodge.service usr/share/lodge/shell
      sudo systemctl daemon-reload
      ```
 3. Start lodge: `sudo systemctl start lodge`.
 4. If lodge does not start and `journalctl -u lodge` shows
    `the database is at version N, newer than this lodge's M`, the new lodge
    migrated `lodge.db`. An older lodge refuses a newer database. Stop lodge,
-   restore `/var/lib/lodge` from the rollback archive, and start lodge again.
-   The restore loses the tokens, the allow-list changes and the provider
+   then restore the state from the rollback archive:
+
+   ```sh
+   sudo rm -rf /var/lib/lodge
+   sudo tar -xzpf ARCHIVE -C / var/lib/lodge
+   ```
+
+   Start lodge again. The restore loses the tokens, the allow-list changes and the provider
    sign-ins that were made after the archive.
 5. Check as in Update.
 
