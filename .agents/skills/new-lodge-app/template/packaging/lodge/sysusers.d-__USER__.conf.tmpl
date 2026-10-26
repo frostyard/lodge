@@ -1,4 +1,8 @@
 # __NAME__'s system user, as /usr/lib/sysusers.d/__USER__.conf. It may use
 # lodge's inference socket (group lodge-apps), and is never in group lodge.
+# Group lodge owns the app socket (SocketGroup=lodge). This file declares the
+# group too, so that the socket starts without lodge's own sysext (core
+# ADR-0058). The user is never a member of group lodge.
+g lodge -
 u __USER__ - "__NAME__, behind lodge" /var/lib/__USER__
 m __USER__ lodge-apps
