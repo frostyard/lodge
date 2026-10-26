@@ -22,8 +22,13 @@ Build and install:
 1. `make shell-build` (in the nsl machine), then `make dist`, which writes
    `dist/lodge-<version>-linux-amd64.tar.gz` (`DIST_ARCH=arm64` for arm64).
 2. On the host: unpack it and run `sudo ./lodge-<version>-linux-amd64/packaging/install.sh`.
-   `PREFIX=/opt/lodge` (the hand-installed host) puts the binaries in `/opt/lodge/bin`, and the
-   units, sysusers.d and tmpfiles.d entries under `/etc`.
+   **A host that was installed with `PREFIX=/opt/lodge`** (its unit is in
+   `/etc/systemd/system`) keeps that prefix. A unit in `/etc/systemd/system`
+   overrides the one in `/usr/lib/systemd/system`, so a default install
+   there would restart the old binary. Run:
+   `sudo ./lodge-<version>-linux-amd64/packaging/install.sh PREFIX=/opt/lodge`.
+   That puts the binaries in `/opt/lodge/bin`, and the units, sysusers.d and
+   tmpfiles.d entries under `/etc`.
    From a checkout, `sudo make install` does the same from `build/` and
    `shell/dist/`, and `make install DESTDIR=/tmp/stage` stages it.
 3. Make the configuration directory once: `sudo install -d -m 0755
@@ -33,9 +38,6 @@ Build and install:
    `/etc/lodge/lodge.env` after the first start. lodge starts without
    `/etc/lodge/lodge.env` and `/etc/lodge/config.json`: a missing
    `config.json` means no agents and no providers.
-   On a host that has `lodge` and `lodgectl` in `/usr/local/bin` (and
-   `/usr/local/bin` comes first on `PATH`), remove those copies once after
-   the first install with the default `PREFIX`, or they shadow the new ones.
    `/etc/lodge/config.example.json` from an older install may stay or go.
 4. `sudo systemctl enable --now lodge`, then `sudo lodgectl allow login …`
    and `sudo lodgectl allow node …`.
@@ -44,6 +46,19 @@ Build and install:
    lodgectl reload`, and its tokens are issued with `sudo lodgectl token
    issue NAME --app ID --scope SCOPE --agent USER`. `sudo lodgectl status`
    shows the agent socket and the agents it admits.
+
+To move a hand-installed host to the `/usr` layout (optional):
+
+1. Check the effective unit: `systemctl cat lodge.service`, with its drop-ins.
+2. Keep local settings as a drop-in in `/etc/systemd/system/lodge.service.d/`.
+3. Remove the old full unit in `/etc/systemd/system` and the old copies in
+   `/etc/sysusers.d` and `/etc/tmpfiles.d`.
+4. Install with the default `PREFIX`, then `sudo systemctl daemon-reload`
+   and `sudo systemctl restart lodge`.
+5. Check `systemctl show -p ExecStart lodge.service` and `sudo lodgectl status`.
+6. Only after these checks pass, remove the old binaries. `/usr/local/bin`
+   comes before `/usr/bin` on `PATH`, so a stale `lodgectl` there shadows the
+   new one.
 
 `internal/packagecheck` stages an install and runs `systemd-analyze verify`
 on the units.

@@ -130,6 +130,8 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 		}
 	})
 
+	t.Run("unit rules", func(t *testing.T) { unitRules(t, app) })
+
 	t.Run("staging", func(t *testing.T) { stage(t, app) })
 }
 
@@ -266,5 +268,40 @@ func TestRenderWithoutAKey(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(app, "cmd", "notes2d", "main.go")); err != nil {
 		t.Errorf("no cmd/notes2d: %v", err)
+	}
+}
+
+// The units follow core ADR-0030 (no RequiredBy=) and snosi#1100 (no
+// Condition*=), the socket keeps its default dependencies, and
+// systemd-analyze verify, where installed, accepts the pair.
+func unitRules(t *testing.T, app string) {
+	dir := t.TempDir()
+	for _, name := range []string{"frosttasks.service", "frosttasks.socket"} {
+		lines := strings.Split(read(t, filepath.Join(app, "packaging", "lodge", name)), "\n")
+		for i, l := range lines {
+			l = strings.TrimSpace(l)
+			switch {
+			case strings.HasPrefix(l, "RequiredBy="), strings.HasPrefix(l, "Condition"):
+				t.Errorf("%s has %s", name, l)
+			case strings.HasSuffix(name, ".socket") && strings.HasPrefix(l, "DefaultDependencies="):
+				t.Errorf("%s has %s", name, l)
+			}
+			if strings.HasPrefix(lines[i], "ExecStart=") {
+				lines[i] = "ExecStart=/bin/sh -c true"
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyze, err := exec.LookPath("systemd-analyze")
+	if err != nil {
+		t.Log("no systemd-analyze: verify skipped")
+		return
+	}
+	cmd := exec.Command(analyze, "verify", "./frosttasks.service", "./frosttasks.socket")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("systemd-analyze verify: %v\n%s", err, out)
 	}
 }
