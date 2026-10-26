@@ -62,3 +62,84 @@ To move a hand-installed host to the `/usr` layout (optional):
 
 `internal/packagecheck` stages an install and runs `systemd-analyze verify`
 on the units.
+
+## Update
+
+This section is for a host that was installed by hand with
+`PREFIX=/opt/lodge`. Use the same `PREFIX` every time. The unit in
+`/etc/systemd/system` overrides the one in `/usr/lib/systemd/system`. Without
+`PREFIX`, the restart runs the old binary.
+
+While lodge is stopped, no browser and no agent reaches any app.
+
+1. Stop lodge: `sudo systemctl stop lodge`.
+2. Take a rollback archive. It holds secrets, so keep it root-only.
+   Name it with the old version and a UTC time:
+
+   ```sh
+   v=$(/opt/lodge/bin/lodge --version | cut -d' ' -f2)
+   sudo sh -c "umask 077; tar -czpf /root/lodge-rollback-$v-$(date -u +%Y%m%dT%H%MZ).tar.gz \
+     /var/lib/lodge /etc/lodge /opt/lodge/bin/lodge /opt/lodge/bin/lodgectl /etc/systemd/system/lodge.service /usr/share/lodge/shell"
+   ```
+
+   Keep the old `make dist` tarball too.
+3. Build the new tarball (see Build and install above), unpack it on the
+   host, and run
+   `sudo ./lodge-<version>-linux-amd64/packaging/install.sh PREFIX=/opt/lodge`.
+   The script replaces each binary by rename and the shell's bundle whole. It
+   does not change `/etc/lodge`. It restarts lodge only if lodge is active,
+   so run `sudo systemctl start lodge` if you stopped it.
+4. Check the version: `/opt/lodge/bin/lodge --version` prints
+   `lodge <version> (<commit>)`, and `journalctl -u lodge` shows
+   `lodge starting` with `version` and `commit`. Then run
+   `sudo lodgectl status` and check that the apps are up.
+
+## Roll back
+
+`install.sh` keeps no copy of the old binaries. Use the earlier `make dist`
+tarball, a rebuild of the earlier commit, or the rollback archive.
+
+1. Stop lodge: `sudo systemctl stop lodge`.
+2. Install the old version in one of these ways:
+   - Run `install.sh PREFIX=/opt/lodge` from the earlier tarball or the
+     rebuild.
+   - Or restore lodge's installed files from the rollback archive. This does not
+     touch the state, the configuration or other binaries in `/opt/lodge/bin`:
+
+     ```sh
+     sudo rm -rf /usr/share/lodge/shell
+     sudo tar -xzpf ARCHIVE -C / opt/lodge/bin/lodge opt/lodge/bin/lodgectl \
+       etc/systemd/system/lodge.service usr/share/lodge/shell
+     sudo systemctl daemon-reload
+     ```
+3. Start lodge: `sudo systemctl start lodge`.
+4. If lodge does not start and `journalctl -u lodge` shows
+   `the database is at version N, newer than this lodge's M`, the new lodge
+   migrated `lodge.db`. An older lodge refuses a newer database. Stop lodge,
+   then restore the state from the rollback archive:
+
+   ```sh
+   sudo rm -rf /var/lib/lodge
+   sudo tar -xzpf ARCHIVE -C / var/lib/lodge
+   ```
+
+   Start lodge again. The restore loses the tokens, the allow-list changes and the provider
+   sign-ins that were made after the archive.
+5. Check as in Update.
+
+## After the sysexts
+
+This is planned and not built. In core's
+[Plan 0010](https://github.com/frostyard/core/blob/main/docs/plans/0010-suite-packaging.md),
+Phase 3, lodge ships as the sysext `lodge` for Snosi images (Floe). It does
+not ship for this Debian host, which stays hand-installed (Phase 4 is
+deferred, 2026-10-23).
+
+On a Snosi image, the planned commands are:
+
+- update: `sudo updex features update --component=lodge`, then reboot;
+- roll back: `sudo updex features rollback lodge`, which takes effect at the
+  next boot.
+
+A sysext rollback does not undo a database migration. Keep a backup of
+`/var/lib/lodge`.
