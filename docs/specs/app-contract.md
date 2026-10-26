@@ -58,7 +58,11 @@ what `companion: true` does, and [the agent socket](#the-agent-socket).
 | agent socket | `/run/lodge/agent.sock` | `lodge`, group `lodge-agents`, 0660 |
 | control socket | `/run/lodge/control.sock` | `lodge`, 0600 |
 | the shell's bundle | `/usr/share/lodge/shell/` | root; directories 0755, files 0644 |
-| lodge's configuration | `/etc/lodge/config.json` | root, 0644; no secrets |
+| the daemons' binaries | `/usr/bin/` | root, 0755 |
+| the units | `/usr/lib/systemd/system/` | root, 0644 |
+| an app's sysusers.d entry | `/usr/lib/sysusers.d/<user>.conf`, with `g lodge -` | root, 0644 |
+| lodge's example configuration | `/usr/share/lodge/config.example.json` | root, 0644 |
+| lodge's configuration | `/etc/lodge/config.json` | the administrator's, 0644; no secrets |
 | lodge's state | `/var/lib/lodge/` | `lodge`, 0700: tsnet state, allow-lists, tokens, provider credentials |
 | the app's state | the app's own, such as `/var/lib/<user>/` | the app's user, 0700 |
 
@@ -67,6 +71,11 @@ what `companion: true` does, and [the agent socket](#the-agent-socket).
   MUST be in group `lodge-apps` (for inference), and MUST NOT be in group
   `lodge`. An app that is also an agent on lodge's host, such
   as Porter, is in group `lodge-agents` too ([below](#the-agent-socket)).
+  Each app's `sysusers.d` entry also declares group `lodge` (`g lodge -`),
+  so that its socket starts without lodge's own sysext.
+- **An install writes only `/usr`.** The configuration under `/etc` belongs
+  to the administrator, and state is under `/var/lib`
+  ([core ADR-0058](https://github.com/frostyard/core/blob/main/docs/adr/0058-ship-suite-desktop-apps-as-flatpaks-and-services-as-sysexts.md)).
 - **Sockets.** An app's socket SHOULD be created by a systemd socket unit
   (`SocketUser=<user>`, `SocketGroup=lodge`, `SocketMode=0660`) and passed
   to the daemon. The kit accepts a passed socket or creates one itself. A

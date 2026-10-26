@@ -1,6 +1,7 @@
 package packagecheck
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,13 +72,26 @@ func TestInstallLayout(t *testing.T) {
 		"usr/share/lodge/shell/assets/app-1.js":      0o644,
 		"usr/share/lodge/shell/manifest.webmanifest": 0o644,
 		"usr/share/lodge/apps":                       0o755,
-		"etc/lodge/config.example.json":              0o644,
-		"etc/lodge":                                  0o755,
+		"usr/share/lodge/config.example.json":        0o644,
 	}
 	for p, m := range want {
 		if got := mode(t, filepath.Join(dest, p)); got != m {
 			t.Errorf("%s: mode %v, want %v", p, got, m)
 		}
+	}
+	// The default install writes only under usr/ (core ADR-0058).
+	err := filepath.WalkDir(dest, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dest, p)
+		if rel != "." && rel != "usr" && !strings.HasPrefix(rel, "usr"+string(filepath.Separator)) {
+			t.Errorf("staged %s outside usr/", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	unit, _ := os.ReadFile(filepath.Join(dest, "usr/lib/systemd/system/lodge.service"))
 	if !strings.Contains(string(unit), "\nExecStart=/usr/bin/lodge\n") {
@@ -108,7 +122,8 @@ func TestInstallPrefix(t *testing.T) {
 	bin, shell := sources(t, "a.js")
 	install(t, dest, bin, shell, "PREFIX=/opt/lodge")
 	for _, p := range []string{"opt/lodge/bin/lodge", "opt/lodge/bin/lodgectl", "etc/systemd/system/lodge.service",
-		"etc/sysusers.d/lodge.conf", "etc/tmpfiles.d/lodge.conf", "usr/share/lodge/shell/index.html"} {
+		"etc/sysusers.d/lodge.conf", "etc/tmpfiles.d/lodge.conf", "usr/share/lodge/shell/index.html",
+		"usr/share/lodge/config.example.json"} {
 		if _, err := os.Stat(filepath.Join(dest, p)); err != nil {
 			t.Errorf("%s is missing", p)
 		}
@@ -116,6 +131,38 @@ func TestInstallPrefix(t *testing.T) {
 	unit, _ := os.ReadFile(filepath.Join(dest, "etc/systemd/system/lodge.service"))
 	if !strings.Contains(string(unit), "\nExecStart=/opt/lodge/bin/lodge\n") {
 		t.Errorf("ExecStart was not rewritten:\n%s", unit)
+	}
+}
+
+// No unit has RequiredBy= (core ADR-0030) or a Condition*= line (snosi#1100),
+// and a socket unit keeps its default dependencies.
+func TestUnitRules(t *testing.T) {
+	for _, p := range []string{"systemd/lodge.service", "app-template/example.service", "app-template/example.socket"} {
+		b, err := os.ReadFile(filepath.Join(packaging, p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			l = strings.TrimSpace(l)
+			switch {
+			case strings.HasPrefix(l, "RequiredBy="):
+				t.Errorf("%s has %s", p, l)
+			case strings.HasPrefix(l, "Condition"):
+				t.Errorf("%s has %s", p, l)
+			case strings.HasSuffix(p, ".socket") && strings.HasPrefix(l, "DefaultDependencies="):
+				t.Errorf("%s has %s", p, l)
+			}
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(packaging, "app-template/example.sysusers.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(b), "\ng lodge -\n") {
+		t.Error("example.sysusers.conf lacks g lodge -")
+	}
+	if strings.Contains(string(b), "\nm frostexample lodge\n") {
+		t.Error("the example user is a member of group lodge")
 	}
 }
 

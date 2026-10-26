@@ -118,8 +118,8 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 			"packaging/lodge/frosttasks.socket": {"ListenStream=/run/lodge/apps/tasks.sock", "SocketUser=frosttasks",
 				"SocketGroup=lodge", "SocketMode=0660", "FileDescriptorName=tasks"},
 			"packaging/lodge/frosttasks.service": {"User=frosttasks", "SupplementaryGroups=lodge-apps",
-				"ExecStart=/usr/local/bin/tasksd", "RestrictAddressFamilies=AF_UNIX"},
-			"packaging/lodge/sysusers.d-frosttasks.conf": {"u frosttasks ", "m frosttasks lodge-apps"},
+				"ExecStart=/usr/bin/tasksd", "RestrictAddressFamilies=AF_UNIX"},
+			"packaging/lodge/sysusers.d-frosttasks.conf": {"g lodge -\n", "u frosttasks ", "m frosttasks lodge-apps"},
 		} {
 			got := read(t, filepath.Join(app, path))
 			for _, w := range want {
@@ -130,6 +130,8 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 		}
 	})
 
+	t.Run("unit rules", func(t *testing.T) { unitRules(t, app) })
+
 	t.Run("staging", func(t *testing.T) { stage(t, app) })
 }
 
@@ -137,7 +139,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 // nothing of theirs.
 func stage(t *testing.T, app string) {
 	dest := t.TempDir()
-	theirs := []string{"usr/share/lodge/apps/mail/app.json", "usr/local/bin/maild", "usr/share/lodge/apps/tasksx/keep"}
+	theirs := []string{"usr/share/lodge/apps/mail/app.json", "usr/bin/maild", "usr/share/lodge/apps/tasksx/keep"}
 	for _, f := range append(theirs, "usr/share/lodge/apps/tasks/web/stale.js") {
 		p := filepath.Join(dest, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -163,11 +165,21 @@ func stage(t *testing.T, app string) {
 	if out, err := run(dest, "1.2.3", "build"); err != nil {
 		t.Fatalf("stage.sh: %v\n%s", err, out)
 	}
-	for _, f := range []string{"usr/local/bin/tasksd", "usr/share/lodge/apps/tasks/web/index.html",
+	for _, f := range []string{"usr/bin/tasksd", "usr/share/lodge/apps/tasks/web/index.html",
 		"usr/lib/systemd/system/frosttasks.socket", "usr/lib/systemd/system/frosttasks.service",
 		"usr/lib/sysusers.d/frosttasks.conf"} {
 		if _, err := os.Stat(filepath.Join(dest, f)); err != nil {
 			t.Errorf("staged no %s: %v", f, err)
+		}
+	}
+	// The app stages only under usr/.
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "usr" {
+			t.Errorf("staged %s outside usr/", e.Name())
 		}
 	}
 	var m map[string]any
@@ -256,5 +268,40 @@ func TestRenderWithoutAKey(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(app, "cmd", "notes2d", "main.go")); err != nil {
 		t.Errorf("no cmd/notes2d: %v", err)
+	}
+}
+
+// The units follow core ADR-0030 (no RequiredBy=) and snosi#1100 (no
+// Condition*=), the socket keeps its default dependencies, and
+// systemd-analyze verify, where installed, accepts the pair.
+func unitRules(t *testing.T, app string) {
+	dir := t.TempDir()
+	for _, name := range []string{"frosttasks.service", "frosttasks.socket"} {
+		lines := strings.Split(read(t, filepath.Join(app, "packaging", "lodge", name)), "\n")
+		for i, l := range lines {
+			l = strings.TrimSpace(l)
+			switch {
+			case strings.HasPrefix(l, "RequiredBy="), strings.HasPrefix(l, "Condition"):
+				t.Errorf("%s has %s", name, l)
+			case strings.HasSuffix(name, ".socket") && strings.HasPrefix(l, "DefaultDependencies="):
+				t.Errorf("%s has %s", name, l)
+			}
+			if strings.HasPrefix(lines[i], "ExecStart=") {
+				lines[i] = "ExecStart=/bin/sh -c true"
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyze, err := exec.LookPath("systemd-analyze")
+	if err != nil {
+		t.Log("no systemd-analyze: verify skipped")
+		return
+	}
+	cmd := exec.Command(analyze, "verify", "./frosttasks.service", "./frosttasks.socket")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("systemd-analyze verify: %v\n%s", err, out)
 	}
 }

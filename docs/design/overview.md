@@ -404,7 +404,8 @@ Apps pin all three to a published lodge commit or release.
 
 - **Install:** `make shell-build` (in the nsl machine) and `make dist`,
   then `packaging/install.sh` on the host
-  ([packaging/README.md](../../packaging/README.md)).
+  ([packaging/README.md](../../packaging/README.md)). It writes only
+  `/usr` ([core ADR-0058](https://github.com/frostyard/core/blob/main/docs/adr/0058-ship-suite-desktop-apps-as-flatpaks-and-services-as-sysexts.md)).
 - **First start:**
   1. Make a tagged, pre-approved auth key in the tailnet's admin console.
   2. Start lodge once with it in `TS_AUTHKEY` (`/etc/lodge/lodge.env`).
@@ -434,8 +435,8 @@ Apps pin all three to a published lodge commit or release.
   if the old nodes are first removed from the tailnet.
 - **Nothing private in node names:** they appear in public certificate
   logs.
-- **Providers:** copy `/etc/lodge/config.example.json` to
-  `/etc/lodge/config.json` and name the providers and aliases, set any key
+- **Providers:** copy `/usr/share/lodge/config.example.json` to
+  `/etc/lodge/config.json` (make `/etc/lodge` first: the install leaves it to you) and name the providers and aliases, set any key
   with `sudo lodgectl provider key NAME` (from stdin), then `sudo lodgectl
   reload`. lodge's host must reach each configured provider. A local model
   on another machine needs a network path to it: a firewall rule, a
