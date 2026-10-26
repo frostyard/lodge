@@ -142,7 +142,7 @@ and packs it with nFPM (`nfpm.yaml`, pinned in `mise.toml`). Without
 `dist/frostyard-lodge_0.0.0-<commit>-snapshot_amd64.deb`. `deb-check.py`
 (`make deb-check`) reads the archive's exact member names. It fails unless
 the control fields are right (`Depends: systemd`, no maintainer scripts), and
-the package holds only root-owned, non-writable directories, files and links
+the package holds only root-owned, non-writable directories and regular files (no links)
 under `/usr`, with the binaries (mode 0755), the unit, the sysusers.d and
 tmpfiles.d entries, the shell's bundle and the example configuration.
 `internal/packagecheck` feeds it bad packages, and each must fail.
