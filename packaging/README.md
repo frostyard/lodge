@@ -10,6 +10,7 @@ How lodge installs on a systemd host, such as Debian 13
 | `tmpfiles.d/lodge.conf` | `/run/lodge` (lodge's: its control, inference and agent sockets), `/run/lodge/apps` (root's), `/var/lib/lodge` (0700) |
 | `config.example.json` | `/usr/share/lodge/config.example.json`: the agents on this host ([lodge-http.md](../docs/specs/lodge-http.md#the-agent-socket)), and inference providers and aliases ([inference.md](../docs/specs/inference.md#configuration)), to copy to `/etc/lodge/config.json` |
 | `install.sh` | installs the binaries (`lodge` and `lodgectl` in `/usr/bin/`), the shell's bundle at `/usr/share/lodge/shell/`, and the files above |
+| `nfpm.yaml`, `deb-check.py` | the `.deb` (see Release): `make deb` and `make deb-check` |
 | `app-template/` | a socket unit, a service and a sysusers.d entry for an app to copy |
 
 With the default `PREFIX=/usr` the install writes only under `/usr`, so a
@@ -126,6 +127,37 @@ tarball, a rebuild of the earlier commit, or the rollback archive.
    Start lodge again. The restore loses the tokens, the allow-list changes and the provider
    sign-ins that were made after the archive.
 5. Check as in Update.
+
+## Release
+
+`make bump` is the only way to tag a release. On `main`, clean and equal to
+`origin/main`, it runs `make check`, then tags the next version with the
+pinned `svu` (only `vX.Y.Z` tags count, so the library tags `kit/`, `client/` and
+`ui/` do not; the first release is `v0.1.0`) and pushes the tag. The tag's workflow
+(`.github/workflows/release.yml`) builds `frostyard-lodge_X.Y.Z_amd64.deb`
+with `make deb`, attests it, and attaches it to the GitHub release.
+
+`make deb` (after `make shell-build`) stages `install.sh` into `build/deb/root`
+and packs it with nFPM (`nfpm.yaml`, pinned in `mise.toml`). Without
+`DEB_VERSION=X.Y.Z` it builds a snapshot,
+`dist/frostyard-lodge_0.0.0-<commit>-snapshot_amd64.deb`. `deb-check.py`
+(`make deb-check`) reads the archive's exact member names. It fails unless
+the control fields are right (`Depends: systemd`, no maintainer scripts), and
+the package holds only root-owned, non-writable directories and regular files (no links)
+under `/usr`, with the binaries (mode 0755), the unit, the sysusers.d and
+tmpfiles.d entries, the shell's bundle and the example configuration.
+`internal/packagecheck` feeds it bad packages, and each must fail.
+CI builds a snapshot on every pull request (job `deb`).
+
+Verify a download:
+
+```sh
+gh attestation verify frostyard-lodge_X.Y.Z_amd64.deb --repo frostyard/lodge
+```
+
+Snosi picks the `.deb` up later
+([core Plan 0010](https://github.com/frostyard/core/blob/main/docs/plans/0010-suite-packaging.md),
+Phase 3).
 
 ## After the sysexts
 

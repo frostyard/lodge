@@ -118,7 +118,9 @@ Everything in the map is built.
   `shell/`: the shell page's UI, on the client's shell half. All three are
   TypeScript, built in an nsl machine.
 - `packaging/`: the systemd unit, sysusers.d and tmpfiles.d entries, the
-  install script (`make dist`, `make install`) and an app's unit
+  install script (`make dist`, `make install`), the `.deb` (`make deb`,
+  nFPM; `make bump` tags a release, and `.github/workflows/release.yml`
+  builds, attests and publishes it) and an app's unit
   templates. `internal/packagecheck` tests them.
 - `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
   build with three `dev/fakeapp` apps, one of them the companion, for

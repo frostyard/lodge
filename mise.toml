@@ -10,3 +10,7 @@ lockfile = true
 [tools]
 # make lint, and so make verify, check and ci; the Makefile checks this release.
 golangci-lint = "2.15.0"
+# make bump tags the release with svu; the Makefile checks this release.
+svu = "3.4.1"
+# make deb builds the .deb with nFPM.
+nfpm = "2.48.0"
