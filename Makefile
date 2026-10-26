@@ -66,7 +66,13 @@ deb: ## Build dist/frostyard-lodge_<DEB_VERSION>_amd64.deb with nFPM, after make
 	$(MAKE) --no-print-directory deb-check DEB_VERSION="$(DEB_VERSION)"
 
 deb-check: ## Check the .deb: metadata, only /usr paths, root ownership, no writable entries, the payload
-	packaging/deb-check.sh "$(DEB_FILE)" frostyard-lodge "$(DEB_VERSION)"
+	packaging/deb-check.py "$(DEB_FILE)" frostyard-lodge "$(DEB_VERSION)" \
+		--exec /usr/bin/lodge --exec /usr/bin/lodgectl \
+		--file /usr/lib/systemd/system/lodge.service \
+		--file /usr/lib/sysusers.d/lodge.conf \
+		--file /usr/lib/tmpfiles.d/lodge.conf \
+		--file /usr/share/lodge/shell/index.html \
+		--file /usr/share/lodge/config.example.json
 
 # make install DESTDIR=… PREFIX=… (see packaging/install.sh), from build/
 # and shell/dist/.
@@ -183,7 +189,9 @@ bump: ## Tag the next version with svu and push the tag (main, clean, equal to o
 	@test -z "$$(git status --porcelain)" || { echo "the working tree is not clean: commit or stash first"; exit 1; }
 	@$(MAKE) --no-print-directory check
 	@test -z "$$(git status --porcelain)" || { echo "make check changed the tree: commit that first"; exit 1; }
-	@version=$$($(SVU) next); \
-		git tag -a $$version -m "Version $$version"; \
-		echo "Tagged $$version; pushing it to origin..."; \
-		git push origin $$version
+	@set -eu; \
+	version=$$($(SVU) next); \
+	printf '%s\n' "$$version" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "svu next gave '$$version', not vX.Y.Z"; exit 1; }; \
+	git tag -a "$$version" -m "Version $$version"; \
+	echo "Tagged $$version; pushing it to origin..."; \
+	git push origin "refs/tags/$$version"

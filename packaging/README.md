@@ -10,7 +10,7 @@ How lodge installs on a systemd host, such as Debian 13
 | `tmpfiles.d/lodge.conf` | `/run/lodge` (lodge's: its control, inference and agent sockets), `/run/lodge/apps` (root's), `/var/lib/lodge` (0700) |
 | `config.example.json` | `/usr/share/lodge/config.example.json`: the agents on this host ([lodge-http.md](../docs/specs/lodge-http.md#the-agent-socket)), and inference providers and aliases ([inference.md](../docs/specs/inference.md#configuration)), to copy to `/etc/lodge/config.json` |
 | `install.sh` | installs the binaries (`lodge` and `lodgectl` in `/usr/bin/`), the shell's bundle at `/usr/share/lodge/shell/`, and the files above |
-| `nfpm.yaml`, `deb-check.sh` | the `.deb` (see Release): `make deb` and `make deb-check` |
+| `nfpm.yaml`, `deb-check.py` | the `.deb` (see Release): `make deb` and `make deb-check` |
 | `app-template/` | a socket unit, a service and a sysusers.d entry for an app to copy |
 
 With the default `PREFIX=/usr` the install writes only under `/usr`, so a
@@ -139,10 +139,13 @@ with `make deb`, attests it, and attaches it to the GitHub release.
 `make deb` (after `make shell-build`) stages `install.sh` into `build/deb/root`
 and packs it with nFPM (`nfpm.yaml`, pinned in `mise.toml`). Without
 `DEB_VERSION=X.Y.Z` it builds a snapshot,
-`dist/frostyard-lodge_0.0.0-<commit>-snapshot_amd64.deb`. `deb-check.sh`
-(`make deb-check`) fails unless the package holds only root-owned,
-non-writable paths under `./usr/`, with the binaries, the unit, the sysusers.d
-and tmpfiles.d entries, the shell's bundle and the example configuration.
+`dist/frostyard-lodge_0.0.0-<commit>-snapshot_amd64.deb`. `deb-check.py`
+(`make deb-check`) reads the archive's exact member names. It fails unless
+the control fields are right (`Depends: systemd`, no maintainer scripts), and
+the package holds only root-owned, non-writable directories, files and links
+under `/usr`, with the binaries (mode 0755), the unit, the sysusers.d and
+tmpfiles.d entries, the shell's bundle and the example configuration.
+`internal/packagecheck` feeds it bad packages, and each must fail.
 CI builds a snapshot on every pull request (job `deb`).
 
 Verify a download:
