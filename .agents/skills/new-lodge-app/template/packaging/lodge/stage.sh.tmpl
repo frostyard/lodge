@@ -28,7 +28,7 @@ esac
 
 app=$dest/usr/share/lodge/apps/__ID__
 rm -rf -- "$app"
-install -Dm755 "$build/__ID__d" "$dest/usr/local/bin/__ID__d"
+install -Dm755 "$build/__ID__d" "$dest/usr/bin/__ID__d"
 install -d "$app"
 sed "s/\"version\": \"[^\"]*\"/\"version\": \"$version\"/" "$here/app.json" > "$app/app.json"
 if [ -d "$build/web" ]; then cp -R "$build/web" "$app/web"; fi

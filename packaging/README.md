@@ -8,23 +8,35 @@ How lodge installs on a systemd host, such as Debian 13
 | `systemd/lodge.service` | `/usr/lib/systemd/system/lodge.service`: user `lodge`, hardened, no `RuntimeDirectory=` |
 | `sysusers.d/lodge.conf` | user and group `lodge`; groups `lodge-apps` (for the inference socket) and `lodge-agents` (for the agent socket), with `lodge` a member of both |
 | `tmpfiles.d/lodge.conf` | `/run/lodge` (lodge's: its control, inference and agent sockets), `/run/lodge/apps` (root's), `/var/lib/lodge` (0700) |
-| `config.example.json` | `/etc/lodge/config.example.json`: the agents on this host ([lodge-http.md](../docs/specs/lodge-http.md#the-agent-socket)), and inference providers and aliases ([inference.md](../docs/specs/inference.md#configuration)), to copy to `/etc/lodge/config.json` |
-| `install.sh` | installs the binaries, the shell's bundle at `/usr/share/lodge/shell/`, and the files above |
+| `config.example.json` | `/usr/share/lodge/config.example.json`: the agents on this host ([lodge-http.md](../docs/specs/lodge-http.md#the-agent-socket)), and inference providers and aliases ([inference.md](../docs/specs/inference.md#configuration)), to copy to `/etc/lodge/config.json` |
+| `install.sh` | installs the binaries (`lodge` and `lodgectl` in `/usr/bin/`), the shell's bundle at `/usr/share/lodge/shell/`, and the files above |
 | `app-template/` | a socket unit, a service and a sysusers.d entry for an app to copy |
+
+With the default `PREFIX=/usr` the install writes only under `/usr`, so a
+systemd sysext can carry it ([core ADR-0058](https://github.com/frostyard/core/blob/main/docs/adr/0058-ship-suite-desktop-apps-as-flatpaks-and-services-as-sysexts.md)).
+It never creates `/etc/lodge`: that directory, `lodge.env` and
+`config.json` belong to the administrator.
 
 Build and install:
 
 1. `make shell-build` (in the nsl machine), then `make dist`, which writes
    `dist/lodge-<version>-linux-amd64.tar.gz` (`DIST_ARCH=arm64` for arm64).
 2. On the host: unpack it and run `sudo ./lodge-<version>-linux-amd64/packaging/install.sh`.
-   `PREFIX=/opt/lodge` puts the binaries in `/opt/lodge/bin`, and the
+   `PREFIX=/opt/lodge` (the hand-installed host) puts the binaries in `/opt/lodge/bin`, and the
    units, sysusers.d and tmpfiles.d entries under `/etc`.
    From a checkout, `sudo make install` does the same from `build/` and
    `shell/dist/`, and `make install DESTDIR=/tmp/stage` stages it.
-3. The first start reads `TS_AUTHKEY` from `/etc/lodge/lodge.env` (root,
+3. Make the configuration directory once: `sudo install -d -m 0755
+   /etc/lodge`. The first start reads `TS_AUTHKEY` from `/etc/lodge/lodge.env` (root,
    0600; never committed). Without one, `sudo lodgectl status` shows each
    node's login URL. Later starts need no key: remove `TS_AUTHKEY` from
-   `/etc/lodge/lodge.env` after the first start.
+   `/etc/lodge/lodge.env` after the first start. lodge starts without
+   `/etc/lodge/lodge.env` and `/etc/lodge/config.json`: a missing
+   `config.json` means no agents and no providers.
+   On a host that has `lodge` and `lodgectl` in `/usr/local/bin` (and
+   `/usr/local/bin` comes first on `PATH`), remove those copies once after
+   the first install with the default `PREFIX`, or they shadow the new ones.
+   `/etc/lodge/config.example.json` from an older install may stay or go.
 4. `sudo systemctl enable --now lodge`, then `sudo lodgectl allow login …`
    and `sudo lodgectl allow node …`.
 5. An agent on this host, such as Porter: its user joins `lodge-agents`,
