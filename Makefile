@@ -181,16 +181,18 @@ svu-version-check:
 
 # The only sanctioned way to tag a release (core ADR-0012): the tag's
 # workflow builds, attests and publishes the .deb.
+# svu reads only vX.Y.Z tags (.svu.yml's tag.pattern) and fails when there is
+# none, so the first release is v0.1.0.
 bump: ## Tag the next version with svu and push the tag (main, clean, equal to origin/main; runs make check)
 	@$(MAKE) --no-print-directory svu-version-check
 	@test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "make bump runs on main"; exit 1; }
-	@git fetch origin main
+	@git fetch --tags origin main
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "main is not origin/main: pull or push first"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "the working tree is not clean: commit or stash first"; exit 1; }
 	@$(MAKE) --no-print-directory check
 	@test -z "$$(git status --porcelain)" || { echo "make check changed the tree: commit that first"; exit 1; }
 	@set -eu; \
-	version=$$($(SVU) next); \
+	version=$$(if [ -z "$$(git tag -l 'v[0-9]*')" ]; then echo v0.1.0; else $(SVU) next; fi); \
 	printf '%s\n' "$$version" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "svu next gave '$$version', not vX.Y.Z"; exit 1; }; \
 	git tag -a "$$version" -m "Version $$version"; \
 	echo "Tagged $$version; pushing it to origin..."; \

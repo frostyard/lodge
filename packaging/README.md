@@ -132,7 +132,8 @@ tarball, a rebuild of the earlier commit, or the rollback archive.
 
 `make bump` is the only way to tag a release. On `main`, clean and equal to
 `origin/main`, it runs `make check`, then tags the next version with the
-pinned `svu` and pushes the tag. The tag's workflow
+pinned `svu` (only `vX.Y.Z` tags count, so the library tags `kit/`, `client/` and
+`ui/` do not; the first release is `v0.1.0`) and pushes the tag. The tag's workflow
 (`.github/workflows/release.yml`) builds `frostyard-lodge_X.Y.Z_amd64.deb`
 with `make deb`, attests it, and attaches it to the GitHub release.
 

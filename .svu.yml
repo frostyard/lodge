@@ -2,7 +2,9 @@
 #
 # https://github.com/caarlos0/svu
 verbose: false
-tag.pattern: ""
+# lodge also tags its libraries (kit/vX.Y.Z, client/vX.Y.Z, ui/vX.Y.Z), which
+# svu cannot read as a version: only lodge's own vX.Y.Z tags count.
+tag.pattern: "v[0-9]*"
 tag.prefix: "v"
 tag.mode: all
 log.directory:
