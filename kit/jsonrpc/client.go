@@ -115,21 +115,35 @@ func (c *Client[C]) Call(ctx context.Context, method string, params, result any)
 	}
 	select {
 	case m := <-ch:
-		if m.Error != nil {
-			return m.Error
-		}
-		if result == nil {
-			return nil
-		}
-		if err := json.Unmarshal(m.Result, result); err != nil {
-			return fmt.Errorf("decode %s result: %w", method, err)
-		}
-		return nil
+		return callResult(method, m, result)
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.done:
-		return c.Err()
+		// readLoop hands over every reply before it closes done, so a
+		// reply that came just before the end is in ch now: a select
+		// that saw both ready may have picked done.
+		select {
+		case m := <-ch:
+			return callResult(method, m, result)
+		default:
+			return c.Err()
+		}
 	}
+}
+
+// callResult ends a call with its response m: the server's error, or the
+// result decoded into result (unless nil).
+func callResult[C Code](method string, m Frame[C], result any) error {
+	if m.Error != nil {
+		return m.Error
+	}
+	if result == nil {
+		return nil
+	}
+	if err := json.Unmarshal(m.Result, result); err != nil {
+		return fmt.Errorf("decode %s result: %w", method, err)
+	}
+	return nil
 }
 
 func (c *Client[C]) write(m Frame[C]) error {
