@@ -14,6 +14,27 @@ import (
 
 const packaging = "../../packaging"
 
+// lodgeUserLine is the `u lodge ` line of lodge's own sysusers.d/lodge.conf.
+// Every app's entry repeats it byte for byte, so that its daemon
+// (lodgeapp.LoadEnv) resolves user lodge without lodge's sysext
+// (docs/specs/app-contract.md, Install layout). Change it only together with
+// every app: systemd-sysusers warns on two different lines for one user, and
+// keeps only the first.
+func lodgeUserLine(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(packaging, "sysusers.d/lodge.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, "u lodge ") {
+			return l
+		}
+	}
+	t.Fatal("sysusers.d/lodge.conf has no u lodge line")
+	return ""
+}
+
 // sources makes stand-in binaries and a shell bundle.
 func sources(t *testing.T, asset string) (bin, shell string) {
 	t.Helper()
@@ -160,6 +181,9 @@ func TestUnitRules(t *testing.T) {
 	}
 	if !strings.Contains("\n"+string(b), "\ng lodge -\n") {
 		t.Error("example.sysusers.conf lacks g lodge -")
+	}
+	if line := lodgeUserLine(t); !strings.Contains("\n"+string(b)+"\n", "\n"+line+"\n") {
+		t.Errorf("example.sysusers.conf lacks lodge's own user line, byte for byte: %q", line)
 	}
 	if strings.Contains(string(b), "\nm frostexample lodge\n") {
 		t.Error("the example user is a member of group lodge")

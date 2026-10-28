@@ -60,7 +60,7 @@ what `companion: true` does, and [the agent socket](#the-agent-socket).
 | the shell's bundle | `/usr/share/lodge/shell/` | root; directories 0755, files 0644 |
 | the daemons' binaries | `/usr/bin/` | root, 0755 |
 | the units | `/usr/lib/systemd/system/` | root, 0644 |
-| an app's sysusers.d entry | `/usr/lib/sysusers.d/<user>.conf`, with `g lodge -` | root, 0644 |
+| an app's sysusers.d entry | `/usr/lib/sysusers.d/<user>.conf`, with `g lodge -` and user `lodge`'s line, identical to the one in lodge's own `packaging/sysusers.d/lodge.conf` | root, 0644 |
 | lodge's example configuration | `/usr/share/lodge/config.example.json` | root, 0644 |
 | lodge's configuration | `/etc/lodge/config.json` | the administrator's, 0644; no secrets |
 | lodge's state | `/var/lib/lodge/` | `lodge`, 0700: tsnet state, allow-lists, tokens, provider credentials |
@@ -72,7 +72,13 @@ what `companion: true` does, and [the agent socket](#the-agent-socket).
   `lodge`. An app that is also an agent on lodge's host, such
   as Porter, is in group `lodge-agents` too ([below](#the-agent-socket)).
   Each app's `sysusers.d` entry also declares group `lodge` (`g lodge -`),
-  so that its socket starts without lodge's own sysext.
+  so that its socket starts without lodge's own sysext. It declares user
+  `lodge` too, with a line identical to lodge's own
+  [`packaging/sysusers.d/lodge.conf`](../../packaging/sysusers.d/lodge.conf),
+  because the kit's `lodgeapp.LoadEnv` looks user `lodge` up, so that the
+  daemon starts without lodge's sysext as well. If two files declare the
+  same user with different lines, `systemd-sysusers` warns and keeps only
+  the first, so the app's line and lodge's change together.
 - **An install writes only `/usr`.** The configuration under `/etc` belongs
   to the administrator, and state is under `/var/lib`
   ([core ADR-0058](https://github.com/frostyard/core/blob/main/docs/adr/0058-ship-suite-desktop-apps-as-flatpaks-and-services-as-sysexts.md)).
