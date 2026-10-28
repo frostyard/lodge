@@ -437,3 +437,45 @@ func TestNotifyRefusesAnOversizedNotification(t *testing.T) {
 		t.Errorf("Notify = %v, want refused", err)
 	}
 }
+
+// writeThenWait is a client's end of a pipe whose Write returns only after
+// the client has seen its connection end, so that Call finds both its reply
+// and Done ready when it starts to wait.
+type writeThenWait struct {
+	net.Conn
+	done <-chan struct{}
+}
+
+func (w *writeThenWait) Write(p []byte) (int, error) {
+	n, err := w.Conn.Write(p)
+	<-w.done
+	return n, err
+}
+
+// A reply that arrives just before the server closes the connection, as
+// a shutdown method's does, reaches the caller: Call never picks the
+// closed connection over a reply that is already there.
+func TestAReplyBeforeTheCloseReachesTheCall(t *testing.T) {
+	for range 64 {
+		cn, sn := net.Pipe()
+		w := &writeThenWait{Conn: cn}
+		c := jsonrpc.NewClient[code](w)
+		w.done = c.Done()
+		go func() {
+			defer func() { _ = sn.Close() }()
+			sc := bufio.NewScanner(sn)
+			if sc.Scan() {
+				_, _ = sn.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"text":"bye"}}` + "\n"))
+			}
+		}()
+		var got struct {
+			Text string `json:"text"`
+		}
+		if err := c.Call(t.Context(), "shutdown", nil, &got); err != nil {
+			t.Fatalf("a reply before the close: %v", err)
+		}
+		if got.Text != "bye" {
+			t.Fatalf("result = %+v", got)
+		}
+	}
+}
