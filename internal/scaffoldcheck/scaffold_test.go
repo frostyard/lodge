@@ -55,6 +55,20 @@ func read(t *testing.T, path string) string {
 
 var placeholder = regexp.MustCompile(`__(ID|NAME|USER|KEY|MODULE|LODGE_REF)__`)
 
+// lodgeUserLine is the `u lodge ` line of lodge's own sysusers.d/lodge.conf,
+// which every app's entry repeats byte for byte (app-contract.md, Install
+// layout).
+func lodgeUserLine(t *testing.T) string {
+	t.Helper()
+	for _, l := range strings.Split(read(t, filepath.Join(root, "packaging", "sysusers.d", "lodge.conf")), "\n") {
+		if strings.HasPrefix(l, "u lodge ") {
+			return l
+		}
+	}
+	t.Fatal("packaging/sysusers.d/lodge.conf has no u lodge line")
+	return ""
+}
+
 // The scaffold renders an app that builds on the kit and passes the
 // contract's socket rules: the rendered app's own tests run
 // kittest.CheckRules against its daemon.
@@ -127,6 +141,15 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 					t.Errorf("%s lacks %s", path, w)
 				}
 			}
+		}
+		// The rendered entry declares user lodge with lodge's own line,
+		// byte for byte: the daemon's lodgeapp.LoadEnv looks it up, and two
+		// different lines for one user make systemd-sysusers warn and keep
+		// only the first (app-contract.md, Install layout).
+		line := lodgeUserLine(t)
+		sysusers := read(t, filepath.Join(app, "packaging/lodge/sysusers.d-frosttasks.conf"))
+		if !strings.Contains("\n"+sysusers+"\n", "\n"+line+"\n") {
+			t.Errorf("sysusers.d-frosttasks.conf lacks lodge's own user line, byte for byte: %q", line)
 		}
 	})
 
