@@ -124,8 +124,19 @@ tarball, a rebuild of the earlier commit, or the rollback archive.
    sudo tar -xzpf ARCHIVE -C / var/lib/lodge
    ```
 
-   Start lodge again. The restore loses the tokens, the allow-list changes and the provider
-   sign-ins that were made after the archive.
+   Start lodge again. The restore loses the tokens, the allow-list changes, and
+   the provider keys and sign-ins that were made after the archive.
+
+   A `codex` sign-in from before the archive can also fail. Refresh tokens
+   rotate, and lodge saves the new tokens at each refresh. If lodge refreshed
+   the sign-in after the archive, the server refuses the restored refresh
+   token, and lodge signs the provider out. `sudo lodgectl status` then shows
+   the provider unavailable, "signed out (CODE)". To sign in again, run the
+   `lodgectl provider login NAME --client-id ID` command that the status gives
+   on a computer with a browser, without `sudo`. Copy the login file to lodge's
+   host. Run `sudo lodgectl provider import NAME < FILE`. Delete the file on
+   both computers. See
+   [The codex provider](../docs/specs/inference.md#the-codex-provider).
 5. Check as in Update.
 
 ## Release
@@ -155,23 +166,57 @@ Verify a download:
 gh attestation verify frostyard-lodge_X.Y.Z_amd64.deb --repo frostyard/lodge
 ```
 
-Snosi picks the `.deb` up later
-([core Plan 0010](https://github.com/frostyard/core/blob/main/docs/plans/0010-suite-packaging.md),
-Phase 3).
+Snosi pins each release's `.deb` in a reviewed checksum PR, then builds and
+publishes the sysext `lodge`
+([snosi#1173](https://github.com/frostyard/snosi/pull/1173)). See
+[After the sysexts](#after-the-sysexts).
 
 ## After the sysexts
 
-This is planned and not built. In core's
+The sysexts are built and published.
+[snosi#1169](https://github.com/frostyard/snosi/pull/1169) added the first two
+suite sysexts (notesd, maild).
+[snosi#1173](https://github.com/frostyard/snosi/pull/1173) added lodge, readd
+and porterd. [snosi#1175](https://github.com/frostyard/snosi/pull/1175) pinned
+readd 0.2.0 and porterd 0.1.1; lodge stays 0.1.0. Updex downloads the sysext
+`lodge` from `https://repository.frostyard.org/ext/lodge/` and checks its
+signature. It is for Snosi bootc images (Floe). lodge's host today stays
+hand-installed (core
 [Plan 0010](https://github.com/frostyard/core/blob/main/docs/plans/0010-suite-packaging.md),
-Phase 3, lodge ships as the sysext `lodge` for Snosi images (Floe). It does
-not ship for this Debian host, which stays hand-installed (Phase 4 is
-deferred, 2026-10-23).
+Phase 4 is deferred, 2026-10-23), so the steps above stay valid for it. The
+full steps for an image are on the
+[site page](https://frostyard.org/docs/sysexts/lodge/). In short:
 
-On a Snosi image, the planned commands are:
+1. Back up the state. The unit is upheld (`Upholds=`), so a plain
+   `systemctl stop` does not hold: mask it. Keep the archive root-only:
 
-- update: `sudo updex features update --component=lodge`, then reboot;
-- roll back: `sudo updex features rollback lodge`, which takes effect at the
-  next boot.
+   ```sh
+   sudo systemctl mask --now lodge.service
+   sudo sh -c 'umask 077; tar -czpf /root/lodge-state-$(date -u +%Y%m%dT%H%MZ).tar.gz /var/lib/lodge'
+   sudo systemctl unmask lodge.service
+   sudo systemctl start lodge.service
+   ```
 
-A sysext rollback does not undo a database migration. Keep a backup of
-`/var/lib/lodge`.
+2. Update: `sudo updex features update --component=lodge`. This is a live
+   refresh. With Updex v2.1.3 and later
+   ([ADR-0019](https://github.com/frostyard/updex/blob/main/docs/adr/0019-apply-merged-sysusers-and-tmpfiles-on-a-live-refresh.md)),
+   the new files merge at once, `systemd-sysusers` and
+   `systemd-tmpfiles --create` run, and systemd reloads its unit files. Updex
+   does not restart units, so the running lodge keeps its old binary. No reboot
+   is necessary.
+   - Only `--no-refresh`, the automatic update timer, or output that says
+     `refresh skipped` wait for the next boot. Then reboot.
+   - With an Updex older than v2.1.3 (`updex --version`), first run
+     `sudo systemd-sysusers`, `sudo systemd-tmpfiles --create` and
+     `sudo systemctl daemon-reload`, or reboot.
+3. Restart: `sudo systemctl restart lodge.service`. Check that
+   `journalctl -u lodge.service` shows `lodge starting` with the new
+   `version`, and run `sudo lodgectl status`.
+4. Roll back: `sudo updex features rollback lodge` takes effect at the next
+   boot. Add `--now` to apply it at once, then restart lodge.
+
+A rollback does not undo a database migration. If the journal shows
+`the database is at version N, newer than this lodge's M`, mask lodge and
+restore `/var/lib/lodge` from the backup as in
+[Roll back](#roll-back) step 4, then unmask and start it. That step says what a
+restore loses. The state is not in the sysext.
