@@ -23,7 +23,7 @@ Apps build on the Go kit (`kit/`) and the frontend library
 is [docs/specs/app-contract.md](docs/specs/app-contract.md).
 
 Pre-release. The design documents date from 2026-10-18 to 2026-10-20 and are accepted.
-The kit, the client and the UI package are tagged up to `kit/v0.3.0`,
+The kit, the client and the UI package are tagged up to `kit/v0.3.1`,
 `client/v0.3.2` and `ui/v0.6.0`, and lodge v1 and its inference layer are
 built. Notes and Mail run behind it; Read, the reader in
 [frostyard/frostread](https://github.com/frostyard/frostread), is built and
