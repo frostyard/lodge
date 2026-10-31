@@ -211,7 +211,11 @@ them rather than improvising, whichever agent you are:
   the 4 series below. A due release goes to Brian as an ask.
 - **4 tag series.** svu reads only lodge's own `vX.Y.Z` (`.svu.yml`:
   `tag.pattern: "v[0-9]*"`, prefix `v`, `v0: true`). The libraries have
-  their own series, which no tool and no workflow reads:
+  their own series, and no workflow publishes them. The Makefile's
+  `VERSION` (`git describe --tags`, for `make build` and `make dist`)
+  takes the nearest tag of any series, so a development build can say
+  `kit/v0.3.1-5-g<commit>`; the release `.deb` takes its version from the
+  `vX.Y.Z` tag (`DEB_VERSION`). The series:
 
   | Series | What | Latest |
   | --- | --- | --- |
@@ -256,8 +260,9 @@ them rather than improvising, whichever agent you are:
   pnpm git dependencies (all at `client/v0.3.2` and `ui/v0.6.0`):
   frostnotes and frostmail in `app/package.json`, frostread and Porter in
   `web/package.json`, for example
-  `github:frostyard/lodge#ui/v0.6.0&path:ui`. Apps pin a published tag,
-  never a local path
+  `github:frostyard/lodge#ui/v0.6.0&path:ui`. Today every app pins a tag.
+  The contract lets an app pin a published commit or release, never a
+  local path
   ([app contract, Versioning](docs/specs/app-contract.md#versioning)).
   After a library tag, bump each app that needs it in a PR of its own, by
   that app's AGENTS.md. Snosi uses lodge's `.deb`.
