@@ -25,7 +25,8 @@ the canonical paths; keep content tool-agnostic.
 
 Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
 2026-10-21. Phases 1 to 3 and 6 are built:
-- the kit and the client, tagged up to `kit/v0.3.0` (with `netguard`) and
+- the kit and the client, tagged up to `kit/v0.3.1` (`netguard` since
+  `kit/v0.3.0`) and
   `client/v0.3.2` (with the `rpc` subpath since `client/v0.3.0`);
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
@@ -203,6 +204,63 @@ them rather than improvising, whichever agent you are:
   (frostyard/core ADR-0023). Workflow actions are pinned to full commit
   SHAs, with `permissions: {}` at the top (ADR-0021, checked by
   `internal/workflowcheck`).
+
+## Releases and dependencies
+
+- **Who tags: Brian.** Agents never tag, push tags or release, in any of
+  the 4 series below. A due release goes to Brian as an ask.
+- **4 tag series.** svu reads only lodge's own `vX.Y.Z` (`.svu.yml`:
+  `tag.pattern: "v[0-9]*"`, prefix `v`, `v0: true`). The libraries have
+  their own series, which no tool and no workflow reads:
+
+  | Series | What | Latest |
+  | --- | --- | --- |
+  | `vX.Y.Z` | lodge itself: the daemon, `lodgectl` and the shell, as a `.deb` | `v0.1.0` (2026-10-26) |
+  | `kit/vX.Y.Z` | the Go module `github.com/frostyard/lodge/kit` (`kit/`) | `kit/v0.3.1` (2026-10-28) |
+  | `client/vX.Y.Z` | `@frostyard/lodge-client` (`client/`) | `client/v0.3.2` (2026-10-22) |
+  | `ui/vX.Y.Z` | `@frostyard/lodge-ui` (`ui/`) | `ui/v0.6.0` (2026-10-22) |
+
+- **lodge's release.** `make bump` is the only way to push a `vX.Y.Z` tag.
+  It runs on `main` when the tree is clean and equal to `origin/main`,
+  runs `make check`, takes the version from `svu next` (Conventional
+  Commits; on v0, a breaking change gives a minor), and pushes an annotated
+  tag. svu is pinned in `mise.toml`. The tag push runs
+  `.github/workflows/release.yml`: it refuses a tag that is not
+  `vMAJOR.MINOR.PATCH`, builds the shell (`make shell-build`) and
+  `frostyard-lodge_X.Y.Z_amd64.deb` (`make deb`, nFPM, then `make
+  deb-check`), attests it, and makes the GitHub release with generated
+  notes. CI builds a snapshot `.deb` on every pull request (job `deb`).
+  Snosi pins each release's `.deb` in a reviewed checksum PR and publishes
+  the sysext `lodge` ([packaging/README.md](packaging/README.md#after-the-sysexts));
+  that delivery is Lucilla's.
+- **A library's release is its tag.** There is no registry, no workflow
+  and no GitHub release
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)). Brian
+  tags the merge commit on `main` by hand with an annotated tag, for
+  example `kit/v0.3.1`. Each series follows semver, picked by hand from
+  what changed in its folder
+  (`git log --no-merges kit/v0.3.1..origin/main -- kit/`). The PR before
+  the tag adds the version to [client/CHANGELOG.md](client/CHANGELOG.md)
+  or [ui/CHANGELOG.md](ui/CHANGELOG.md); the UI package's semver rules are
+  [rule 7 of its spec](docs/specs/ui-package.md#rules). The kit has no
+  changelog: its tag message says what changed.
+- **Internal dependencies.** None outside this repository. `go.mod`
+  requires `github.com/frostyard/lodge/kit` with `replace => ./kit`, and
+  `shell/package.json` links `../client` and `../ui`, so lodge always
+  builds on its own tree. `kit/go.mod` requires no frostyard module.
+  There is no Dependabot configuration: tools are pinned in `mise.toml` and
+  `mise.lock`, actions to commit SHAs, and Node in each workflow's
+  `NODE_VERSION`.
+- **Who uses it.** frostnotes, frostmail, frostread and Porter pin the
+  kit in `go.mod` (all at `v0.3.1`), and the client and the UI package as
+  pnpm git dependencies (all at `client/v0.3.2` and `ui/v0.6.0`):
+  frostnotes and frostmail in `app/package.json`, frostread and Porter in
+  `web/package.json`, for example
+  `github:frostyard/lodge#ui/v0.6.0&path:ui`. Apps pin a published tag,
+  never a local path
+  ([app contract, Versioning](docs/specs/app-contract.md#versioning)).
+  After a library tag, bump each app that needs it in a PR of its own, by
+  that app's AGENTS.md. Snosi uses lodge's `.deb`.
 
 ## Repository boundary
 
