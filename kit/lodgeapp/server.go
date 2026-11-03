@@ -32,6 +32,11 @@ type Health struct {
 	Protocol int `json:"protocol,omitzero"`
 	// Reason says why the app is not OK.
 	Reason string `json:"reason,omitzero"`
+	// Badge is the count of things the user has not seen, such as unread
+	// messages. 0 is no badge. It is the app's count, never a caller's:
+	// /health carries no identity, and lodge shows the one count to every
+	// session (ADR-0020).
+	Badge int `json:"badge,omitzero"`
 }
 
 // Server serves an app's socket: every route of app-contract.md, each

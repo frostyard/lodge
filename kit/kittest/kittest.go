@@ -184,7 +184,8 @@ func (l *Lodge) Request(t testing.TB, method, path string, c lodgeapp.Caller) (i
 	return resp.StatusCode, string(body)
 }
 
-// Health polls GET /health as lodge does, with no caller.
+// Health polls GET /health as lodge does, with no caller. It refuses a
+// negative badge, which the contract forbids (ADR-0020).
 func (l *Lodge) Health(ctx context.Context) (lodgeapp.Health, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/health", nil)
 	if err != nil {
@@ -204,6 +205,9 @@ func (l *Lodge) Health(ctx context.Context) (lodgeapp.Health, error) {
 	var h lodgeapp.Health
 	if err := json.UnmarshalRead(resp.Body, &h); err != nil {
 		return lodgeapp.Health{}, fmt.Errorf("GET /health: %w", err)
+	}
+	if h.Badge < 0 {
+		return lodgeapp.Health{}, fmt.Errorf("GET /health: badge %d is negative", h.Badge)
 	}
 	return h, nil
 }

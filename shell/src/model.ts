@@ -14,6 +14,8 @@ export interface RailApp {
   companion: boolean;
   state: AppState;
   reason: string;
+  /** The count of things the user has not seen: 0 for none, 99999 at most. */
+  badge: number;
 }
 
 /** GET /lodge/apps. */
@@ -26,6 +28,8 @@ export interface Rail {
 const STATES = new Set<string>(["up", "degraded", "down", "disabled"]);
 const ID = /^[a-z][a-z0-9]{0,15}$/;
 const RESERVED = new Set(["app", "device", "lodge", "mcp"]);
+/** MAX_BADGE is the largest count lodge sends (ADR-0020). */
+const MAX_BADGE = 99999;
 
 /** validApp reports whether id may name an app. */
 export function validApp(id: string): boolean {
@@ -46,6 +50,9 @@ export function parseRail(data: unknown): Rail | null {
     const id = str(r.id);
     if (!validApp(id) || apps.some((x) => x.id === id)) continue;
     const icon = str(r.icon);
+    const state = STATES.has(str(r.state)) ? (str(r.state) as AppState) : "down";
+    const n = r.badge;
+    const badge = typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? Math.min(n, MAX_BADGE) : 0;
     apps.push({
       id,
       name: str(r.name) || id,
@@ -54,11 +61,25 @@ export function parseRail(data: unknown): Rail | null {
       key: /^[a-z]$/.test(str(r.key)) ? str(r.key) : "",
       content: r.content === true,
       companion: r.companion === true,
-      state: STATES.has(str(r.state)) ? (str(r.state) as AppState) : "down",
+      state,
       reason: str(r.reason),
+      // Only an app that is up shows a count: a degraded, down or disabled
+      // app shows its state mark instead (shell.md, Badges).
+      badge: state === "up" ? badge : 0,
     });
   }
   return { contract: d.contract, contentOrigin: str(d.contentOrigin), apps };
+}
+
+/** badgeText is a count as a badge shows it: "" for none, 99+ above 99. */
+export function badgeText(n: number): string {
+  if (n <= 0) return "";
+  return n > 99 ? "99+" : String(n);
+}
+
+/** badgeTotal is the apps' counts added up, without the app whose id is except. */
+export function badgeTotal(apps: readonly RailApp[], except: string | null = null): number {
+  return apps.reduce((sum, a) => (a.id === except ? sum : sum + a.badge), 0);
 }
 
 /** canonical is an app's canonical URL: /<id>, then the route unless it is "/". */

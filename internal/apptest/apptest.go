@@ -103,8 +103,14 @@ func Serve(t testing.TB, root, id string, h http.Handler) {
 
 // Healthy answers /health as an app that is up.
 func Healthy(version string) http.HandlerFunc {
+	return Health(`{"ok":true,"version":"` + version + `","protocol":1}`)
+}
+
+// Health answers /health with body, a whole JSON answer, for an app whose
+// answer Healthy cannot make, such as one with a badge.
+func Health(body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"version":"` + version + `","protocol":1}`))
+		_, _ = w.Write([]byte(body))
 	}
 }

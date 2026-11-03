@@ -17,6 +17,8 @@ import {
   type Theme,
 } from "@frostyard/lodge-client/shell";
 import {
+  badgeText,
+  badgeTotal,
   canonical,
   filterApps,
   firstApp,
@@ -52,6 +54,18 @@ export interface Deps {
   readyTimeout?: number;
   /** The clock, in milliseconds: Date.now. */
   now?: () => number;
+  /**
+   * Sets the home-screen icon's count, when it differs from the last one set
+   * (shell.md, Badges). Absent, the Badging API is used where the browser has
+   * it.
+   */
+  appBadge?: (total: number) => void;
+}
+
+/** The Badging API, which TypeScript's Navigator type does not have. */
+interface BadgingNavigator {
+  setAppBadge?: (count: number) => Promise<void>;
+  clearAppBadge?: () => Promise<void>;
 }
 
 /** The companion's frame, created the first time it opens. */
@@ -118,6 +132,8 @@ export class LodgeShell {
   readonly #contexts = new Map<string, Context>();
   #pendingAsk: { app: string; prompt: string } | null = null;
   #lastAsk = Number.NEGATIVE_INFINITY;
+  /** The count the home-screen icon was last given, or null before the first read. */
+  #lastTotal: number | null = null;
   readonly #narrow: MediaQueryList | undefined;
 
   // The page's parts.
@@ -284,6 +300,28 @@ export class LodgeShell {
     for (const v of this.#views.values()) this.#drawNotice(v);
     if (!this.#switcher.hidden) this.#drawList();
     this.#applyCompanion();
+    // The home-screen icon shows every app's count, set only when it changes.
+    const total = badgeTotal(this.#apps);
+    if (total !== this.#lastTotal) {
+      this.#lastTotal = total;
+      this.#reportBadge(total);
+    }
+  }
+
+  /** reportBadge gives the home-screen icon its total, where it can show one. */
+  #reportBadge(total: number): void {
+    const dep = this.#deps.appBadge;
+    if (dep) {
+      dep(total);
+      return;
+    }
+    const nav = this.#win.navigator as unknown as BadgingNavigator;
+    try {
+      if (total > 0) nav.setAppBadge?.(total)?.catch(() => {});
+      else nav.clearAppBadge?.()?.catch(() => {});
+    } catch {
+      // The browser has no Badging API, or refused the call: it shows no count.
+    }
   }
 
   #setReachable(ok: boolean): void {
@@ -308,13 +346,21 @@ export class LodgeShell {
   #drawRail(): void {
     const d = this.#doc;
     const buttons = this.#apps.map((a) => {
+      const unread = this.#unread(a.badge);
       const b = h(
         d,
         "button",
-        { class: "app-button", type: "button", "data-app": a.id, title: this.#describe(a), "aria-label": a.name },
+        {
+          class: "app-button",
+          type: "button",
+          "data-app": a.id,
+          title: this.#describe(a) + unread,
+          "aria-label": a.name + unread,
+        },
         this.#icon(a),
         h(d, "span", { class: "mark", "data-state": a.state }),
       );
+      if (a.badge > 0) b.append(this.#badge(a.badge));
       if (a.id === this.#current) b.setAttribute("aria-current", "page");
       b.addEventListener("click", () => this.switchTo(a.id));
       return b;
@@ -327,14 +373,32 @@ export class LodgeShell {
     return a.state === "up" ? a.name : `${a.name} (${a.state}${a.reason ? `: ${a.reason}` : ""})`;
   }
 
+  /** badge is a count as the rail, the switcher and the bar draw it. */
+  #badge(n: number): HTMLElement {
+    return h(this.#doc, "span", { class: "badge", "aria-hidden": "true" }, badgeText(n));
+  }
+
+  /** unread is a count for an accessible name or a tooltip: ", 3 unread", or "". */
+  #unread(n: number): string {
+    return n > 0 ? `, ${n} unread` : "";
+  }
+
   #drawBar(): void {
     const a = this.#apps.find((x) => x.id === this.#current);
     const d = this.#doc;
+    // A tap on the bar opens the switcher, so its count leaves the current
+    // app out (shell.md, Badges).
+    const unread = a ? badgeTotal(this.#apps, a.id) : 0;
+    const label = a !== undefined && unread > 0 ? a.name + this.#unread(unread) : "Switch app";
+    this.#barApp.setAttribute("aria-label", label);
+    if (unread > 0) this.#barApp.setAttribute("title", label);
+    else this.#barApp.removeAttribute("title");
     this.#barApp.replaceChildren(
       ...(a
         ? [
             this.#icon(a),
             h(d, "span", { class: "bar-name" }, a.name),
+            ...(unread > 0 ? [this.#badge(unread)] : []),
             h(d, "span", { class: "mark", "data-state": a.state }),
           ]
         : [h(d, "span", { class: "bar-name" }, "Lodge")]),
@@ -822,18 +886,21 @@ export class LodgeShell {
       this.#selected = 0;
     }
     const items = this.#shown.map((a, i) => {
+      const attrs: Record<string, string> = {
+        class: "switcher-item",
+        role: "option",
+        "data-app": a.id,
+        "aria-selected": String(i === this.#selected),
+      };
+      if (a.badge > 0) attrs["aria-label"] = a.name + this.#unread(a.badge);
       const li = h(
         d,
         "li",
-        {
-          class: "switcher-item",
-          role: "option",
-          "data-app": a.id,
-          "aria-selected": String(i === this.#selected),
-        },
+        attrs,
         this.#icon(a),
         h(d, "span", { class: "switcher-name" }, a.name),
         h(d, "span", { class: "mark", "data-state": a.state, title: a.state }),
+        ...(a.badge > 0 ? [this.#badge(a.badge)] : []),
         h(d, "kbd", { class: "switcher-key" }, a.key),
       );
       if (a.id === this.#current) li.setAttribute("data-current", "");

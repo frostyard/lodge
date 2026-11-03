@@ -173,11 +173,14 @@ first checks run before identity is known:
   { "contract": 1, "contentOrigin": "https://CONTENT",
     "apps": [ { "id": "notes", "name": "Notes", "icon": "/app/notes/icon.svg",
                 "key": "n", "content": true, "companion": false,
-                "state": "up", "reason": "" } ] }
+                "state": "up", "reason": "", "badge": 0 } ] }
   ```
 
   `state` is `up`, `degraded`, `down` or `disabled`, and `reason` says why
-  when it is not `up`.
+  when it is not `up`. `badge` is the app's unread count from its last
+  `/health` answer, 0 when it is not `up` or set none
+  ([app-contract.md](app-contract.md#what-an-app-serves-on-its-socket),
+  [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)).
 
 ### Browser checks
 
@@ -637,7 +640,7 @@ repository.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
 - Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)

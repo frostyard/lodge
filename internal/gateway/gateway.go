@@ -283,6 +283,9 @@ type railApp struct {
 	Companion bool       `json:"companion"`
 	State     apps.State `json:"state"`
 	Reason    string     `json:"reason"`
+	// Badge is the app's unread count from its last /health answer, 0 when
+	// it is not up or set none (ADR-0020).
+	Badge int `json:"badge"`
 }
 
 type rail struct {
@@ -295,7 +298,7 @@ func (g *Gateway) appsList(w http.ResponseWriter, r *http.Request) {
 	out := rail{Contract: Contract, ContentOrigin: g.Names().ContentOrigin, Apps: []railApp{}}
 	for _, a := range g.cfg.Apps.List() {
 		ra := railApp{ID: a.ID, Name: cmp.Or(a.Manifest.Name, a.ID), Key: a.Key, Content: a.Manifest.Content,
-			Companion: a.Companion, State: a.State, Reason: a.Reason}
+			Companion: a.Companion, State: a.State, Reason: a.Reason, Badge: a.Badge}
 		if a.Enabled() {
 			ra.Icon = "/app/" + a.ID + "/" + a.Manifest.Icon
 		}
