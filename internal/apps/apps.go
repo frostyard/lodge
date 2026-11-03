@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -66,6 +67,10 @@ const (
 	PollTimeout = 2 * time.Second
 )
 
+// MaxBadge caps the unread count lodge keeps from an app's /health answer
+// (ADR-0020).
+const MaxBadge = 99999
+
 // App is one installed app as lodge sees it.
 type App struct {
 	ID       string   `json:"id"`
@@ -83,6 +88,10 @@ type App struct {
 	// Version and Protocol are the last healthy /health answer's.
 	Version  string `json:"version,omitempty"`
 	Protocol int    `json:"protocol,omitempty"`
+	// Badge is the count of things the user has not seen that the app's last
+	// /health answer gave, capped at MaxBadge; 0 when it has none or is not
+	// up (ADR-0020).
+	Badge int `json:"badge"`
 	// uid is the manifest user's, which must serve the app's socket; -1
 	// when the user does not exist.
 	uid int
@@ -272,7 +281,8 @@ func (r *Registry) Load() error {
 	defer r.mu.Unlock()
 	for id, a := range loaded {
 		if old, ok := r.apps[id]; ok && a.Enabled() && old.Enabled() {
-			a.State, a.Reason, a.Version, a.Protocol = old.State, old.Reason, old.Version, old.Protocol
+			a.State, a.Reason, a.Version, a.Protocol, a.Badge =
+				old.State, old.Reason, old.Version, old.Protocol, old.Badge
 			loaded[id] = a
 		}
 		if !a.Enabled() {
@@ -491,7 +501,9 @@ func (r *Registry) Poll(ctx context.Context) {
 				r.log.Warn("app disabled", "app", a.ID, "reason", h.Reason)
 			}
 			if h.State == Up {
-				cur.Version, cur.Protocol = h.Version, h.Protocol
+				cur.Version, cur.Protocol, cur.Badge = h.Version, h.Protocol, h.Badge
+			} else {
+				cur.Badge = 0
 			}
 			r.apps[a.ID] = cur
 		})
@@ -518,6 +530,81 @@ type healthAnswer struct {
 	Version  string `json:"version"`
 	Protocol int    `json:"protocol"`
 	Reason   string `json:"reason"`
+	// Badge is the raw JSON, so a value lodge cannot use never fails the
+	// decode; badge decides what it means (ADR-0020).
+	Badge jsontext.Value `json:"badge"`
+}
+
+// badge is the unread count in an app's /health answer: a whole number from
+// 0, capped at MaxBadge. Any other value, such as a string, a fraction or a
+// negative number, is 0, and never changes the app's state (ADR-0020). It
+// reads the JSON number's text, so no rounding turns a fraction into a
+// count.
+func badge(v jsontext.Value) int {
+	if v.Kind() != '0' { // not a number
+		return 0
+	}
+	s := string(v)
+	if strings.HasPrefix(s, "-") { // negative, and -0 is 0 anyway
+		return 0
+	}
+	mantissa, expText := s, ""
+	if i := strings.IndexAny(mantissa, "eE"); i >= 0 {
+		mantissa, expText = mantissa[:i], mantissa[i+1:]
+	}
+	intDigits, fracDigits, _ := strings.Cut(mantissa, ".")
+	exp, over := 0, 0
+	if expText != "" {
+		var err error
+		exp, err = strconv.Atoi(expText)
+		if err != nil {
+			if !errors.Is(err, strconv.ErrRange) {
+				return 0
+			}
+			// An exponent too big for an int: a positive one is far above
+			// MaxBadge, and a negative one is a fraction.
+			exp, over = 0, 1
+			if strings.HasPrefix(expText, "-") {
+				over = -1
+			}
+		}
+	}
+	// The body is at most 64 KiB, so an exponent beyond a million is far
+	// above MaxBadge, or a fraction, and the shift below cannot overflow.
+	switch {
+	case exp > 1_000_000:
+		exp, over = 0, 1
+	case exp < -1_000_000:
+		exp, over = 0, -1
+	}
+	// A count of only zeros is 0, whatever its exponent.
+	d := strings.TrimLeft(intDigits+fracDigits, "0")
+	if d == "" {
+		return 0
+	}
+	// The leading zeros are gone, so the trailing ones are the shifts the
+	// integer digits carry, which the exponent and the fraction adjust.
+	trailing := len(d) - len(strings.TrimRight(d, "0"))
+	d = strings.TrimRight(d, "0")
+	shift := exp - len(fracDigits) + trailing
+	// An exponent out of range decides alone: a few digits of fraction
+	// cannot undo a million places.
+	switch {
+	case over > 0: // far above MaxBadge
+		return MaxBadge
+	case over < 0 || shift < 0: // a fraction
+		return 0
+	case len(d)+shift > 5: // at least 100000
+		return MaxBadge
+	}
+	n := 0
+	for _, c := range d {
+		n = n*10 + int(c-'0')
+	}
+	for range shift {
+		n *= 10
+	}
+	return min(n, MaxBadge)
 }
 
 // health asks app id's /health, as lodge's poll: no Lodge-Caller.
@@ -544,7 +631,7 @@ func (r *Registry) health(ctx context.Context, id string) App {
 	}
 	switch {
 	case h.OK && resp.StatusCode == http.StatusOK:
-		return App{State: Up, Version: h.Version, Protocol: h.Protocol}
+		return App{State: Up, Version: h.Version, Protocol: h.Protocol, Badge: badge(h.Badge)}
 	case !h.OK:
 		return App{State: Degraded, Reason: cmp.Or(truncate(h.Reason, 200), "the app says it is not ready")}
 	default:

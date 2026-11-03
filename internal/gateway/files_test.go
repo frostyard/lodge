@@ -195,6 +195,29 @@ func TestAppsList(t *testing.T) {
 	}
 }
 
+// /lodge/apps carries each app's unread count: the one its health
+// reported, and 0 for an app that reports none (ADR-0020).
+func TestAppsListBadge(t *testing.T) {
+	h := newHarness(t)
+	h.notes.setBadge(3)
+	h.apps.Poll(t.Context())
+	var got rail
+	if err := json.Unmarshal([]byte(h.get("/lodge/apps", nil).body), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"notes": 3, "mail": 0, "plain": 0, "off": 0}
+	for _, x := range got.Apps {
+		n, ok := want[x.ID]
+		if !ok {
+			t.Errorf("unexpected app %s", x.ID)
+			continue
+		}
+		if x.Badge != n {
+			t.Errorf("%s's badge = %d, want %d", x.ID, x.Badge, n)
+		}
+	}
+}
+
 // /lodge/apps marks the companion: the one app whose manifest asks to be,
 // and none when two do (ADR-0013).
 func TestAppsListCompanion(t *testing.T) {

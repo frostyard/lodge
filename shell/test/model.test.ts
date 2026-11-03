@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  badgeText,
+  badgeTotal,
   canonical,
   filterApps,
   firstApp,
@@ -19,6 +21,7 @@ const app = (id: string, name: string, extra: Partial<RailApp> = {}): RailApp =>
   companion: false,
   state: "up",
   reason: "",
+  badge: 0,
   ...extra,
 });
 
@@ -64,9 +67,53 @@ describe("the rail's data", () => {
       ],
     });
     expect(r?.apps.map((a) => a.id)).toEqual(["notes", "evil"]);
-    expect(r?.apps[1]).toMatchObject({ icon: "", key: "", state: "down" });
+    expect(r?.apps[1]).toMatchObject({ icon: "", key: "", state: "down", badge: 0 });
     expect(parseRail(null)).toBeNull();
     expect(parseRail({ apps: [] })).toBeNull();
+  });
+
+  it("reads a count only from an app that is up", () => {
+    const r = parseRail({
+      contract: 1,
+      contentOrigin: "",
+      apps: [
+        { id: "mail", state: "up", badge: 3 },
+        { id: "notes", state: "down", badge: 4 },
+        { id: "tasks", state: "up", badge: "3" },
+        { id: "read", state: "up", badge: 2.5 },
+        { id: "chat", state: "up", badge: -1 },
+        { id: "wiki", state: "up", badge: 100000 },
+        { id: "cal", state: "up" },
+        { id: "maps", state: "up", badge: null },
+      ],
+    });
+    expect(r?.apps.map((a) => a.badge)).toEqual([3, 0, 0, 0, 0, 99999, 0, 0]);
+  });
+});
+
+describe("badges", () => {
+  it("writes a count in full to 99, and 99+ above", () => {
+    expect(badgeText(0)).toBe("");
+    expect(badgeText(-1)).toBe("");
+    expect(badgeText(1)).toBe("1");
+    expect(badgeText(3)).toBe("3");
+    expect(badgeText(99)).toBe("99");
+    expect(badgeText(100)).toBe("99+");
+    expect(badgeText(120)).toBe("99+");
+    expect(badgeText(99999)).toBe("99+");
+  });
+
+  it("adds up the counts, without the app whose id it is given", () => {
+    const apps = [
+      app("mail", "Mail", { badge: 1 }),
+      app("notes", "Notes", { badge: 2 }),
+      app("read", "Read", { badge: 3 }),
+    ];
+    expect(badgeTotal(apps)).toBe(6);
+    expect(badgeTotal(apps, null)).toBe(6);
+    expect(badgeTotal(apps, "notes")).toBe(4);
+    expect(badgeTotal(apps, "nosuchapp")).toBe(6);
+    expect(badgeTotal([])).toBe(0);
   });
 });
 

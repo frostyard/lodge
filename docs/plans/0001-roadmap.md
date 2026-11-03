@@ -388,7 +388,12 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 - One aggregated `/mcp` for clients that want a single connector.
 - claude.ai and the Claude apps, which need a public endpoint and OAuth 2.1.
   This is ruled out while lodge stays on the tailnet.
-- Badges in the rail, such as unread mail.
+- Badges in the rail, such as unread mail. Proposed on 2026-11-02 in
+  [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md):
+  lodge's side (the `/health` member, the rail's field, the shell's badges
+  and the home-screen count) is built with it; each app sets its count in
+  a PR of its own, after a kit tag
+  ([shell.md](../specs/shell.md#badges)).
 - Settings in the shell (sessions, tokens), over a WebSocket of lodge's own.
 - The inference layer in a process of its own, behind the same socket.
 - **frostread, the third app.** [frostyard/frostread](https://github.com/frostyard/frostread)

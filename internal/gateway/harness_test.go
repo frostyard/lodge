@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,8 +75,17 @@ type seen struct {
 type fakeApp struct {
 	mu   sync.Mutex
 	reqs []seen
+	// badge is the unread count its /health answer reports.
+	badge int
 	// handle, when set, answers instead of the default.
 	handle func(w http.ResponseWriter, r *http.Request) bool
+}
+
+// setBadge makes the app report n as its unread count.
+func (a *fakeApp) setBadge(n int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.badge = n
 }
 
 func (a *fakeApp) last(t *testing.T) seen {
@@ -96,7 +106,14 @@ func (a *fakeApp) count() int {
 
 func (a *fakeApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
-		apptest.Healthy("1.0")(w, r)
+		a.mu.Lock()
+		badge := a.badge
+		a.mu.Unlock()
+		if badge == 0 {
+			apptest.Healthy("1.0")(w, r)
+			return
+		}
+		apptest.Health(`{"ok":true,"version":"1.0","protocol":1,"badge":`+strconv.Itoa(badge)+`}`)(w, r)
 		return
 	}
 	a.mu.Lock()

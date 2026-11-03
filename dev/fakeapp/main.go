@@ -53,6 +53,7 @@ func run() error {
 	flag.BoolVar(&m.MCP, "mcp", true, "serve /mcp")
 	flag.BoolVar(&m.Device, "device", true, "serve /device/")
 	flag.BoolVar(&m.Companion, "companion", false, "ask to be the companion, beside the current app")
+	badge := flag.Int("badge", 0, "the unread count its /health answer reports")
 	installOnly := flag.Bool("install", false, "install the manifest and bundle, then exit")
 	serveOnly := flag.Bool("serve-only", false, "serve the socket without installing (the bundle is root's)")
 	flag.Parse()
@@ -83,7 +84,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Info("serving", "socket", env.SocketPath(m.ID))
-	return server(m, log).Serve(ctx, ln)
+	return server(m, *badge, log).Serve(ctx, ln)
 }
 
 // install writes app.json and the bundle under the root's apps directory.
@@ -123,10 +124,10 @@ func whoami(w http.ResponseWriter, r *http.Request) {
 		"node": c.NodeName, "token": c.Token, "scope": c.Scope, "path": r.URL.Path})
 }
 
-func server(m manifest.Manifest, log *slog.Logger) *lodgeapp.Server {
+func server(m manifest.Manifest, badge int, log *slog.Logger) *lodgeapp.Server {
 	return &lodgeapp.Server{
 		Health: func(context.Context) lodgeapp.Health {
-			return lodgeapp.Health{OK: true, Version: m.Version, Protocol: 1}
+			return lodgeapp.Health{OK: true, Version: m.Version, Protocol: 1, Badge: badge}
 		},
 		// API answers every JSON-RPC request with who called and what.
 		API: func(ctx context.Context, nc net.Conn, c lodgeapp.Caller) {

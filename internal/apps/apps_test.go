@@ -212,6 +212,61 @@ func TestPoll(t *testing.T) {
 	}
 }
 
+func TestPollBadge(t *testing.T) {
+	root := t.TempDir()
+	ids := []string{"counted", "text", "fraction", "gone"}
+	for _, id := range ids {
+		apptest.Install(t, root, id, nil, nil)
+	}
+	var mu sync.Mutex
+	bodies := map[string]string{
+		"counted":  `{"ok":true,"version":"1.0","protocol":1,"badge":3}`,
+		"text":     `{"ok":true,"version":"1.0","protocol":1,"badge":"3"}`,
+		"fraction": `{"ok":true,"version":"1.0","protocol":1,"badge":2.5}`,
+		"gone":     `{"ok":true,"version":"1.0","protocol":1,"badge":3}`,
+	}
+	for _, id := range ids {
+		apptest.Serve(t, root, id, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			body := bodies[id]
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+	r := load(t, root)
+	r.Poll(t.Context())
+	for id, want := range map[string]struct {
+		state apps.State
+		badge int
+	}{
+		"counted":  {apps.Up, 3},
+		"text":     {apps.Up, 0},
+		"fraction": {apps.Up, 0},
+		"gone":     {apps.Up, 3},
+	} {
+		a, _ := r.Get(id)
+		if a.State != want.state || a.Badge != want.badge {
+			t.Errorf("%s is %s with badge %d, want %s with %d", id, a.State, a.Badge, want.state, want.badge)
+		}
+	}
+	// A reload keeps an app's count, as it keeps its state.
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := r.Get("counted"); a.State != apps.Up || a.Badge != 3 {
+		t.Errorf("after a reload counted is %s with badge %d", a.State, a.Badge)
+	}
+	// An app that is no longer up shows no count.
+	mu.Lock()
+	bodies["gone"] = `{"ok":false,"reason":"closing the vault"}`
+	mu.Unlock()
+	r.Poll(t.Context())
+	if a, _ := r.Get("gone"); a.State != apps.Degraded || a.Badge != 0 {
+		t.Errorf("gone is %s with badge %d, want degraded with 0", a.State, a.Badge)
+	}
+}
+
 func TestReloadAddsAndRemoves(t *testing.T) {
 	root := t.TempDir()
 	apptest.Install(t, root, "a", nil, nil)

@@ -1,8 +1,8 @@
 # Spec: the shell
 
 What lodge's shell page draws and does: the rail, the switcher and its
-shortcut, the frames, the address bar and history, app states, the theme,
-the safe area and the companion. Its consumers:
+shortcut, the frames, the address bar and history, app states, badges, the
+theme, the safe area and the companion. Its consumers:
 
 - `shell/`, which implements it;
 - every app, which learns from it what the shell around its frame does.
@@ -15,7 +15,9 @@ and the switcher),
 [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md) (the home
 screen),
 [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the
-companion). Where it fits:
+companion),
+[ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)
+(badges, Proposed). Where it fits:
 [design/overview.md](../design/overview.md#the-shell).
 
 **Status:** written on 2026-10-18 for the
@@ -25,6 +27,9 @@ provisional until it is tried on the user's phone.
 ([ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)),
 and built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
+[Badges](#badges) were added on 2026-11-02
+([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md),
+Proposed).
 
 ## Interface
 
@@ -79,6 +84,8 @@ resolve the light or dark value from the `data-theme` the shell sets
 | `--amber` | `--flag-2` | a degraded app's mark |
 | `--red` | `--flag-1` | a stopped app's mark |
 | `--grey` | `--text-tertiary` | a disabled app's mark |
+| `--badge` | `--badge-bg` | an app's count ([Badges](#badges)) |
+| `--badge-fg` | `--badge-text` | the count's figures |
 | `--panel` | `--bg-window` | the switcher, the menu, notices |
 | `--shadow` | `--popover-shadow` | the switcher and the menu |
 
@@ -170,6 +177,30 @@ resolve the light or dark value from the `data-theme` the shell sets
   `degraded`, red for `down`, grey for `disabled`.
 - When `/lodge/apps` fails, lodge itself is out of reach. The shell says so
   in the rail or the bar and keeps polling. Frames stay as they are.
+
+### Badges
+
+An app's `badge` in `/lodge/apps` is its count of things the user has not
+seen, such as unread mail
+([app-contract.md](app-contract.md#what-an-app-serves-on-its-socket),
+[ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)).
+The shell reads it with the states, so it is at most about 30 s old.
+
+- **Where it shows.** A count above 0 is drawn in the badge tokens:
+  - on the app's rail button, over the top right corner of its icon;
+  - in the app's row of the switcher, before its key;
+  - on the narrow bar, the sum of the counts of every app but the current
+    one, after the current app's name, since a tap on the bar opens the
+    switcher. The bar shows no count when that sum is 0.
+- **How it reads.** The count is written in full up to 99, and `99+`
+  above. The button's or the row's accessible name, and its tooltip, add
+  `, <n> unread` with the whole count, such as `Mail, 3 unread`.
+- **The home-screen icon** shows the sum of every app's count. After each
+  read of `/lodge/apps` whose sum differs from the last one the shell set,
+  it calls `navigator.setAppBadge(sum)`, or `navigator.clearAppBadge()`
+  when the sum is 0. It calls neither where the browser lacks them, and
+  ignores their failures. The first read always sets it, so a stale count
+  from the last visit is replaced.
 
 ### Theme
 
@@ -271,10 +302,12 @@ The messages are [lodge-client.md's](lodge-client.md#the-companion).
   nor with the switcher's. The same test lists it.
 - The companion frame never changes the address bar or history, and its
   messages never move the current app.
+- A badge never covers an app's state mark: a degraded, down or disabled
+  app has no count.
 
 ## References
 
-- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the companion)
+- Rationale: [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the companion), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed)
 - Context: [design/overview.md](../design/overview.md#the-shell)
 - Related: [lodge-client.md](lodge-client.md), [lodge-http.md](lodge-http.md#shell-routes), [app-contract.md](app-contract.md#public-urls)
-- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the companion in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the companion in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket); badges from the roadmap's [later ideas](../plans/0001-roadmap.md#later--ideas)

@@ -242,7 +242,13 @@ served for `/`, `/<id>` and `/<id>/<route>`.
   on Ctrl+\`.
 - It keeps one frame per opened app at `/app/<id>/<route>`, which stays
   loaded.
-- It reads `/lodge/apps` for the apps and their states.
+- It reads `/lodge/apps` for the apps, their states and their unread
+  counts. An app reports its count as `badge` in the `/health` answer lodge
+  already polls; the shell draws it on the rail, in the switcher and on the
+  narrow bar, and sets the home-screen icon's count with
+  `navigator.setAppBadge`
+  ([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md),
+  Proposed; [shell.md](../specs/shell.md#badges)).
 - It talks to frames only through lodge-client
   ([lodge-client.md](../specs/lodge-client.md)), keeps the address bar on
   canonical URLs, and owns history.
@@ -447,7 +453,7 @@ Apps pin all three to a published lodge commit or release.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md), [specs/inference.md](../specs/inference.md)
 - Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)
 - Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md); Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) and [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md)

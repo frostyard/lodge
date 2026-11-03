@@ -26,6 +26,8 @@
   --amber: var(--flag-2);
   --red: var(--flag-1);
   --grey: var(--text-tertiary);
+  --badge: var(--badge-bg);
+  --badge-fg: var(--badge-text);
   --panel: var(--bg-window);
   --shadow: var(--popover-shadow);
   /* --accent is the package's own name, so it needs no mapping here. */
@@ -173,6 +175,31 @@ button {
 
 .mark[data-state="disabled"] {
   background: var(--grey);
+}
+
+/* An app's unread count (shell.md, Badges): a pill in the badge tokens. */
+.badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--badge);
+  color: var(--badge-fg);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* On the rail the badge sits over the icon's top right corner, clear of the
+   state mark below it. */
+.app-button .badge {
+  position: absolute;
+  top: calc(50% - 15px);
+  right: calc(50% - 15px);
 }
 
 .lodge-state {

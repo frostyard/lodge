@@ -19,7 +19,8 @@ gateway), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpo
 (content), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md)
 (inference), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
 (the companion), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
-(the agent socket). Where it fits: [design/overview.md](../design/overview.md).
+(the agent socket), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)
+(the badge, Proposed). Where it fits: [design/overview.md](../design/overview.md).
 
 **Status:** contract major **1**, written on 2026-10-18. The app side binds
 when the kit lands (the [roadmap's](../plans/0001-roadmap.md) Phase 1), and
@@ -27,6 +28,9 @@ lodge's side when lodge v1 does (Phase 2). Two additions date from
 2026-10-19, built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket):
 what `companion: true` does, and [the agent socket](#the-agent-socket).
+On 2026-11-02, `/health`'s optional `badge` was added, additively
+([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md),
+Proposed).
 
 ## Interface
 
@@ -186,6 +190,16 @@ The socket speaks HTTP/1.1.
   the app's own API (notes' is its RPC major). An app that is starting or
   degraded answers `{"ok": false, "reason": "…"}`. lodge polls it every
   15 s, with a 2 s timeout, and shows the app as up, degraded or down.
+- **`badge`** is an optional member of an `ok` answer: a whole number from
+  0, the count of things the user has not seen, such as unread messages,
+  which the shell shows on the app's button
+  ([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)).
+  0, or no member, is no badge. The count is the app's, the same for every
+  caller: an app whose data differs by login MUST NOT set it. An app
+  SHOULD compute it cheaply, inside the poll's timeout. lodge reads it only
+  from an `ok` answer, ignores a value that is not a whole number from 0,
+  caps it at 99999, and never changes the app's state for it. The kit's
+  `lodgeapp.Health` carries it as `Badge`.
 - **`/api`.** The upgrade carries the session's headers. An app MUST NOT
   check `Origin` here, because lodge has. Each frame is one JSON-RPC
   message of at most 16 MiB, and MAY end with one newline, which is not
@@ -444,7 +458,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [lodge-http.md](lodge-http.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
 - Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)

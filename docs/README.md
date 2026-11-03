@@ -37,6 +37,7 @@ frostyard/core's
 - [0017 — The kit guards outbound fetches against inside addresses](adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)
 - [0018 — A UI package beside the client](adr/0018-a-ui-package-beside-the-client.md)
 - [0019 — The accent is frostyard's cold blue](adr/0019-the-accent-is-frostyards-cold-blue.md)
+- [0020 — Apps report an unread count for the rail in their health](adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (Proposed)
 
 ### Design
 

@@ -18,6 +18,7 @@ const rail = (): Rail => ({
       companion: false,
       state: "up",
       reason: "",
+      badge: 0,
     },
     {
       id: "notes",
@@ -28,6 +29,7 @@ const rail = (): Rail => ({
       companion: false,
       state: "up",
       reason: "",
+      badge: 0,
     },
     {
       id: "off",
@@ -38,6 +40,7 @@ const rail = (): Rail => ({
       companion: false,
       state: "disabled",
       reason: "contract 9 is not one this lodge speaks",
+      badge: 0,
     },
     {
       id: "plain",
@@ -48,6 +51,7 @@ const rail = (): Rail => ({
       companion: false,
       state: "up",
       reason: "",
+      badge: 0,
     },
   ],
 });
@@ -64,7 +68,15 @@ const withCompanion = (): Rail => {
     companion: true,
     state: "up",
     reason: "",
+    badge: 0,
   });
+  return r;
+};
+
+/** A rail whose apps report the counts it is given, and 0 otherwise. */
+const withBadges = (counts: Record<string, number>): Rail => {
+  const r = rail();
+  for (const a of r.apps) a.badge = counts[a.id] ?? 0;
   return r;
 };
 
@@ -112,6 +124,8 @@ async function setup(
     now?: () => number;
     /** Whether the window is under 600 pixels wide. */
     narrow?: boolean;
+    /** Sets the home-screen icon's count, instead of the Badging API. */
+    appBadge?: (total: number) => void;
   } = {},
 ): Promise<Setup> {
   history.replaceState(null, "", path);
@@ -137,6 +151,7 @@ async function setup(
     settings: new Settings(store),
     fetchRail,
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.appBadge ? { appBadge: opts.appBadge } : {}),
   });
   document.body.append(shell.root);
   // Each frame gets a fake window as soon as it is created.
@@ -705,5 +720,133 @@ describe("the companion", () => {
     s.shell.stop();
     s = await setup("/notes", { rail: withCompanion, store: { "lodge:companionShortcut": "Ctrl+KeyT" } });
     expect(s.shell.companionShortcut).toBe("Ctrl+Shift+Backquote");
+  });
+});
+
+describe("badges", () => {
+  const button = (id: string) => document.querySelector<HTMLButtonElement>(`.rail .app-button[data-app="${id}"]`);
+
+  /** badging puts the Badging API's two calls on the window, as it has them. */
+  const badging = (set: unknown, clear: unknown) => {
+    const nav = window.navigator as unknown as Record<string, unknown>;
+    Object.defineProperty(nav, "setAppBadge", { value: set, configurable: true });
+    Object.defineProperty(nav, "clearAppBadge", { value: clear, configurable: true });
+    cleanups.push(() => {
+      Reflect.deleteProperty(nav, "setAppBadge");
+      Reflect.deleteProperty(nav, "clearAppBadge");
+    });
+  };
+
+  it("shows a count on the rail button, and 99+ above 99", async () => {
+    await setup("/mail", { rail: () => withBadges({ mail: 3, notes: 120, off: 5 }) });
+    const mail = button("mail");
+    expect(mail?.querySelector(".badge")?.textContent).toBe("3");
+    expect(mail?.querySelector(".badge")?.getAttribute("aria-hidden")).toBe("true");
+    expect(mail?.getAttribute("aria-label")).toBe("Mail, 3 unread");
+    expect(mail?.getAttribute("title")).toBe("Mail, 3 unread");
+    expect(button("notes")?.querySelector(".badge")?.textContent).toBe("99+");
+    // An app with no count, or one that is not up, has no badge.
+    expect(button("plain")?.querySelector(".badge")).toBeNull();
+    expect(button("plain")?.getAttribute("aria-label")).toBe("Plain");
+    expect(button("off")?.querySelector(".badge")).toBeNull();
+  });
+
+  it("shows a count in the switcher's row, before its key, with its tooltip", async () => {
+    const s = await setup("/mail", { rail: () => withBadges({ mail: 3, notes: 120 }) });
+    s.shell.openSwitcher();
+    const row = document.querySelector<HTMLElement>('.switcher-item[data-app="mail"]');
+    expect(row?.querySelector(".badge")?.textContent).toBe("3");
+    expect(row?.getAttribute("aria-label")).toBe("Mail, 3 unread");
+    expect(row?.getAttribute("title")).toBe("Mail, 3 unread");
+    const classes: string[] = row ? [...row.children].map((c) => c.className) : [];
+    expect(classes.indexOf("badge")).toBeGreaterThan(-1);
+    expect(classes.indexOf("badge")).toBeLessThan(classes.indexOf("switcher-key"));
+    // Above 99 the row writes 99+, and names the whole count.
+    const notes = document.querySelector<HTMLElement>('.switcher-item[data-app="notes"]');
+    expect(notes?.querySelector(".badge")?.textContent).toBe("99+");
+    expect(notes?.getAttribute("aria-label")).toBe("Notes, 120 unread");
+    expect(notes?.getAttribute("title")).toBe("Notes, 120 unread");
+    expect(document.querySelector('.switcher-item[data-app="plain"] .badge')).toBeNull();
+  });
+
+  it("shows the other apps' counts on the narrow bar, and redraws on a switch", async () => {
+    let counts: Record<string, number> = { mail: 3, notes: 4, plain: 5 };
+    const s = await setup("/mail", { rail: () => withBadges(counts), narrow: true });
+    const bar = document.querySelector<HTMLElement>(".bar-app");
+    expect(bar?.querySelector(".badge")?.textContent).toBe("9");
+    expect(bar?.getAttribute("aria-label")).toBe("Mail, 9 unread");
+    expect(bar?.getAttribute("title")).toBe("Mail, 9 unread");
+    s.shell.switchTo("notes");
+    expect(bar?.querySelector(".badge")?.textContent).toBe("8");
+    expect(bar?.getAttribute("aria-label")).toBe("Notes, 8 unread");
+    counts = { notes: 4 };
+    await s.shell.poll();
+    expect(bar?.querySelector(".badge")).toBeNull();
+    expect(bar?.getAttribute("aria-label")).toBe("Switch app");
+    expect(bar?.hasAttribute("title")).toBe(false);
+  });
+
+  it("gives the home-screen icon the total, and only when it changes", async () => {
+    let counts: Record<string, number> = { mail: 3 };
+    const appBadge = vi.fn();
+    const s = await setup("/mail", { rail: () => withBadges(counts), appBadge });
+    expect(appBadge).toHaveBeenCalledTimes(1);
+    expect(appBadge).toHaveBeenLastCalledWith(3);
+    await s.shell.poll();
+    expect(appBadge).toHaveBeenCalledTimes(1);
+    counts = { mail: 0 };
+    await s.shell.poll();
+    expect(appBadge).toHaveBeenCalledTimes(2);
+    expect(appBadge).toHaveBeenLastCalledWith(0);
+    await s.shell.poll();
+    expect(appBadge).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives it nothing after a failed poll", async () => {
+    let fail = false;
+    const appBadge = vi.fn();
+    const s = await setup("/mail", {
+      rail: () => {
+        if (fail) throw new Error("offline");
+        return withBadges({ mail: 3 });
+      },
+      appBadge,
+    });
+    expect(appBadge).toHaveBeenCalledTimes(1);
+    fail = true;
+    await s.shell.poll();
+    expect(appBadge).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets the count with the Badging API when no dep is given", async () => {
+    const set = vi.fn((_n: number) => Promise.resolve());
+    const clear = vi.fn(() => Promise.resolve());
+    badging(set, clear);
+    let counts: Record<string, number> = { mail: 3 };
+    const s = await setup("/mail", { rail: () => withBadges(counts) });
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenLastCalledWith(3);
+    counts = { mail: 0 };
+    await s.shell.poll();
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no home-screen count where the API is absent or refuses", async () => {
+    badging(undefined, undefined);
+    let counts: Record<string, number> = { mail: 3 };
+    const s = await setup("/mail", { rail: () => withBadges(counts) });
+    await expect(s.shell.poll()).resolves.toBeUndefined();
+    // A rejected promise, and a call that throws, are both ignored.
+    badging(
+      () => Promise.reject(new Error("refused")),
+      () => {
+        throw new Error("refused");
+      },
+    );
+    counts = { mail: 4 };
+    await expect(s.shell.poll()).resolves.toBeUndefined();
+    counts = { mail: 0 };
+    await expect(s.shell.poll()).resolves.toBeUndefined();
   });
 });
