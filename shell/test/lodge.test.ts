@@ -751,15 +751,21 @@ describe("badges", () => {
     expect(button("off")?.querySelector(".badge")).toBeNull();
   });
 
-  it("shows a count in the switcher's row, before its key", async () => {
-    const s = await setup("/mail", { rail: () => withBadges({ mail: 3 }) });
+  it("shows a count in the switcher's row, before its key, with its tooltip", async () => {
+    const s = await setup("/mail", { rail: () => withBadges({ mail: 3, notes: 120 }) });
     s.shell.openSwitcher();
     const row = document.querySelector<HTMLElement>('.switcher-item[data-app="mail"]');
     expect(row?.querySelector(".badge")?.textContent).toBe("3");
     expect(row?.getAttribute("aria-label")).toBe("Mail, 3 unread");
+    expect(row?.getAttribute("title")).toBe("Mail, 3 unread");
     const classes: string[] = row ? [...row.children].map((c) => c.className) : [];
     expect(classes.indexOf("badge")).toBeGreaterThan(-1);
     expect(classes.indexOf("badge")).toBeLessThan(classes.indexOf("switcher-key"));
+    // Above 99 the row writes 99+, and names the whole count.
+    const notes = document.querySelector<HTMLElement>('.switcher-item[data-app="notes"]');
+    expect(notes?.querySelector(".badge")?.textContent).toBe("99+");
+    expect(notes?.getAttribute("aria-label")).toBe("Notes, 120 unread");
+    expect(notes?.getAttribute("title")).toBe("Notes, 120 unread");
     expect(document.querySelector('.switcher-item[data-app="plain"] .badge')).toBeNull();
   });
 

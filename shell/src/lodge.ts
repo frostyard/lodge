@@ -892,7 +892,12 @@ export class LodgeShell {
         "data-app": a.id,
         "aria-selected": String(i === this.#selected),
       };
-      if (a.badge > 0) attrs["aria-label"] = a.name + this.#unread(a.badge);
+      if (a.badge > 0) {
+        // The row's accessible name and its tooltip both carry the count.
+        const unread = a.name + this.#unread(a.badge);
+        attrs["aria-label"] = unread;
+        attrs.title = unread;
+      }
       const li = h(
         d,
         "li",

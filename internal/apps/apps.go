@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -538,24 +537,70 @@ type healthAnswer struct {
 
 // badge is the unread count in an app's /health answer: a whole number from
 // 0, capped at MaxBadge. Any other value, such as a string, a fraction or a
-// negative number, is 0, and never changes the app's state (ADR-0020).
+// negative number, is 0, and never changes the app's state (ADR-0020). It
+// reads the JSON number's text, so no rounding turns a fraction into a
+// count.
 func badge(v jsontext.Value) int {
 	if v.Kind() != '0' { // not a number
 		return 0
 	}
-	// A number too big for a float64 is as far above MaxBadge as one that
-	// fits, so the range error still caps the count.
-	f, err := strconv.ParseFloat(string(v), 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
+	s := string(v)
+	if strings.HasPrefix(s, "-") { // negative, and -0 is 0 anyway
 		return 0
 	}
-	if f < 0 || f != math.Trunc(f) {
+	mantissa, expText := s, ""
+	if i := strings.IndexAny(mantissa, "eE"); i >= 0 {
+		mantissa, expText = mantissa[:i], mantissa[i+1:]
+	}
+	intDigits, fracDigits, _ := strings.Cut(mantissa, ".")
+	exp, over := 0, 0
+	if expText != "" {
+		var err error
+		exp, err = strconv.Atoi(expText)
+		if err != nil {
+			if !errors.Is(err, strconv.ErrRange) {
+				return 0
+			}
+			// An exponent too big for an int: a positive one is far above
+			// MaxBadge, and a negative one is a fraction.
+			exp, over = 0, 1
+			if strings.HasPrefix(expText, "-") {
+				over = -1
+			}
+		}
+	}
+	// The body is at most 64 KiB, so an exponent beyond a million is far
+	// above MaxBadge, or a fraction, and the shift below cannot overflow.
+	switch {
+	case exp > 1_000_000:
+		exp, over = 0, 1
+	case exp < -1_000_000:
+		exp, over = 0, -1
+	}
+	// A count of only zeros is 0, whatever its exponent.
+	d := strings.TrimLeft(intDigits+fracDigits, "0")
+	if d == "" {
 		return 0
 	}
-	if f >= MaxBadge {
+	// The leading zeros are gone, so the trailing ones are the shifts the
+	// integer digits carry, which the exponent and the fraction adjust.
+	trailing := len(d) - len(strings.TrimRight(d, "0"))
+	d = strings.TrimRight(d, "0")
+	shift := exp - len(fracDigits) + trailing
+	switch {
+	case over < 0 || shift < 0: // a fraction
+		return 0
+	case over > 0 || len(d)+shift > 5: // at least 100000
 		return MaxBadge
 	}
-	return int(f)
+	n := 0
+	for _, c := range d {
+		n = n*10 + int(c-'0')
+	}
+	for range shift {
+		n *= 10
+	}
+	return min(n, MaxBadge)
 }
 
 // health asks app id's /health, as lodge's poll: no Lodge-Caller.
