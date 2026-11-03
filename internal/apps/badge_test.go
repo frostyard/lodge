@@ -43,6 +43,9 @@ func TestBadge(t *testing.T) {
 		{"an array", "[3]", 0},
 		{"the largest int exponent", "10e9223372036854775807", 99999},
 		{"the smallest int exponent", "1.5e-9223372036854775808", 0},
+		{"a fraction times a clamped exponent", "1.5e1000001", 99999},
+		{"a fraction times an overflowing exponent", "1.5e999999999999999999999", 99999},
+		{"a whole number over a clamped exponent", "15e-1000001", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := badge(jsontext.Value(tc.v)); got != tc.want {

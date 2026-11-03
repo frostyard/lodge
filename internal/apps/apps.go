@@ -587,10 +587,14 @@ func badge(v jsontext.Value) int {
 	trailing := len(d) - len(strings.TrimRight(d, "0"))
 	d = strings.TrimRight(d, "0")
 	shift := exp - len(fracDigits) + trailing
+	// An exponent out of range decides alone: a few digits of fraction
+	// cannot undo a million places.
 	switch {
+	case over > 0: // far above MaxBadge
+		return MaxBadge
 	case over < 0 || shift < 0: // a fraction
 		return 0
-	case over > 0 || len(d)+shift > 5: // at least 100000
+	case len(d)+shift > 5: // at least 100000
 		return MaxBadge
 	}
 	n := 0
