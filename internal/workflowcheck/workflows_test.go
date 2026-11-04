@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -136,47 +138,49 @@ func offLinuxTests(t *testing.T, dir string) []string {
 	return out
 }
 
-// isGoTestAll reports whether command is an unrestricted go test of ./...
-// It rejects test-name and test-short filters that omit off-Linux tests.
+// isGoTestAll reports whether command is "go test" of ./... with only flags
+// that keep every test running: -v, -race, -failfast, -json, -cover,
+// -count=N (N at least 1), -timeout D, -p N and -parallel N. Any other flag
+// (-run, -skip, -short, -list, -count=0, -c, -exec, ...) makes it false, so
+// a step that names go test but runs no test of the kit does not count.
 func isGoTestAll(command string) bool {
 	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) < 3 || fields[0] != "go" || fields[1] != "test" {
+	if len(fields) < 3 || fields[0] != "go" || fields[1] != "test" || fields[len(fields)-1] != "./..." {
 		return false
 	}
-	if fields[len(fields)-1] != "./..." {
-		return false
-	}
-
-	valueFlags := map[string]bool{
-		"bench": true, "benchtime": true, "count": true, "coverprofile": true,
-		"cpu": true, "exec": true, "fuzz": true, "fuzztime": true,
-		"list": true, "parallel": true, "timeout": true, "vet": true,
-		"coverpkg": true, "covermode": true,
-	}
-	waitingValue := false
-	for i := 2; i < len(fields)-1; i++ {
-		field := fields[i]
-		if waitingValue {
-			waitingValue = false
-			continue
-		}
-		if !strings.HasPrefix(field, "-") {
+	flags := fields[2 : len(fields)-1]
+	for i := 0; i < len(flags); i++ {
+		name, value, hasValue := strings.Cut(strings.TrimLeft(flags[i], "-"), "=")
+		if !strings.HasPrefix(flags[i], "-") {
 			return false
 		}
-
-		name := strings.TrimLeft(field, "-")
-		hasValue := false
-		if j := strings.IndexByte(name, '='); j >= 0 {
-			name, hasValue = name[:j], true
-		}
-		if name == "run" || name == "skip" || name == "short" {
+		switch name {
+		case "v", "race", "failfast", "json", "cover":
+			if hasValue && value != "true" {
+				return false
+			}
+		case "count", "timeout", "p", "parallel":
+			if !hasValue {
+				if i+1 >= len(flags) {
+					return false
+				}
+				i++
+				value = flags[i]
+			}
+			if name == "timeout" {
+				if d, err := time.ParseDuration(value); err != nil || d < 0 {
+					return false
+				}
+				continue
+			}
+			if n, err := strconv.Atoi(value); err != nil || n < 1 {
+				return false
+			}
+		default:
 			return false
 		}
-		if !hasValue && valueFlags[name] {
-			waitingValue = true
-		}
 	}
-	return !waitingValue
+	return true
 }
 
 func runsOnWindows(job *yaml.Node) bool {
@@ -206,11 +210,13 @@ func runsGoTestOnWindows(root *yaml.Node, dir string) bool {
 			continue
 		}
 
-		defaultRun := get(get(job, "defaults"), "run")
-		defaultWorking := get(defaultRun, "working-directory")
+		// The working directory: the step's, else the job's default, else
+		// the workflow's default.
 		defaultDir := ""
-		if defaultWorking != nil && defaultWorking.Kind == yaml.ScalarNode {
-			defaultDir = defaultWorking.Value
+		for _, d := range []*yaml.Node{root, job} {
+			if w := get(get(get(d, "defaults"), "run"), "working-directory"); w != nil && w.Kind == yaml.ScalarNode {
+				defaultDir = w.Value
+			}
 		}
 
 		steps := get(job, "steps")
@@ -324,6 +330,41 @@ func TestRunsGoTestOnWindows(t *testing.T) {
 			name: "Go test specific package",
 			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test ./manifest\n",
 			want: false,
+		},
+		{
+			name: "Go test -list",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -list . ./...\n",
+			want: false,
+		},
+		{
+			name: "Go test -count=0",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -count=0 ./...\n",
+			want: false,
+		},
+		{
+			name: "Go test -count 0",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -count 0 ./...\n",
+			want: false,
+		},
+		{
+			name: "Go test -c",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -c ./...\n",
+			want: false,
+		},
+		{
+			name: "Go test -short",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -short ./...\n",
+			want: false,
+		},
+		{
+			name: "Go test -race -count=1 -timeout 10m",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -race -count=1 -timeout 10m ./...\n",
+			want: true,
+		},
+		{
+			name: "Workflow default working directory",
+			yaml: "defaults:\n  run:\n    working-directory: kit\njobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - run: go test ./...\n",
+			want: true,
 		},
 		{
 			name: "Go test with run filter",
