@@ -1,8 +1,7 @@
 package workflowcheck
 
 import (
-	"bufio"
-	"go/build/constraint"
+	"go/build"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -94,6 +93,15 @@ func walk(n *yaml.Node, f func(*yaml.Node)) {
 // offLinuxTests returns test files selected for Windows but not Linux.
 func offLinuxTests(t *testing.T, dir string) []string {
 	t.Helper()
+	linux := build.Default
+	linux.GOOS = "linux"
+	linux.GOARCH = "amd64"
+	linux.CgoEnabled = false
+	windows := build.Default
+	windows.GOOS = "windows"
+	windows.GOARCH = "amd64"
+	windows.CgoEnabled = false
+
 	var out []string
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -109,29 +117,16 @@ func offLinuxTests(t *testing.T, dir string) []string {
 		if !strings.HasSuffix(d.Name(), "_test.go") {
 			return nil
 		}
-		f, err := os.Open(path)
+		linuxMatch, err := linux.MatchFile(filepath.Dir(path), d.Name())
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-
-		scan := bufio.NewScanner(f)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
-			if !strings.HasPrefix(line, "//go:build ") {
-				continue
-			}
-			expr, err := constraint.Parse(line)
-			if err != nil {
-				return err
-			}
-			if !builds(expr, "linux") && builds(expr, "windows") {
-				out = append(out, filepath.Clean(path))
-			}
-			break
-		}
-		if err := scan.Err(); err != nil {
+		windowsMatch, err := windows.MatchFile(filepath.Dir(path), d.Name())
+		if err != nil {
 			return err
+		}
+		if !linuxMatch && windowsMatch {
+			out = append(out, filepath.Clean(path))
 		}
 		return nil
 	})
@@ -141,12 +136,62 @@ func offLinuxTests(t *testing.T, dir string) []string {
 	return out
 }
 
-// builds reports whether a file with the build constraint expr builds for
-// goos. Only the system's tags count; any other tag is unset.
-func builds(expr constraint.Expr, goos string) bool {
-	return expr.Eval(func(tag string) bool {
-		return tag == goos || (tag == "unix" && goos != "windows")
-	})
+// isGoTestAll reports whether command is an unrestricted go test of ./...
+// It rejects test-name and test-short filters that omit off-Linux tests.
+func isGoTestAll(command string) bool {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) < 3 || fields[0] != "go" || fields[1] != "test" {
+		return false
+	}
+	if fields[len(fields)-1] != "./..." {
+		return false
+	}
+
+	valueFlags := map[string]bool{
+		"bench": true, "benchtime": true, "count": true, "coverprofile": true,
+		"cpu": true, "exec": true, "fuzz": true, "fuzztime": true,
+		"list": true, "parallel": true, "timeout": true, "vet": true,
+		"coverpkg": true, "covermode": true,
+	}
+	waitingValue := false
+	for i := 2; i < len(fields)-1; i++ {
+		field := fields[i]
+		if waitingValue {
+			waitingValue = false
+			continue
+		}
+		if !strings.HasPrefix(field, "-") {
+			return false
+		}
+
+		name := strings.TrimLeft(field, "-")
+		hasValue := false
+		if j := strings.IndexByte(name, '='); j >= 0 {
+			name, hasValue = name[:j], true
+		}
+		if name == "run" || name == "skip" || name == "short" {
+			return false
+		}
+		if !hasValue && valueFlags[name] {
+			waitingValue = true
+		}
+	}
+	return !waitingValue
+}
+
+func runsOnWindows(job *yaml.Node) bool {
+	runsOn := get(job, "runs-on")
+	if runsOn == nil {
+		return false
+	}
+	if runsOn.Kind == yaml.ScalarNode {
+		return strings.HasPrefix(runsOn.Value, "windows")
+	}
+	if runsOn.Kind == yaml.SequenceNode && len(runsOn.Content) > 0 {
+		first := runsOn.Content[0]
+		return first.Kind == yaml.ScalarNode && strings.HasPrefix(first.Value, "windows")
+	}
+	return false
 }
 
 // runsGoTestOnWindows reports whether a Windows job tests dir.
@@ -157,25 +202,43 @@ func runsGoTestOnWindows(root *yaml.Node, dir string) bool {
 	}
 	for i := 0; i+1 < len(jobs.Content); i += 2 {
 		job := jobs.Content[i+1]
-		runsOn := get(job, "runs-on")
-		if runsOn == nil || runsOn.Kind != yaml.ScalarNode || !strings.HasPrefix(runsOn.Value, "windows") {
+		if !runsOnWindows(job) {
 			continue
 		}
+
+		defaultRun := get(get(job, "defaults"), "run")
+		defaultWorking := get(defaultRun, "working-directory")
+		defaultDir := ""
+		if defaultWorking != nil && defaultWorking.Kind == yaml.ScalarNode {
+			defaultDir = defaultWorking.Value
+		}
+
 		steps := get(job, "steps")
 		if steps == nil || steps.Kind != yaml.SequenceNode {
 			continue
 		}
 		for _, step := range steps.Content {
 			run := get(step, "run")
-			if run == nil || run.Kind != yaml.ScalarNode || !strings.Contains(run.Value, "go test") {
+			if run == nil || run.Kind != yaml.ScalarNode {
 				continue
 			}
+			command := strings.TrimSpace(run.Value)
+
 			working := get(step, "working-directory")
-			if working != nil && working.Kind == yaml.ScalarNode && working.Value == dir {
+			effectiveDir := defaultDir
+			if working != nil && working.Kind == yaml.ScalarNode {
+				effectiveDir = working.Value
+			}
+			if effectiveDir == dir && isGoTestAll(command) {
 				return true
 			}
-			if strings.Contains(run.Value, "cd "+dir) {
-				return true
+			if effectiveDir == "" {
+				prefix := "cd " + dir + " && "
+				if strings.HasPrefix(command, prefix) {
+					if isGoTestAll(strings.TrimSpace(strings.TrimPrefix(command, prefix))) {
+						return true
+					}
+				}
 			}
 		}
 	}
@@ -195,6 +258,40 @@ func TestOffLinuxTestsRunInCI(t *testing.T) {
 		}
 	}
 	t.Errorf("off-Linux kit tests %v never run in CI: add a Windows job that runs go test ./... with working-directory kit", files)
+}
+
+func TestOffLinuxTests(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a_test.go":         "//go:build !linux\n\npackage sample\n",
+		"b_windows_test.go": "package sample\n",
+		"c_darwin_test.go":  "//go:build !linux\n\npackage sample\n",
+		"d_test.go":         "//go:build !linux && go1.21\n\npackage sample\n",
+		"e_linux_test.go":   "package sample\n",
+		"f_test.go":         "package sample\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := offLinuxTests(t, dir)
+	gotNames := make(map[string]bool, len(got))
+	for _, path := range got {
+		gotNames[filepath.Base(path)] = true
+	}
+	want := []string{"a_test.go", "b_windows_test.go", "d_test.go"}
+	if len(gotNames) != len(want) {
+		t.Errorf("offLinuxTests() = %v, want %v", got, want)
+		return
+	}
+	for _, name := range want {
+		if !gotNames[name] {
+			t.Errorf("offLinuxTests() = %v, want %v", got, want)
+			return
+		}
+	}
 }
 
 func TestRunsGoTestOnWindows(t *testing.T) {
@@ -222,6 +319,51 @@ func TestRunsGoTestOnWindows(t *testing.T) {
 			name: "Windows test without kit directory",
 			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - run: go test ./...\n",
 			want: false,
+		},
+		{
+			name: "Go test specific package",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test ./manifest\n",
+			want: false,
+		},
+		{
+			name: "Go test with run filter",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -run '^$' ./...\n",
+			want: false,
+		},
+		{
+			name: "Echo containing go test",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: echo go test ./...\n",
+			want: false,
+		},
+		{
+			name: "Cd another directory",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - run: cd kit-other && go test ./...\n",
+			want: false,
+		},
+		{
+			name: "Another working directory",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: other\n        run: go test ./...\n",
+			want: false,
+		},
+		{
+			name: "Runs-on sequence",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: [windows-2025]\n    steps:\n      - working-directory: kit\n        run: go test ./...\n",
+			want: true,
+		},
+		{
+			name: "Default run working directory",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    defaults:\n      run:\n        working-directory: kit\n    steps:\n      - run: go test ./...\n",
+			want: true,
+		},
+		{
+			name: "Cd kit working directory",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - run: cd kit && go test ./...\n",
+			want: true,
+		},
+		{
+			name: "Count flag",
+			yaml: "jobs:\n  kit-windows:\n    runs-on: windows-2025\n    steps:\n      - working-directory: kit\n        run: go test -count=1 ./...\n",
+			want: true,
 		},
 	}
 	for _, tt := range tests {
