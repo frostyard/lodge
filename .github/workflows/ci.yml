@@ -43,6 +43,26 @@ jobs:
       - name: Tidy, vet, format, lint and tests
         run: make verify
 
+  # The kit has !linux tests, and frostmail runs the kit on Windows.
+  kit-windows:
+    name: The kit off Linux (go test on Windows)
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # Fixtures and golden files are byte-exact: no CRLF on checkout.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: kit/go.mod
+      - name: The kit's tests, its off-Linux tests among them
+        working-directory: kit
+        run: go test ./...
+
   race:
     name: Race detector and cross-builds (make race cross)
     runs-on: ubuntu-24.04

@@ -145,7 +145,9 @@ Everything in the map is built.
   `make client-check` and `make shell-check` (nsl). CI runs the same
   targets, plus its `vulncheck` job (`make vulncheck`: govulncheck on both
   modules, pinned in the Makefile; it needs the network, so no gate runs it).
-  Keep it at 0 reachable findings.
+  Keep it at 0 reachable findings. CI also runs the kit's tests on Windows
+  (`kit-windows`), the only place its `!linux` tests build;
+  `internal/workflowcheck` fails without that job.
 - Tests run unfiltered (`go test ./...`, frostyard/core ADR-0038). A test
   that needs a real tailnet, the network or root skips unless
   `LODGE_LIVE_<WHAT>=1` is set, and never runs inside the gate.
