@@ -102,7 +102,7 @@ While lodge is stopped, no browser and no agent reaches any app.
    ```
 
    The `.deb`'s unit, sysusers.d and tmpfiles.d entries are the tag's
-   `packaging/` files, and its binaries print `lodge X.Y.Z (<commit>)`.
+   `packaging/` files, and `lodge --version` prints `lodge X.Y.Z (<commit>)`.
    lodge's host was updated this way from `43d40b7` to v0.2.0 on
    2026-11-05.
    The script replaces each binary by rename and the shell's bundle whole. It
