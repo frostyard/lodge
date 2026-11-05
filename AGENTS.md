@@ -221,7 +221,7 @@ them rather than improvising, whichever agent you are:
 
   | Series | What | Latest |
   | --- | --- | --- |
-  | `vX.Y.Z` | lodge itself: the daemon, `lodgectl` and the shell, as a `.deb` | `v0.1.0` (2026-10-26) |
+  | `vX.Y.Z` | lodge itself: the daemon, `lodgectl` and the shell, as a `.deb` | `v0.2.0` (2026-11-04); lodge's host runs it since 2026-11-05 ([packaging/README.md](packaging/README.md#update)) |
   | `kit/vX.Y.Z` | the Go module `github.com/frostyard/lodge/kit` (`kit/`) | `kit/v0.3.1` (2026-10-28) |
   | `client/vX.Y.Z` | `@frostyard/lodge-client` (`client/`) | `client/v0.3.2` (2026-10-22) |
   | `ui/vX.Y.Z` | `@frostyard/lodge-ui` (`ui/`) | `ui/v0.6.0` (2026-10-22) |
