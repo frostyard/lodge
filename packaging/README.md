@@ -87,6 +87,24 @@ While lodge is stopped, no browser and no agent reaches any app.
 3. Build the new tarball (see Build and install above), unpack it on the
    host, and run
    `sudo ./lodge-<version>-linux-amd64/packaging/install.sh PREFIX=/opt/lodge`.
+   **For a release, the tree can come from its `.deb`** instead, with no
+   nsl machine. Download it and check it as in Release (`gh attestation
+   verify`, and its `sha256sum` against the release asset's digest). Then
+   lay out the same tree on a computer with `dpkg-deb`, copy it to the host,
+   and run its `install.sh PREFIX=/opt/lodge` there:
+
+   ```sh
+   dpkg-deb -x frostyard-lodge_X.Y.Z_amd64.deb deb
+   t=lodge-X.Y.Z-linux-amd64; mkdir -p $t/bin
+   cp deb/usr/bin/lodge deb/usr/bin/lodgectl $t/bin/
+   cp -R deb/usr/share/lodge/shell $t/shell
+   git archive vX.Y.Z packaging | tar -x -C $t
+   ```
+
+   The `.deb`'s unit, sysusers.d and tmpfiles.d entries are the tag's
+   `packaging/` files, and its binaries print `lodge X.Y.Z (<commit>)`.
+   lodge's host was updated this way from `43d40b7` to v0.2.0 on
+   2026-11-05.
    The script replaces each binary by rename and the shell's bundle whole. It
    does not change `/etc/lodge`. It restarts lodge only if lodge is active,
    so run `sudo systemctl start lodge` if you stopped it.
