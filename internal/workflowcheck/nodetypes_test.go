@@ -10,12 +10,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 var (
 	provisionNodeRuntimeLine = regexp.MustCompile(`(?m)^[ \t]*NODE_VERSION[ \t]*=[ \t]*([0-9]+\.[0-9]+\.[0-9]+)[ \t]*\r?$`)
-	workflowNodeRuntimeLine  = regexp.MustCompile(`(?m)^[ \t]*NODE_VERSION:[ \t]*"([0-9]+\.[0-9]+\.[0-9]+)"[ \t]*\r?$`)
 	looseNodeRuntimeLine     = regexp.MustCompile(`(?m)^[ \t]*NODE_VERSION[ \t]*[:=][^\r\n]*\r?$`)
+	exactNodeRuntimeVersion  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	exactNodeTypesVersion    = regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+$`)
 )
 
@@ -35,8 +37,7 @@ func parseNodeRuntimeVersionLines(text string, pattern *regexp.Regexp) []string 
 }
 
 // nodeRuntimeAssignmentProblems reports each NODE_VERSION assignment line
-// that the source's strict pattern cannot read, so no runtime source is
-// skipped in silence.
+// that the provision.sh strict pattern cannot read.
 func nodeRuntimeAssignmentProblems(file, text string, strict *regexp.Regexp) []string {
 	var problems []string
 	for i, line := range strings.Split(text, "\n") {
@@ -45,6 +46,32 @@ func nodeRuntimeAssignmentProblems(file, text string, strict *regexp.Regexp) []s
 		}
 	}
 	return problems
+}
+
+// workflowNodeVersions finds NODE_VERSION and setup-node node-version values in
+// a workflow YAML document.
+func workflowNodeVersions(file string, root *yaml.Node) ([]string, []string) {
+	var versions []string
+	var problems []string
+	walk(root, func(mapping *yaml.Node) {
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			key := mapping.Content[i]
+			value := mapping.Content[i+1]
+			switch key.Value {
+			case "NODE_VERSION":
+				if value.Kind != yaml.ScalarNode || !exactNodeRuntimeVersion.MatchString(value.Value) {
+					problems = append(problems, fmt.Sprintf("%s:%d: NODE_VERSION must be a scalar matching X.Y.Z", file, value.Line))
+					continue
+				}
+				versions = append(versions, value.Value)
+			case "node-version":
+				if value.Kind != yaml.ScalarNode || value.Value != "${{ env.NODE_VERSION }}" {
+					problems = append(problems, fmt.Sprintf("%s:%d: node-version must be exactly ${{ env.NODE_VERSION }}", file, value.Line))
+				}
+			}
+		}
+	})
+	return versions, problems
 }
 
 // nodeTypesProblems compares package.json @types/node pins with the runtime
@@ -102,36 +129,29 @@ func TestNodeTypesFollowsNodeRuntime(t *testing.T) {
 		sources["dev/nsl/provision.sh"] = major
 	}
 
-	workflows, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
+	workflowNodes := workflows(t)
+	workflowNames := make([]string, 0, len(workflowNodes))
+	for name := range workflowNodes {
+		workflowNames = append(workflowNames, name)
 	}
-	for _, workflow := range workflows {
-		data, err := os.ReadFile(workflow)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rel, err := filepath.Rel(root, workflow)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rel = filepath.ToSlash(rel)
-		workflowText := string(data)
-		for _, problem := range nodeRuntimeAssignmentProblems(rel, workflowText, workflowNodeRuntimeLine) {
+	slices.Sort(workflowNames)
+	for _, name := range workflowNames {
+		file := path.Join(".github/workflows", name)
+		versions, problems := workflowNodeVersions(file, workflowNodes[name])
+		for _, problem := range problems {
 			t.Error(problem)
 		}
-		versions := parseNodeRuntimeVersionLines(workflowText, workflowNodeRuntimeLine)
 		for _, version := range versions {
 			major, _, _ := strings.Cut(version, ".")
-			if previous, exists := sources[rel]; exists && previous != major {
-				t.Errorf("%s uses Node runtime major %s after another runtime source used major %s", rel, major, previous)
+			if previous, exists := sources[file]; exists && previous != major {
+				t.Errorf("%s uses Node runtime major %s after another runtime source used major %s", file, major, previous)
 			}
-			sources[rel] = major
+			sources[file] = major
 		}
 	}
 
 	if len(sources) == 0 {
-		t.Fatal("no Node runtime version found in dev/nsl/provision.sh or .github/workflows/*.yml")
+		t.Fatal("no Node runtime version found in dev/nsl/provision.sh or .github/workflows/*.y*ml")
 	}
 
 	sourceFiles := make([]string, 0, len(sources))
@@ -222,8 +242,46 @@ func TestNodeTypesProblems(t *testing.T) {
 	}
 }
 
+// TestWorkflowNodeVersions checks NODE_VERSION and setup-node node-version
+// values in workflow YAML.
+func TestWorkflowNodeVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		text          string
+		wantVersions  []string
+		wantProblems  int
+		wantSubstring string
+	}{
+		{name: "quoted key", text: "env:\n  \"NODE_VERSION\": \"26.6.6\"\n", wantVersions: []string{"26.6.6"}},
+		{name: "unquoted value", text: "env:\n  NODE_VERSION: 24.21.0\n", wantVersions: []string{"24.21.0"}},
+		{name: "invalid runtime", text: "env:\n  NODE_VERSION: latest\n", wantProblems: 1, wantSubstring: ":2:"},
+		{name: "literal setup node", text: "steps:\n  - with:\n      node-version: 26\n", wantProblems: 1, wantSubstring: ":3:"},
+		{name: "setup node reference", text: "steps:\n  - with:\n      node-version: ${{ env.NODE_VERSION }}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(tc.text), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc.Content) == 0 {
+				t.Fatal("YAML document has no root")
+			}
+			versions, problems := workflowNodeVersions("workflow.yml", doc.Content[0])
+			if !slices.Equal(versions, tc.wantVersions) {
+				t.Errorf("workflowNodeVersions() versions = %q, want %q", versions, tc.wantVersions)
+			}
+			if len(problems) != tc.wantProblems {
+				t.Errorf("workflowNodeVersions() problems = %q, want %d", problems, tc.wantProblems)
+			}
+			if tc.wantSubstring != "" && (len(problems) == 0 || !strings.Contains(problems[0], tc.wantSubstring)) {
+				t.Errorf("workflowNodeVersions() problems = %q, want line containing %q", problems, tc.wantSubstring)
+			}
+		})
+	}
+}
+
 // TestNodeRuntimeAssignmentProblems checks that an assignment the strict
-// pattern cannot read is reported with its line.
+// provision.sh pattern cannot read is reported with its line.
 func TestNodeRuntimeAssignmentProblems(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -233,9 +291,7 @@ func TestNodeRuntimeAssignmentProblems(t *testing.T) {
 	}{
 		{name: "exact shell", text: "x=1\nNODE_VERSION=24.21.0\n", strict: provisionNodeRuntimeLine, want: nil},
 		{name: "quoted shell", text: "x=1\nNODE_VERSION=\"24.21.0\"\n", strict: provisionNodeRuntimeLine, want: []string{"f:2: NODE_VERSION assignment does not use exact X.Y.Z syntax"}},
-		{name: "exact YAML", text: "env:\n  NODE_VERSION: \"24.21.0\"\n", strict: workflowNodeRuntimeLine, want: nil},
-		{name: "unquoted YAML", text: "env:\n  NODE_VERSION: 24.21.0\n", strict: workflowNodeRuntimeLine, want: []string{"f:2: NODE_VERSION assignment does not use exact X.Y.Z syntax"}},
-		{name: "reference only", text: "node-version: ${{ env.NODE_VERSION }}\n", strict: workflowNodeRuntimeLine, want: nil},
+		{name: "none", text: "x=1\nNODE_VERSION=latest\n", strict: provisionNodeRuntimeLine, want: []string{"f:2: NODE_VERSION assignment does not use exact X.Y.Z syntax"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := nodeRuntimeAssignmentProblems("f", tc.text, tc.strict); !slices.Equal(got, tc.want) {
@@ -245,7 +301,8 @@ func TestNodeRuntimeAssignmentProblems(t *testing.T) {
 	}
 }
 
-// TestNodeTypesParseNodeRuntimeVersionLines checks the two source line formats.
+// TestNodeTypesParseNodeRuntimeVersionLines checks the provision.sh source
+// line formats.
 func TestNodeTypesParseNodeRuntimeVersionLines(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -254,12 +311,9 @@ func TestNodeTypesParseNodeRuntimeVersionLines(t *testing.T) {
 		want    []string
 	}{
 		{name: "provision", text: "NODE_VERSION=24.21.0\n", pattern: provisionNodeRuntimeLine, want: []string{"24.21.0"}},
-		{name: "workflow", text: "  NODE_VERSION: \"24.21.0\"\n", pattern: workflowNodeRuntimeLine, want: []string{"24.21.0"}},
 		{name: "none", text: "NODE_VERSION=latest\n", pattern: provisionNodeRuntimeLine, want: []string{}},
 		{name: "loose quoted shell", text: "NODE_VERSION=\"24.21.0\"\n", pattern: looseNodeRuntimeLine, want: []string{"NODE_VERSION=\"24.21.0\""}},
 		{name: "loose quoted shell strict", text: "NODE_VERSION=\"24.21.0\"\n", pattern: provisionNodeRuntimeLine, want: []string{}},
-		{name: "loose unquoted YAML", text: "  NODE_VERSION: 24.21.0\n", pattern: looseNodeRuntimeLine, want: []string{"  NODE_VERSION: 24.21.0"}},
-		{name: "loose unquoted YAML strict", text: "  NODE_VERSION: 24.21.0\n", pattern: workflowNodeRuntimeLine, want: []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := parseNodeRuntimeVersionLines(tc.text, tc.pattern)
