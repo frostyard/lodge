@@ -7,6 +7,8 @@
 # the nsl machine (make client-check, ui-check, shell-check), as CI does.
 #
 # The commit prefix is build (or ci): svu reads it as a patch, not a feature.
+# @types/node follows the Node major of NODE_VERSION; internal/workflowcheck
+# checks it, and a Node major moves by hand with its types.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -49,6 +51,9 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       client-npm:
         patterns: ["*"]
@@ -60,6 +65,9 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       ui-npm:
         patterns: ["*"]
@@ -71,6 +79,9 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       shell-npm:
         patterns: ["*"]
