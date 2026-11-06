@@ -86,6 +86,26 @@
       "why": "auth: the outbound address guard that keeps an app's fetches off inside addresses (ADR-0017)"
     },
     {
+      "glob": "cmd/lodge/main.go",
+      "why": "auth: the daemon's wiring: the development uid, the state directory's mode, the socket groups and the agent socket's admission"
+    },
+    {
+      "glob": "cmd/lodgectl/login.go",
+      "why": "secrets and credentials: lodgectl provider login, which writes a provider's login file with mode 0600"
+    },
+    {
+      "glob": "kit/jsonrpc/{listen_linux,listen_other}.go",
+      "why": "auth: an app's private JSON-RPC socket: its directory check, its mode and its peer admission"
+    },
+    {
+      "glob": "kit/kittest/{kittest,rules}.go",
+      "why": "auth: the checks of the contract's socket rules (peer uid, Lodge-Caller, 1 caller kind per path) that each app's tests run"
+    },
+    {
+      "glob": "internal/store/store.go",
+      "why": "destructive operations: how lodge's database applies its migrations, and refuses a database with a newer schema"
+    },
+    {
       "glob": "internal/store/migrations/**",
       "why": "destructive operations: schema migrations of lodge's database (tokens, allow-lists, provider logins)"
     }

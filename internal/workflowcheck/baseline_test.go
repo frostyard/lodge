@@ -353,6 +353,13 @@ var governedPaths = []string{
 	"kit/mcpsession/mcpsession.go",
 	"kit/manifest/manifest.go",
 	"kit/netguard/netguard.go",
+	"cmd/lodge/main.go",
+	"cmd/lodgectl/login.go",
+	"kit/jsonrpc/listen_linux.go",
+	"kit/jsonrpc/listen_other.go",
+	"kit/kittest/kittest.go",
+	"kit/kittest/rules.go",
+	"internal/store/store.go",
 	"internal/store/migrations/0001_init.sql",
 }
 
@@ -404,19 +411,52 @@ func TestRiskPaths(t *testing.T) {
 	for _, p := range workflows {
 		want = append(want, path.Join(".github/workflows", filepath.Base(p)))
 	}
+	files := repoFiles(t)
+	for _, p := range missingPaths(want, files) {
+		t.Errorf("%s is missing; the repository must have it, and .github/risk-paths.json must list it", p)
+	}
 	for _, p := range want {
 		if !matchAny(globs, p) {
 			t.Errorf("%s is a release, secrets, auth or governance path; .github/risk-paths.json must list it", p)
 		}
 	}
 
-	files := repoFiles(t)
 	for _, g := range globs {
 		if !anyMatch(g, files) {
 			t.Errorf("glob %q matches no file in the repository", g)
 		}
 	}
 	t.Logf("%d globs; %d required paths listed; %d files searched", len(globs), len(want), len(files))
+}
+
+// missingPaths returns each of required that is not in files, in order. A
+// required path must exist: a glob such as .github/workflows/** still
+// matches the name of a deleted caller.
+func missingPaths(required, files []string) []string {
+	var missing []string
+	for _, p := range required {
+		if !slices.Contains(files, p) {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
+// TestMissingPaths checks that a required path that is not in the
+// repository is missing, also when a wide glob still matches its name.
+func TestMissingPaths(t *testing.T) {
+	files := []string{".github/risk-paths.json", ".github/workflows/ci.yml"}
+	required := []string{".github/risk-paths.json", ".github/workflows/risk-paths.yml"}
+	if !matchAny([]string{".github/workflows/**"}, ".github/workflows/risk-paths.yml") {
+		t.Fatal("the wide glob does not match the caller's name")
+	}
+	got := missingPaths(required, files)
+	if want := []string{".github/workflows/risk-paths.yml"}; !slices.Equal(got, want) {
+		t.Errorf("missingPaths(%q, %q) = %q, want %q", required, files, got, want)
+	}
+	if got := missingPaths(files, files); len(got) != 0 {
+		t.Errorf("missingPaths of present paths = %q, want none", got)
+	}
 }
 
 // matchAny reports whether p matches 1 of globs.
