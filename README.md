@@ -1,51 +1,82 @@
+<!-- readme-kind: service -->
 # lodge
 
-A tailnet-only web shell for frostyard's first-party apps. One address on
-your tailnet opens Notes, Mail and Read, and the assistant. A quick
-switcher moves between them, and each app stays loaded in its frame
-([overview](docs/design/overview.md)).
+[![CI](https://github.com/frostyard/lodge/actions/workflows/ci.yml/badge.svg)](https://github.com/frostyard/lodge/actions/workflows/ci.yml)
+
+lodge is a tailnet-only web shell for frostyard's first-party apps: Notes,
+Mail, Read and the assistant Porter, for the people on one owner's tailnet.
+One address opens them all, a quick switcher moves between them, and each
+app stays loaded in its frame. It runs on 1 Linux host, beside the apps'
+daemons.
+
+**Status:** pre-release. Notes, Mail, Read and Porter run behind it.
+
+**Documentation:** [docs/README.md](docs/README.md)
+
+## What it does
 
 - **lodge is the only process on the network.** It joins your tailnet as a
-  node of its own, `lodge`, and signs browsers in by their tailnet identity.
-  Allow-lists of logins and devices decide who gets in. There are no
-  passwords and no cookies, and nothing is on the public internet.
+  node of its own and signs browsers in by their tailnet identity, against
+  allow-lists of logins and devices. Nothing is on the public internet
+  ([overview](docs/design/overview.md)).
 - **Apps are daemons behind it.** Each one runs as its own system user on a
   Unix socket that only lodge can reach. lodge serves each app's web files
-  itself, and tells the daemon who is calling.
-- **Agents get a scoped token per app,** at `/mcp/<app>`.
+  itself, and tells the daemon who is calling
+  ([app contract](docs/specs/app-contract.md)).
+- **Agents get a scoped token per app,** at `/mcp/<app>`, and agents on
+  lodge's host use a local agent socket
+  ([lodge's HTTP surface](docs/specs/lodge-http.md#mcpid)).
 - **Untrusted bytes,** such as mail parts and attachments, come from a
-  second node, `lodge-content`, under a sandbox policy.
+  second node, `lodge-content`, under a sandbox policy
+  ([content routes](docs/specs/lodge-http.md#content-routes)).
 - **One inference layer** routes the apps' model requests to a local model
-  or to configured providers, and holds every credential.
+  or to configured providers, and holds every credential
+  ([inference](docs/specs/inference.md)).
+- **The apps build on lodge's libraries:** the Go kit (`kit/`), the
+  frontend library `@frostyard/lodge-client` (`client/`) and the shared
+  look `@frostyard/lodge-ui` (`ui/`), each pinned by its own tag
+  ([AGENTS.md](AGENTS.md#releases-and-dependencies)).
 
-Apps build on the Go kit (`kit/`) and the frontend library
-`@frostyard/lodge-client` (`client/`). The contract between lodge and an app
-is [docs/specs/app-contract.md](docs/specs/app-contract.md).
+## Interface
 
-Pre-release. The design documents date from 2026-10-18 to 2026-10-20 and are accepted.
-The kit, the client and the UI package are tagged up to `kit/v0.3.1`,
-`client/v0.3.2` and `ui/v0.6.0`, and lodge v1 and its inference layer are
-built. Notes and Mail run behind it; Read, the reader in
-[frostyard/frostread](https://github.com/frostyard/frostread), is built and
-runs behind it too (since 2026-10-21). Its repository is public since
-2026-10-23. Porter, the assistant in
-[frostyard/porter](https://github.com/frostyard/porter), runs beside them
-(since 2026-10-20). The order of work
-is the [roadmap](docs/plans/0001-roadmap.md).
+| Route | What it serves |
+| --- | --- |
+| `/`, `/<id>/<route>` | the shell page, with each app in its frame |
+| `/app/<id>/api` | the app's JSON-RPC session, over a WebSocket |
+| `/app/<id>/<path>` | the app's web files |
+| `/mcp/<id>` | the app's MCP endpoint, for an agent with a token |
+| `/device/<id>/<path>` | the app's own device routes |
+| `lodge-content`: `/<id>/<path>` | the app's untrusted content, sandboxed |
+
+[lodge's HTTP surface](docs/specs/lodge-http.md) is the contract with
+browsers and agents, and the [app contract](docs/specs/app-contract.md) the
+contract with apps. `lodgectl` manages lodge over its control socket.
+
+## Deploy
+
+lodge runs on 1 systemd host as the `frostyard-lodge` package, with each
+app's daemon beside it. A release is a `vX.Y.Z` tag: its workflow builds,
+attests and publishes the `.deb`, and snosi publishes it as the sysext
+`lodge`. A host takes that sysext, or installs a release by hand.
+[packaging/README.md](packaging/README.md) is the runbook: install,
+[update](packaging/README.md#update),
+[roll back](packaging/README.md#roll-back) and
+[release](packaging/README.md#release).
 
 ## Develop
 
-Requirements: Go 1.27 and `mise install` (golangci-lint) on the host.
-
 ```sh
-make check   # format, tidy, vet, lint, tests (and the docs' links)
-make ci      # check's verify, plus the race detector and cross-builds
-make vulncheck   # govulncheck on both modules (network; CI runs it, no gate does)
-make build   # build/lodge
+mise install   # the pinned golangci-lint, svu and nFPM
+make check     # format, tidy, vet, lint and tests (and the docs' links)
+make ci        # check's verify, the race detector, cross-builds, frontends (nsl)
 ```
 
-`make help` lists every target. Agents start at [AGENTS.md](AGENTS.md).
+Go 1.27 runs on the host; the frontends build in the nsl machine `lodge`
+(`dev/nsl/provision.sh`). `make help` lists every target.
 
-## License
+## Where to go next
 
-MIT.
+- [AGENTS.md](AGENTS.md): the rules for agents and contributors.
+- [docs/README.md](docs/README.md): the decisions, designs, specs and plans.
+- [SECURITY.md](SECURITY.md): report a vulnerability privately.
+- [LICENSE](LICENSE): MIT.
