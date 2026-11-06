@@ -16,7 +16,8 @@ platform decision is frostyard/core's
 [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md).
 
 This file (`AGENTS.md`) is the CANONICAL agent instructions — `CLAUDE.md`,
-`GEMINI.md`, and `.github/copilot-instructions.md` are symlinks to it, and
+`GEMINI.md`, `.cursorrules` and `.github/copilot-instructions.md` are
+symlinks to it, and
 `.claude/skills` symlinks to `.agents/skills/`
 ([ADR-0002](docs/adr/0002-agent-portable-instruction-surface.md)). Edit only
 the canonical paths; keep content tool-agnostic.
@@ -132,7 +133,7 @@ Everything in the map is built.
   `internal/scaffoldcheck`: tests that the new-lodge-app scaffold renders,
   builds on this checkout's kit, passes the socket rules and stages
   safely. `internal/workflowcheck`: tests that actions are SHA-pinned with least
-  privilege.
+  privilege, and the files of the repository baseline (below).
 
 ## Gates
 
@@ -142,7 +143,7 @@ Everything in the map is built.
   `internal/repocheck` checks the docs' links and index. The `e2e`-tagged
   files are vetted, linted and tested with their tag too. `make ci` is
   verify plus `make race`, `make cross` (linux/amd64 and linux/arm64), and
-  `make client-check` and `make shell-check` (nsl). CI runs the same
+  `make client-check`, `make ui-check` and `make shell-check` (nsl). CI runs the same
   targets, plus its `vulncheck` job (`make vulncheck`: govulncheck on both
   modules, pinned in the Makefile; it needs the network, so no gate runs it).
   Keep it at 0 reachable findings. CI also runs the kit's tests on Windows
@@ -254,9 +255,10 @@ them rather than improvising, whichever agent you are:
   requires `github.com/frostyard/lodge/kit` with `replace => ./kit`, and
   `shell/package.json` links `../client` and `../ui`, so lodge always
   builds on its own tree. `kit/go.mod` requires no frostyard module.
-  There is no Dependabot configuration: tools are pinned in `mise.toml` and
-  `mise.lock`, actions to commit SHAs, and Node in each workflow's
-  `NODE_VERSION`.
+  Dependabot (`.github/dependabot.yml`) proposes weekly updates of the
+  actions, both Go modules and the 3 npm packages. Tools stay pinned in
+  `mise.toml` and `mise.lock`, and Node in each workflow's `NODE_VERSION`
+  and `dev/nsl/provision.sh`.
 - **Who uses it.** frostnotes, frostmail, frostread and Porter pin the
   kit in `go.mod` (all at `v0.3.1`), and the client and the UI package as
   pnpm git dependencies (all at `client/v0.3.2` and `ui/v0.6.0`):
@@ -268,6 +270,36 @@ them rather than improvising, whichever agent you are:
   ([app contract, Versioning](docs/specs/app-contract.md#versioning)).
   After a library tag, bump each app that needs it in a PR of its own, by
   that app's AGENTS.md. Snosi uses lodge's `.deb`.
+
+## Repository baseline
+
+The repository follows core's baseline (frostyard/core ADR-0071, its spec
+`docs/specs/repository-baseline.md`, rows B1 to B17;
+[org-adrs.md](docs/org-adrs.md)). `internal/workflowcheck` fails `make
+verify` when one of these files breaks:
+
+- The instruction symlinks above (B1). Edit `AGENTS.md`, never a link.
+- `.memory/corrections.jsonl` (B2): 1 JSON object per line with exactly
+  `date`, `scope`, `correction`, `evidence` and `promoted_to`. Append only:
+  never edit or remove a line (no test checks this). A fix of a blocking
+  review point adds its guard and 1 line.
+- `.github/risk-paths.json` (B6, core ADR-0068): a PR that touches a listed
+  path gets `risk:high` from `.github/workflows/risk-paths.yml`. Its PR body
+  names each matched path and why the change is safe. A new release
+  workflow, install script, unit, credential store, auth check or socket
+  admission joins the list in the PR that adds it; a glob that matches no
+  file fails.
+- `.github/dependabot.yml` (B13): 1 entry for each manifest (`go.mod`,
+  `kit/go.mod`, `client/package.json`, `ui/package.json`,
+  `shell/package.json`). A new manifest gets an entry.
+
+`.github/pull_request_template.md` (B7) holds the risk tier.
+Vulnerabilities are reported privately ([SECURITY.md](SECURITY.md), B14).
+The root `README.md` follows core's README spec for the kind `service`
+(B17, core ADR-0072): check it with core's
+`.agents/skills/frostyard-readme/scripts/check-readme.mjs`, in the nsl
+machine. No `CODEOWNERS` file (B15), and no other agent framework's tree
+(B16).
 
 ## Repository boundary
 
