@@ -211,6 +211,17 @@ export function Menu(props: MenuProps) {
     }
   }, [levels]);
 
+  // The keyboard moves the highlight, not the focus, so nothing scrolls by
+  // itself: keep the deepest level's highlighted row in view.
+  useLayoutEffect(() => {
+    const depth = levels.length - 1;
+    const level = levels[depth];
+    if (!level || level.highlighted === null) return;
+    const row = rows.current[depth]?.[level.highlighted];
+    // A DOM without the method (happy-dom, an old browser) must not throw.
+    if (typeof row?.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+  }, [levels]);
+
   useEffect(() => {
     const outside = (event: PointerEvent) => {
       const target = event.target;
@@ -381,12 +392,15 @@ export function Menu(props: MenuProps) {
     const level = levels[depth];
     if (!level) return null;
     const deepest = depth === levels.length - 1;
+    // A menu taller than the window scrolls: the whole popup, and each
+    // submenu, stop one edge gap from each edge. The sheet keeps its class.
+    const bound: CSSProperties = { maxHeight: `calc(100vh - ${2 * EDGE_GAP}px)` };
     const style: CSSProperties =
       depth > 0
-        ? { position: "fixed" }
+        ? { position: "fixed", ...bound }
         : sheet
           ? { position: "fixed" }
-          : { position: "fixed", left: pos.left, top: pos.top };
+          : { position: "fixed", left: pos.left, top: pos.top, ...bound };
     return (
       <div
         key={depth}
