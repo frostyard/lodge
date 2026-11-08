@@ -98,12 +98,56 @@ describe("Menu", () => {
     opener.unmount();
   });
 
+  it("bounds the popup and each submenu to the window", () => {
+    render(<Menu items={items()} onSelect={vi.fn()} onClose={vi.fn()} />);
+    const menu = screen.getByRole("menu");
+    expect(menu.style.maxHeight).toBe("calc(100vh - 8px)");
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    fireEvent.keyDown(menu, { key: "ArrowRight" });
+    const menus = screen.getAllByRole("menu");
+    expect(menus).toHaveLength(2);
+    expect(menus[1]?.style.maxHeight).toBe("calc(100vh - 8px)");
+  });
+
+  it("keeps the highlighted row in view", () => {
+    const many: MenuEntry[] = Array.from({ length: 40 }, (_, index) => ({
+      kind: "item" as const,
+      id: `row-${index}`,
+      label: `Row ${index}`,
+    }));
+    // A DOM may have no scrolling (happy-dom does not): the menu must still
+    // work, so the test puts the method there, as a real window has it.
+    const defined = typeof HTMLElement.prototype.scrollIntoView === "function";
+    if (!defined) HTMLElement.prototype.scrollIntoView = () => {};
+    const spy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    try {
+      render(<Menu items={many} onSelect={vi.fn()} onClose={vi.fn()} />);
+      const menu = screen.getByRole("menu");
+      for (let press = 0; press < 5; press++) fireEvent.keyDown(menu, { key: "ArrowDown" });
+      const highlighted = menu.querySelector('[data-highlighted="true"]');
+      expect(highlighted).not.toBeNull();
+      expect(spy).toHaveBeenLastCalledWith({ block: "nearest" });
+      // The row it was called on is the highlighted one.
+      expect(spy.mock.instances.at(-1)).toBe(highlighted);
+    } finally {
+      spy.mockRestore();
+      if (!defined) Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+    }
+  });
+
   it("draws the narrow window's sheet", () => {
     render(<Menu items={items()} sheet onSelect={vi.fn()} onClose={vi.fn()} />);
     const menu = screen.getByRole("menu");
     expect(menu.className).toContain("bottom-0");
     expect(menu.className).toContain("inset-x-0");
     expect(screen.getByRole("menuitem", { name: /Open/ }).className).toContain("h-11");
+  });
+
+  it("leaves the sheet's height to its own class", () => {
+    render(<Menu items={items()} sheet onSelect={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole("menu").style.maxHeight).toBe("");
   });
 });
 

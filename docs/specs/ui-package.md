@@ -7,13 +7,13 @@ which bundles its own copy at build time.
 Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md). Where
 it fits: [design/overview.md](../design/overview.md#the-kit-and-the-client).
 
-**Status:** version 0.6.0, written on 2026-10-22. The
+**Status:** version 0.6.1, written on 2026-10-22. The
 [changelog](../../ui/CHANGELOG.md) has every version. 0.1.0 carries
 frostmail's values unchanged, so an app that moves to it looks the same;
 0.2.0 adds the Sheet's options; 0.3.0 adds `Menu`; 0.4.0 adds the Sheet's
 `ariaLabel`, `role` and `portal`; 0.5.0 makes the accent frostyard's cold
 blue ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md));
-0.6.0 adds `WindowControls` and `Prompt`.
+0.6.0 adds `WindowControls` and `Prompt`; 0.6.1 bounds `Menu` to the window.
 
 ## Interface
 
@@ -112,7 +112,7 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
 | --- | --- |
 | `IconButton` | A button with `label` (its accessible name), `keys` (in the tooltip), `icon` (a lucide component), `size` (28 or 24), `pressed`, `disabled`, `onClick`; 44px under a coarse pointer |
 | `Splitter` | A focusable `role="separator"` with `orientation`, `label`, `value` (as `aria-valuenow`), `onStart`, `onMove(delta)`, `onEnd`; arrow keys move it 16px |
-| `Menu` | A menu at a point, or a narrow window's sheet (`sheet`): `MenuEntry` rows are an item (`id`, `label`, `icon`, `keys`, `checked`, `disabled`), a separator, or a submenu (`id`, `label`, `icon`, `disabled`, `items`); `onSelect` and `onClose`; the arrow keys move, ArrowRight opens a submenu, ArrowLeft and Escape close one level, Enter chooses, Tab and a press outside close; focus returns to what had it. A row is named by its label alone (`aria-label`), and `aria-keyshortcuts` carries its keys in ARIA's form (`Control+Shift+K`) when each part has a name there. It portals onto the body, so react-dom is an optional peer |
+| `Menu` | A menu at a point, or a narrow window's sheet (`sheet`): `MenuEntry` rows are an item (`id`, `label`, `icon`, `keys`, `checked`, `disabled`), a separator, or a submenu (`id`, `label`, `icon`, `disabled`, `items`); `onSelect` and `onClose`; the arrow keys move, ArrowRight opens a submenu, ArrowLeft and Escape close one level, Enter chooses, Tab and a press outside close; focus returns to what had it. A row is named by its label alone (`aria-label`), and `aria-keyshortcuts` carries its keys in ARIA's form (`Control+Shift+K`) when each part has a name there. The popup and each submenu are at most the window's height less the edge gaps, and scroll; the highlighted row scrolls into view. It portals onto the body, so react-dom is an optional peer |
 | `Sheet` | A modal frame named by its `title` (`aria-labelledby`), or by `ariaLabel` when it draws no heading (one of the two is required by the type), with `description` (`aria-describedby`), `onClose`, `closeLabel`; Escape, the close button and the overlay close it; focus moves in and returns. Options: `width` (a number of pixels or a CSS length, 480 by default), `className` (classes for the frame), `showClose` (default true), `closeOnOverlay` (default true; a form sets false), `initialFocus` (`"first"` for the first field, a ref, or the frame by default) and `titleClassName` (default `font-semibold text-empty`). `role` is `"dialog"` by default and takes `"alertdialog"`; `portal` (default false) renders it onto the document's body, for a frame inside a scroll or overflow container, and needs react-dom |
 | `WindowControls` | The window's 3 buttons, Minimize, Maximize (Restore when `maximized`) and Close, in a `role="group"` named "Window controls": `maximized`, `onWindow(command)`, `platform` (`"linux"` by default, or `"windows"`) and `className`. A `WindowCommand` is `{ kind: "minimize" }`, `{ kind: "toggleMaximize" }` or `{ kind: "close" }`, kinds that frostmail's and frostnotes' own command types already hold. `"linux"` draws the apps' `IconButton`s (28px, a 4px gap); `"windows"` draws flat buttons 46px wide and the row's height, with no gap and no rounding, and a red Close on hover. The group is not a drag region |
 | `windowPlatform(nav?)` | `"windows"` when `navigator.userAgentData?.platform` or `navigator.userAgent` says Windows, `"linux"` otherwise and when there is no navigator; it never throws |

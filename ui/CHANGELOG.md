@@ -5,6 +5,14 @@ value change is a minor and is named here; a new token is a minor; a removed
 or renamed token is a major ([the spec](../docs/specs/ui-package.md#rules)).
 Dates are the commits' dates. A release is a lodge tag `ui/vX.Y.Z`.
 
+## 0.6.1 (2026-11-08)
+
+- `Menu` is bounded to the window: the popup and each submenu get a maximum
+  height of the window's height less 4px at each edge, and scroll, so a long
+  menu no longer runs out of the window. The arrow keys scroll the
+  highlighted row into view, which needs no focus. An app can drop its own
+  workaround for a menu taller than the window.
+
 ## 0.6.0 (2026-10-22)
 
 - `WindowControls`: the window's 3 buttons, Minimize, Maximize or Restore,
