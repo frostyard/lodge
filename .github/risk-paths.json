@@ -1,112 +1,140 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "default_level": "L3",
   "paths": [
     {
       "glob": ".github/risk-paths.json",
+      "level": "L2",
       "why": "governance: the high-risk path list"
     },
     {
       "glob": ".github/workflows/**",
+      "level": "L2",
       "why": "governance: CI, the risk-paths caller and token permissions"
     },
     {
       "glob": ".github/workflows/release.yml",
+      "level": "L1",
       "why": "publication: the .deb release, its attestation and the GitHub release"
     },
     {
       "glob": "Makefile",
+      "level": "L2",
       "why": "governance: the verify, check and ci gate, and make bump, which tags a release"
     },
     {
       "glob": "{mise.toml,mise.lock}",
+      "level": "L2",
       "why": "governance: the checksummed pins of golangci-lint, svu and nFPM"
     },
     {
       "glob": ".svu.yml",
+      "level": "L1",
       "why": "publication: the version rule of lodge's vX.Y.Z tags"
     },
     {
       "glob": "internal/{workflowcheck,repocheck,packagecheck}/**",
+      "level": "L2",
       "why": "governance: the tests that hold the workflows (ADR-0021), the baseline files, the kit's import boundary, the private-host rule and the package"
     },
     {
       "glob": "packaging/{nfpm.yaml,deb-check.py,install.sh}",
+      "level": "L1",
       "why": "publication: the contents of the .deb, its check, and the install script that runs as root"
     },
     {
       "glob": "packaging/{systemd,sysusers.d,tmpfiles.d}/**",
+      "level": "L1",
       "why": "publication: the hardened system unit, the users and groups of the sockets, and the modes of /run/lodge and /var/lib/lodge"
     },
     {
       "glob": "{packaging/app-template/**,.agents/skills/new-lodge-app/template/packaging/**}",
+      "level": "L1",
       "why": "publication: the unit, socket and sysusers templates that each app copies, which set its user and its socket's owner"
     },
     {
       "glob": "dev/nsl/provision.sh",
+      "level": "L1",
       "why": "update verification: a root script that installs a pinned, checksum-verified Node in the nsl machine"
     },
     {
       "glob": "{internal/codexauth/**,internal/copilotauth/**}",
+      "level": "L1",
       "why": "secrets and credentials: the providers' sign-in, the login files and their refresh"
     },
     {
       "glob": "internal/inference/{config,server,codex,copilot}.go",
+      "level": "L1",
       "why": "secrets and credentials: the provider keys, their use, and the inference socket that never hands them to an app"
     },
     {
       "glob": "internal/tokens/**",
+      "level": "L1",
       "why": "auth: the MCP tokens of /mcp/<id>, their scopes and their check"
     },
     {
       "glob": "internal/{tailnet,peer,allow,sessions}/**",
+      "level": "L1",
       "why": "auth: the tailnet nodes and WhoIs, the caller identity, the allow-lists of logins and nodes, and browser sessions"
     },
     {
       "glob": "internal/gateway/{gateway,checks,kinds,headers,proxy,ws,files}.go",
+      "level": "L1",
       "why": "auth: each route kind's checks, the Lodge-* headers, the proxy to app sockets, and the web files and content node's sandbox"
     },
     {
       "glob": "internal/{agents,control}/**",
+      "level": "L1",
       "why": "auth: the agent socket's peer-uid admission, and the control socket that issues tokens and allows logins and nodes"
     },
     {
       "glob": "internal/apps/apps.go",
+      "level": "L1",
       "why": "auth: the app manifests lodge loads, and the uid check of each app socket"
     },
     {
       "glob": "{cmd/lodge/mode_e2e.go,cmd/lodge/mode_release.go,cmd/lodge/build_test.go,internal/e2eid/**}",
+      "level": "L1",
       "why": "auth: the development build's fixed identity, and the build tag and test that keep it out of a release"
     },
     {
       "glob": "{kit/lodgeapp/**,kit/internal/peer/**,kit/mcpsession/**,kit/manifest/**}",
+      "level": "L1",
       "why": "auth: the app socket's peer check and Lodge-* caller, the MCP session's token binding, and the app manifest"
     },
     {
       "glob": "kit/netguard/**",
+      "level": "L1",
       "why": "auth: the outbound address guard that keeps an app's fetches off inside addresses (ADR-0017)"
     },
     {
       "glob": "cmd/lodge/main.go",
+      "level": "L1",
       "why": "auth: the daemon's wiring: the development uid, the state directory's mode, the socket groups and the agent socket's admission"
     },
     {
       "glob": "cmd/lodgectl/login.go",
+      "level": "L1",
       "why": "secrets and credentials: lodgectl provider login, which writes a provider's login file with mode 0600"
     },
     {
       "glob": "kit/jsonrpc/{listen_linux,listen_other}.go",
+      "level": "L1",
       "why": "auth: an app's private JSON-RPC socket: its directory check, its mode and its peer admission"
     },
     {
       "glob": "kit/kittest/{kittest,rules}.go",
+      "level": "L1",
       "why": "auth: the checks of the contract's socket rules (peer uid, Lodge-Caller, 1 caller kind per path) that each app's tests run"
     },
     {
       "glob": "internal/store/store.go",
+      "level": "L1",
       "why": "destructive operations: how lodge's database applies its migrations, and refuses a database with a newer schema"
     },
     {
       "glob": "internal/store/migrations/**",
+      "level": "L1",
       "why": "destructive operations: schema migrations of lodge's database (tokens, allow-lists, provider logins)"
     }
   ]

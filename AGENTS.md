@@ -283,12 +283,17 @@ verify` when one of these files breaks:
   `date`, `scope`, `correction`, `evidence` and `promoted_to`. Append only:
   never edit or remove a line (no test checks this). A fix of a blocking
   review point adds its guard and 1 line.
-- `.github/risk-paths.json` (B6, core ADR-0068): a PR that touches a listed
-  path gets `risk:high` from `.github/workflows/risk-paths.yml`. Its PR body
+- `.github/risk-paths.json` (B6, core ADR-0068, ADR-0078): schema version 2
+  (core ADR-0078): each glob has a level, `L1` to `L4`, and the default is
+  `L3`. The caller `.github/workflows/risk-paths.yml` runs core's
+  `pr-triage.yml` (ADR-0077, ADR-0078). It adds `level:L1` to `level:L4`,
+  and `risk:high` at L1 and L2. It removes `ready-for-human` when the head
+  moves after the label, or when CI is not green at the label. The PR body
   names each matched path and why the change is safe. A new release
   workflow, install script, unit, credential store, auth check or socket
-  admission joins the list in the PR that adds it; a glob that matches no
-  file fails.
+  admission joins the list in the PR that adds it, with a level by the
+  grading rule: `L1` for the risk categories and `L2` for governance. A
+  glob that matches no file fails.
 - `.github/dependabot.yml` (B13): 1 entry for each manifest (`go.mod`,
   `kit/go.mod`, `client/package.json`, `ui/package.json`,
   `shell/package.json`). A new manifest gets an entry.
