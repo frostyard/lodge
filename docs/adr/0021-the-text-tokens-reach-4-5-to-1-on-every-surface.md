@@ -81,8 +81,11 @@ The ratios now, in the same order (window / sidebar / toolbar / banner):
   1.29:1 where it was about 1.97:1. The two still differ, and the order
   holds on every surface, but the difference is easier to miss than before.
 - **Each app takes it when it bumps to `ui/v0.7.0`.** frostmail,
-  frostnotes, frostread, the shell and Porter each bundle their own copy,
-  so an app keeps the old greys until its own PR moves the dependency.
+  frostnotes, frostread and Porter each pin a tag and bundle their own
+  copy, so an app keeps the old greys until its own PR moves the
+  dependency. The shell is the exception: it takes `ui/` from lodge's own
+  checkout (`link:../ui`), so it draws the new greys from the first lodge
+  build after this change, with no tag and no bump.
 - **`--badge-text` still fails, and is left for a later change.**
   `#6e6e73` on `#e5e5ea` is 4.04:1 in the light, and `#a1a1a6` on `#3a3a3c`
   is 4.41:1 in the dark. A badge's count is small text, so it needs the same
