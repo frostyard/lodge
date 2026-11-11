@@ -417,7 +417,10 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   shell, frostread and Porter moved to it; the React primitives came in
   minor releases, and 0.5.0 made the look change as token values only
   ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md)). The
-  latest is `ui/v0.6.0` (2026-10-22).
+  latest tag is `ui/v0.6.0` (2026-10-22). 0.7.0 makes the text tokens
+  reach 4.5:1 on every surface
+  ([ADR-0021](../adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)),
+  as token values only.
 
 ## Open questions
 

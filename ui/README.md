@@ -45,7 +45,10 @@ Import the files in this order, after Tailwind's own layers:
 ```
 
 - `tokens.css` is the colours, light and dark, and the density tokens
-  (`--control-h`, `--row-h`, `--pad-x`, larger under a coarse pointer).
+  (`--control-h`, `--row-h`, `--pad-x`, larger under a coarse pointer). Each
+  text token reaches 4.5:1 on every surface
+  ([ADR-0021](../docs/adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md));
+  `test/contrast.test.ts` checks it.
 - `accents.css` is the domain tokens: `--flag-1` to `--flag-7`, `--quote-1`
   to `--quote-3`, `--avatar-0` to `--avatar-7`. An app that does not use
   them does not import the file.

@@ -5,6 +5,27 @@ value change is a minor and is named here; a new token is a minor; a removed
 or renamed token is a major ([the spec](../docs/specs/ui-package.md#rules)).
 Dates are the commits' dates. A release is a lodge tag `ui/vX.Y.Z`.
 
+## 0.7.0 (2026-11-10)
+
+- The text tokens reach a contrast of 4.5:1 on each of the four surfaces,
+  in the light and in the dark, as WCAG 2.x asks of body text
+  ([ADR-0021](../docs/adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)).
+  `--text-secondary` is `#5b5b60` in the light (was `#6e6e73`) and
+  `#aaaaaf` in the dark (was `#a1a1a6`); `--text-tertiary` is `#6c6c71` in
+  the light (was `#a1a1a6`) and `#95959a` in the dark (was `#6e6e73`). The
+  lowest of the new ratios is 4.67:1. `--text-primary` keeps its value: its
+  lowest ratio is 12.80:1.
+- `--text-secondary` moves with `--text-tertiary`, because the old
+  secondary was 4.54:1 on the light sidebar, so a tertiary at 4.5:1 or more
+  had no room below it. Both schemes now keep a step of about 1.29:1
+  between secondary and tertiary, and primary > secondary > tertiary holds
+  on every surface.
+- `test/contrast.test.ts` computes each ratio and fails under 4.5:1, naming
+  the scheme, the token, the surface and the ratio.
+- A token value change only; no class name and no component changed. Before
+  1.0 such a change is a minor. `--badge-text` keeps its value and its old
+  contrast.
+
 ## 0.6.1 (2026-11-08)
 
 - `Menu` is bounded to the window: the popup and each submenu get a maximum

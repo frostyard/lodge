@@ -7,13 +7,15 @@ which bundles its own copy at build time.
 Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md). Where
 it fits: [design/overview.md](../design/overview.md#the-kit-and-the-client).
 
-**Status:** version 0.6.1, written on 2026-10-22. The
+**Status:** version 0.7.0, written on 2026-10-22. The
 [changelog](../../ui/CHANGELOG.md) has every version. 0.1.0 carries
 frostmail's values unchanged, so an app that moves to it looks the same;
 0.2.0 adds the Sheet's options; 0.3.0 adds `Menu`; 0.4.0 adds the Sheet's
 `ariaLabel`, `role` and `portal`; 0.5.0 makes the accent frostyard's cold
 blue ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md));
-0.6.0 adds `WindowControls` and `Prompt`; 0.6.1 bounds `Menu` to the window.
+0.6.0 adds `WindowControls` and `Prompt`; 0.6.1 bounds `Menu` to the window;
+0.7.0 makes the text tokens reach 4.5:1 on every surface
+([ADR-0021](../adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)).
 
 ## Interface
 
@@ -62,11 +64,23 @@ The accent is frostyard's cold blue
 `--flag-5` is Apple's blue flag, not a tint of the accent, and keeps its
 own values.
 
+The three text tokens reach 4.5:1 on every surface
+([ADR-0021](../adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)):
+
+| Token | Light | Dark | Contrast |
+| --- | --- | --- | --- |
+| `--text-primary` | `#1d1d1f` | `#f5f5f7` | 15.05:1 on the light sidebar, 12.80:1 on the dark toolbar and banner |
+| `--text-secondary` | `#5b5b60` | `#aaaaaf` | 6.04:1 on the light sidebar, 6.02:1 on the dark toolbar and banner |
+| `--text-tertiary` | `#6c6c71` | `#95959a` | 4.67:1 on the light sidebar, 4.67:1 on the dark toolbar and banner |
+
 - **Light** is the `:root` block; **dark** comes from
   `prefers-color-scheme: dark` under `:root:not([data-theme="light"])`, and
   from `[data-theme="dark"]`, which lodge's shell sets.
 - **Both dark blocks hold the same values**, and every colour of the light
   block appears in both. `test/tokens.test.ts` checks it.
+- **Every text token reaches 4.5:1 on each of the four surfaces** (WCAG 2.x,
+  the level for body text), and primary > secondary > tertiary holds on each
+  of them. `test/contrast.test.ts` checks both.
 - **Density** is 28px, 32px and 10px, and 44px, 44px and 12px under
   `@media (pointer: coarse)`. The dark blocks do not set it.
 
@@ -149,7 +163,8 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
    renamed token is a major.
 
 `test/rules.test.ts` checks rules 2, 3 and 4 on the sources themselves;
-`test/tokens.test.ts` checks the values against the apps they came from.
+`test/tokens.test.ts` checks the values against the apps they came from;
+`test/contrast.test.ts` checks the text tokens' contrast on every surface.
 
 ## How an app consumes it
 
@@ -174,6 +189,6 @@ shell takes the package from the checkout with `link:../ui`, as it does for
 
 ## References
 
-- Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md)
+- Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md), [ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md), [ADR-0021](../adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)
 - Context: [design/overview.md](../design/overview.md#the-kit-and-the-client); the package's own README is [ui/README.md](../../ui/README.md), and its history is [ui/CHANGELOG.md](../../ui/CHANGELOG.md)
 - Builds on: [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md)
