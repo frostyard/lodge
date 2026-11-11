@@ -293,18 +293,28 @@ type responseObject struct {
 	} `json:"usage"`
 }
 
+// sseJSON is an SSE line's data as a JSON object. ok is false for a line
+// without a data field, and for data that is not an object (a [DONE], say).
+func sseJSON(line []byte) (data []byte, ok bool) {
+	data, ok = bytes.CutPrefix(line, []byte("data:"))
+	if !ok {
+		return nil, false
+	}
+	data = bytes.TrimSpace(data) // a line's end carries \r too
+	if len(data) == 0 || data[0] != '{' {
+		return nil, false
+	}
+	return data, true
+}
+
 // events reads a Responses stream's events, each with its raw data, and
 // calls fn until it returns false or the stream ends.
 func events(r io.Reader, fn func(ev event, raw []byte) bool) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
 	for sc.Scan() {
-		data, ok := bytes.CutPrefix(sc.Bytes(), []byte("data:"))
+		data, ok := sseJSON(sc.Bytes())
 		if !ok {
-			continue
-		}
-		data = bytes.TrimSpace(data)
-		if len(data) == 0 || data[0] != '{' {
 			continue
 		}
 		var ev event
@@ -363,9 +373,20 @@ func planMessage(e apiErr) string {
 	return cmpString(e.Message, e.Code)
 }
 
-// chatCompletion assembles a finished response as a chat completion, from
-// the items its stream sent, or else its output.
-func chatCompletion(r *responseObject, items []outputItem, created int64) map[string]any {
+// chatToolCall is a function call in chat completions' terms.
+func chatToolCall(o outputItem) map[string]any {
+	return map[string]any{"id": o.CallID, "type": "function",
+		"function": map[string]string{"name": o.Name, "arguments": cmpString(o.Arguments, "{}")}}
+}
+
+// chatUsage is a response's token counts in chat completions' terms.
+func chatUsage(in, out int64) map[string]int64 {
+	return map[string]int64{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}
+}
+
+// answerParts is a finished response's text and function calls, from the
+// items its stream sent, or else its output.
+func answerParts(r *responseObject, items []outputItem) (string, []map[string]any) {
 	if len(items) == 0 {
 		items = r.Output
 	}
@@ -380,13 +401,19 @@ func chatCompletion(r *responseObject, items []outputItem, created int64) map[st
 				}
 			}
 		case "function_call":
-			calls = append(calls, map[string]any{"id": o.CallID, "type": "function",
-				"function": map[string]string{"name": o.Name, "arguments": cmpString(o.Arguments, "{}")}})
+			calls = append(calls, chatToolCall(o))
 		}
 	}
+	return b.String(), calls
+}
+
+// chatCompletion assembles a finished response as a chat completion, from
+// the items its stream sent, or else its output.
+func chatCompletion(r *responseObject, items []outputItem, created int64) map[string]any {
+	text, calls := answerParts(r, items)
 	msg := map[string]any{"role": "assistant", "content": nil}
-	if b.Len() > 0 {
-		msg["content"] = b.String()
+	if text != "" {
+		msg["content"] = text
 	}
 	if len(calls) > 0 {
 		msg["tool_calls"] = calls
@@ -394,8 +421,7 @@ func chatCompletion(r *responseObject, items []outputItem, created int64) map[st
 	out := map[string]any{"id": "chatcmpl-" + r.ID, "object": "chat.completion", "created": created, "model": r.Model,
 		"choices": []map[string]any{{"index": 0, "message": msg, "finish_reason": finishReason(r, len(calls) > 0)}}}
 	if u := r.Usage; u != nil {
-		out["usage"] = map[string]int64{"prompt_tokens": u.InputTokens, "completion_tokens": u.OutputTokens,
-			"total_tokens": u.InputTokens + u.OutputTokens}
+		out["usage"] = chatUsage(u.InputTokens, u.OutputTokens)
 	}
 	return out
 }
@@ -464,8 +490,8 @@ func (c *chunker) event(ev event) (done bool, err error) {
 		if ev.Item.Type != "function_call" {
 			return false, nil
 		}
-		call := map[string]any{"index": c.calls, "id": ev.Item.CallID, "type": "function",
-			"function": map[string]string{"name": ev.Item.Name, "arguments": cmpString(ev.Item.Arguments, "{}")}}
+		call := chatToolCall(*ev.Item)
+		call["index"] = c.calls
 		c.calls++
 		return false, c.chunk(map[string]any{"tool_calls": []any{call}}, nil)
 	case "response.completed", "response.incomplete":
@@ -475,14 +501,12 @@ func (c *chunker) event(ev event) (done bool, err error) {
 		}
 		if !c.sentText && c.calls == 0 {
 			// No deltas came: send the whole answer as one chunk.
-			whole := chatCompletion(r, c.items, c.created)
-			msg := whole["choices"].([]map[string]any)[0]["message"].(map[string]any)
+			text, calls := answerParts(r, c.items)
 			delta := map[string]any{}
-			if msg["content"] != nil {
-				delta["content"] = msg["content"]
+			if text != "" {
+				delta["content"] = text
 			}
-			if tc, ok := msg["tool_calls"]; ok {
-				calls := tc.([]map[string]any)
+			if len(calls) > 0 {
 				for i := range calls {
 					calls[i]["index"] = i
 				}
@@ -500,8 +524,7 @@ func (c *chunker) event(ev event) (done bool, err error) {
 		}
 		if c.usage && r.Usage != nil {
 			if err := c.write(map[string]any{"id": "chatcmpl-" + c.id, "object": "chat.completion.chunk", "created": c.created,
-				"model": c.model, "choices": []any{}, "usage": map[string]int64{"prompt_tokens": r.Usage.InputTokens,
-					"completion_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.InputTokens + r.Usage.OutputTokens}}); err != nil {
+				"model": c.model, "choices": []any{}, "usage": chatUsage(r.Usage.InputTokens, r.Usage.OutputTokens)}); err != nil {
 				return true, err
 			}
 		}
