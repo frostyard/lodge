@@ -168,15 +168,9 @@ func (t *usageTap) Write(p []byte) {
 }
 
 func (t *usageTap) sseLine(l []byte) {
-	data, ok := bytes.CutPrefix(bytes.TrimRight(l, "\r"), []byte("data:"))
-	if !ok {
-		return
+	if data, ok := sseJSON(l); ok {
+		t.usageFrom(data)
 	}
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 || data[0] != '{' {
-		return
-	}
-	t.usageFrom(data)
 }
 
 // Finish reads a whole answer's usage.
