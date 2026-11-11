@@ -269,7 +269,10 @@ them rather than improvising, whichever agent you are:
   local path
   ([app contract, Versioning](docs/specs/app-contract.md#versioning)).
   After a library tag, bump each app that needs it in a PR of its own, by
-  that app's AGENTS.md. Snosi uses lodge's `.deb`.
+  that app's AGENTS.md. Snosi uses lodge's `.deb`. The shell is not one of
+  these apps: it links `../client` and `../ui`, so a change there reaches
+  it at lodge's next build, with no tag. A doc that says who must bump to
+  a library tag names only the 4 apps.
 
 ## Repository baseline
 

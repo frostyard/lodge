@@ -4,10 +4,13 @@
 
    The colour values are frostmail's (app/src/styles/tokens.css at commit
    4328cb7, 2026-10-21), with the generic extras from frostnotes
-   (app/src/styles/tokens.css at commit 059442d), and one exception: the
+   (app/src/styles/tokens.css at commit 059442d), and two exceptions. The
    accent, its contrast colour and the focus ring are frostyard's cold blue
-   (ADR-0019). A change to a value is a look change: it ships as a minor
-   release before 1.0 and says so in the changelog.
+   (ADR-0019). The three text tokens are not frostmail's either: each one
+   reaches a contrast of 4.5:1 on every surface, in the light and in the dark
+   (ADR-0021, test/contrast.test.ts checks it). A change to a value is a look
+   change: it ships as a minor release before 1.0 and says so in the
+   changelog.
 
    The domain tokens (flags, quotes, avatars) are in accents.css, so an app
    that does not use them does not take them. */
@@ -19,8 +22,8 @@
   --bg-toolbar: #f7f7f8;
   --bg-banner: #f5f5f7;
   --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: #a1a1a6;
+  --text-secondary: #5b5b60;
+  --text-tertiary: #6c6c71;
   --separator: #e3e3e6;
   --accent: #2c6380;
   --accent-contrast: #ffffff;
@@ -54,8 +57,8 @@
     --bg-toolbar: #2c2c2e;
     --bg-banner: #2c2c2e;
     --text-primary: #f5f5f7;
-    --text-secondary: #a1a1a6;
-    --text-tertiary: #6e6e73;
+    --text-secondary: #aaaaaf;
+    --text-tertiary: #95959a;
     --separator: #3a3a3c;
     --accent: #47b8ef;
     --accent-contrast: #02131f;
@@ -77,8 +80,8 @@
   --bg-toolbar: #2c2c2e;
   --bg-banner: #2c2c2e;
   --text-primary: #f5f5f7;
-  --text-secondary: #a1a1a6;
-  --text-tertiary: #6e6e73;
+  --text-secondary: #aaaaaf;
+  --text-tertiary: #95959a;
   --separator: #3a3a3c;
   --accent: #47b8ef;
   --accent-contrast: #02131f;

@@ -10,8 +10,15 @@
 //
 // The accent, its contrast colour and the focus ring are not frostmail's:
 // they are frostyard's cold blue, chosen on 2026-10-21 (ADR-0019), and this
-// fixture holds them at that decision's values. Every other token below is
-// frostmail's.
+// fixture holds them at that decision's values.
+//
+// The text tokens are not frostmail's either: they are 0.7.0's contrast
+// values, chosen on 2026-11-10 so that each one reaches 4.5:1 on every
+// surface (ADR-0021). frostmail had `#6e6e73` and `#a1a1a6` in the light,
+// and `#a1a1a6` and `#6e6e73` in the dark. `--badge-text` keeps frostmail's
+// own value.
+//
+// Every other token below is frostmail's.
 //
 // frostnotes: app/src/styles/tokens.css at commit
 // 059442da0eee8127c43d6dd175627c4b087976ef (2026-10-21), the generic extras
@@ -27,8 +34,8 @@ export const frostmail: Record<string, Value> = {
   "--bg-toolbar": { light: "#f7f7f8", dark: "#2c2c2e" },
   "--bg-banner": { light: "#f5f5f7", dark: "#2c2c2e" },
   "--text-primary": { light: "#1d1d1f", dark: "#f5f5f7" },
-  "--text-secondary": { light: "#6e6e73", dark: "#a1a1a6" },
-  "--text-tertiary": { light: "#a1a1a6", dark: "#6e6e73" },
+  "--text-secondary": { light: "#5b5b60", dark: "#aaaaaf" },
+  "--text-tertiary": { light: "#6c6c71", dark: "#95959a" },
   "--separator": { light: "#e3e3e6", dark: "#3a3a3c" },
   "--accent": { light: "#2c6380", dark: "#47b8ef" },
   "--accent-contrast": { light: "#ffffff", dark: "#02131f" },

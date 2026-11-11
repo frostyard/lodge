@@ -370,8 +370,11 @@ allow a login or a node, issue a token, or reload the apps
   frostmail's values unchanged; the apps moved to it one at a time, and
   0.5.0 made the look change as token values only
   ([ADR-0019](../adr/0019-the-accent-is-frostyards-cold-blue.md): the accent
-  is frostyard's cold blue). The latest is 0.6.0, which adds
-  `WindowControls` and `Prompt`. **The shell takes the same look**: its cream and green, on `system-ui`, became the package's tokens
+  is frostyard's cold blue). The latest tag is 0.6.0, which adds
+  `WindowControls` and `Prompt`. 0.7.0 makes the text tokens reach 4.5:1
+  on every surface
+  ([ADR-0021](../adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)),
+  as token values only. **The shell takes the same look**: its cream and green, on `system-ui`, became the package's tokens
   and Inter ([shell.md](../specs/shell.md#colours-and-type)), with its
   manifest colours and home-screen icons moved with them.
 
