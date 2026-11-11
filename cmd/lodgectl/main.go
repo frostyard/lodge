@@ -267,16 +267,9 @@ func parseUsage(args []string) (command, error) {
 }
 
 func showUsage(o *out, raw []byte) error {
-	var list []inference.Sum
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, u := range list {
-		rows = append(rows, []string{u.App, u.Alias, fmt.Sprint(u.Requests), fmt.Sprint(u.Failures), fmt.Sprint(u.Input), fmt.Sprint(u.Output)})
-	}
-	table(o.stdout, "APP\tALIAS\tREQUESTS\tFAILURES\tINPUT TOKENS\tOUTPUT TOKENS", rows)
-	return nil
+	return showList(o, raw, "APP\tALIAS\tREQUESTS\tFAILURES\tINPUT TOKENS\tOUTPUT TOKENS", func(u inference.Sum) []string {
+		return []string{u.App, u.Alias, fmt.Sprint(u.Requests), fmt.Sprint(u.Failures), fmt.Sprint(u.Input), fmt.Sprint(u.Output)}
+	})
 }
 
 func showDone(what string) func(*out, []byte) error {
@@ -317,6 +310,21 @@ func table(w io.Writer, header string, rows [][]string) {
 		fmt.Fprintln(tw, strings.Join(r, "\t"))
 	}
 	tw.Flush()
+}
+
+// showList prints raw, a JSON list of T, as a table of header and one row
+// per item, which row makes.
+func showList[T any](o *out, raw []byte, header string, row func(T) []string) error {
+	var list []T
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	var rows [][]string
+	for _, v := range list {
+		rows = append(rows, row(v))
+	}
+	table(o.stdout, header, rows)
+	return nil
 }
 
 // here is the machine's time zone, for printing times.
@@ -392,12 +400,7 @@ func nodeState(n control.Node) string {
 }
 
 func showApps(o *out, raw []byte) error {
-	var list []apps.App
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, a := range list {
+	return showList(o, raw, "ID\tNAME\tVERSION\tKEY\tSTATE\tFLAGS\tREASON", func(a apps.App) []string {
 		m := a.Manifest
 		var flags []string
 		for f, on := range map[string]bool{"content": m.Content, "contentLinks": m.ContentLinks, "device": m.Device, "mcp": m.MCP, "remoteImages": m.RemoteImages, "companion": m.Companion} {
@@ -407,62 +410,32 @@ func showApps(o *out, raw []byte) error {
 		}
 		slices.Sort(flags)
 		why := slices.DeleteFunc(append([]string{a.Reason}, a.Notes...), func(s string) bool { return s == "" })
-		rows = append(rows, []string{a.ID, m.Name, m.Version, cmp(a.Key, "-"), string(a.State), strings.Join(flags, ","), strings.Join(why, "; ")})
-	}
-	table(o.stdout, "ID\tNAME\tVERSION\tKEY\tSTATE\tFLAGS\tREASON", rows)
-	return nil
+		return []string{a.ID, m.Name, m.Version, cmp(a.Key, "-"), string(a.State), strings.Join(flags, ","), strings.Join(why, "; ")}
+	})
 }
 
 func showLogins(o *out, raw []byte) error {
-	var list []allow.Login
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, l := range list {
-		rows = append(rows, []string{l.Login, when(l.Added)})
-	}
-	table(o.stdout, "LOGIN\tADDED", rows)
-	return nil
+	return showList(o, raw, "LOGIN\tADDED", func(l allow.Login) []string {
+		return []string{l.Login, when(l.Added)}
+	})
 }
 
 func showNodes(o *out, raw []byte) error {
-	var list []allow.Node
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, n := range list {
-		rows = append(rows, []string{n.ID, cmp(n.Name, "-"), when(n.Added)})
-	}
-	table(o.stdout, "ID\tNAME\tADDED", rows)
-	return nil
+	return showList(o, raw, "ID\tNAME\tADDED", func(n allow.Node) []string {
+		return []string{n.ID, cmp(n.Name, "-"), when(n.Added)}
+	})
 }
 
 func showTokens(o *out, raw []byte) error {
-	var list []tokens.Token
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, t := range list {
-		rows = append(rows, []string{t.Name, t.App, t.Scope, cmp(t.Agent, "-"), when(t.Created), when(t.LastUsed), when(t.Revoked)})
-	}
-	table(o.stdout, "NAME\tAPP\tSCOPE\tAGENT\tCREATED\tLAST USE\tREVOKED", rows)
-	return nil
+	return showList(o, raw, "NAME\tAPP\tSCOPE\tAGENT\tCREATED\tLAST USE\tREVOKED", func(t tokens.Token) []string {
+		return []string{t.Name, t.App, t.Scope, cmp(t.Agent, "-"), when(t.Created), when(t.LastUsed), when(t.Revoked)}
+	})
 }
 
 func showSessions(o *out, raw []byte) error {
-	var list []sessions.Info
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, s := range list {
-		rows = append(rows, []string{s.ID, s.App, s.Login, s.NodeName, when(s.Started), s.SeenAt.In(here()).Format("15:04:05")})
-	}
-	table(o.stdout, "ID\tAPP\tLOGIN\tNODE\tSTARTED\tSEEN", rows)
-	return nil
+	return showList(o, raw, "ID\tAPP\tLOGIN\tNODE\tSTARTED\tSEEN", func(s sessions.Info) []string {
+		return []string{s.ID, s.App, s.Login, s.NodeName, when(s.Started), s.SeenAt.In(here()).Format("15:04:05")}
+	})
 }
 
 func showImported(name string) func(*out, []byte) error {
@@ -480,14 +453,7 @@ func showImported(name string) func(*out, []byte) error {
 }
 
 func showModels(o *out, raw []byte) error {
-	var list []inference.Model
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return err
-	}
-	var rows [][]string
-	for _, m := range list {
-		rows = append(rows, []string{m.ID, m.Name})
-	}
-	table(o.stdout, "MODEL\tNAME", rows)
-	return nil
+	return showList(o, raw, "MODEL\tNAME", func(m inference.Model) []string {
+		return []string{m.ID, m.Name}
+	})
 }
