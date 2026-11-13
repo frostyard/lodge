@@ -32,6 +32,21 @@ func render(t *testing.T, args ...string) (string, error) {
 	return string(out), err
 }
 
+// git runs git in dir with no user or system configuration, and returns
+// its output.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com",
+		"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
 // gocmd runs go in dir, offline: the rendered app builds on this
 // checkout's kit, from the module cache the kit's own gates filled.
 func gocmd(t *testing.T, dir string, args ...string) {
@@ -88,7 +103,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 	}
 
 	app := filepath.Join(t.TempDir(), "tasks")
-	if out, err := render(t, app, "tasks", "Tasks", "", "t"); err != nil {
+	if out, err := render(t, app, "tasks", "Tasks", "", "t", "", "client/v0.3.2"); err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
 	err = filepath.WalkDir(app, func(path string, d fs.DirEntry, err error) error {
@@ -113,7 +128,7 @@ func TestTheScaffoldPassesTheSocketRules(t *testing.T) {
 
 	t.Run("the web bundle", func(t *testing.T) {
 		for path, want := range map[string]string{
-			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.2.0&path:client"`,
+			"web/package.json":        `"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.3.2&path:client"`,
 			"web/vite.config.ts":      `base: "/app/tasks/"`,
 			"web/src/main.ts":         `connectLodge({ app: "tasks" })`,
 			"web/index.html":          `<script type="module" src="/src/main.ts"></script>`,
@@ -249,7 +264,7 @@ func TestRenderRefuses(t *testing.T) {
 		{filepath.Join(dir, "k"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v0.1"},
 		{filepath.Join(dir, "l"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v01.0.0"},
 		{filepath.Join(dir, "m"), "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v0.1.0&x"},
-		{full, "tasks", "Tasks"},
+		{full, "tasks", "Tasks", "frosttasks", "t", "example.com/tasks", "client/v0.3.2"},
 	} {
 		if out, err := render(t, args...); err == nil {
 			t.Errorf("render %v succeeded: %s", args[1:], out)
@@ -273,10 +288,54 @@ func TestRenderPinsACommit(t *testing.T) {
 	}
 }
 
+// Without LODGE_REF, render.sh takes the newest client release of the
+// checkout it runs from: a prerelease and the other series' tags lose.
+func TestRenderDefaultsToTheNewestClientTag(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.CopyFS(filepath.Join(repo, "skill"), os.DirFS(skill(t))); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	git(t, repo, "commit", "-q", "--allow-empty", "-m", "test")
+	for _, tag := range []string{"client/v0.9.1", "client/v0.10.0", "client/v0.11.0-rc.1", "kit/v1.0.0", "ui/v2.0.0"} {
+		git(t, repo, "tag", tag)
+	}
+	app := filepath.Join(t.TempDir(), "tasks")
+	if out, err := exec.Command("sh", filepath.Join(repo, "skill", "render.sh"), app, "tasks", "Tasks").CombinedOutput(); err != nil {
+		t.Fatalf("render: %v\n%s", err, out)
+	}
+	want := `github:frostyard/lodge#client/v0.10.0&path:client`
+	if got := read(t, filepath.Join(app, "web/package.json")); !strings.Contains(got, want) {
+		t.Errorf("web/package.json lacks %s", want)
+	}
+}
+
+// A skill copied outside any repository finds no client tag: render.sh
+// refuses, says how to get one, and writes nothing.
+func TestRenderWithoutATagRefuses(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(filepath.Join(dir, "skill"), os.DirFS(skill(t))); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(t.TempDir(), "tasks")
+	cmd := exec.Command("sh", filepath.Join(dir, "skill", "render.sh"), app, "tasks", "Tasks")
+	cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("render succeeded with no client tag:\n%s", out)
+	}
+	if !strings.Contains(string(out), "git fetch --tags") {
+		t.Errorf("render.sh does not say how to get a tag:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(app, "go.mod")); err == nil {
+		t.Error("render wrote go.mod with no client tag")
+	}
+}
+
 // Without a key, the manifest has none, and is still JSON.
 func TestRenderWithoutAKey(t *testing.T) {
 	app := filepath.Join(t.TempDir(), "notes2")
-	if out, err := render(t, app, "notes2", "Notes Two", "frostnotes2", "", "example.com/notes2"); err != nil {
+	if out, err := render(t, app, "notes2", "Notes Two", "frostnotes2", "", "example.com/notes2", "client/v0.3.2"); err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
 	var m map[string]any

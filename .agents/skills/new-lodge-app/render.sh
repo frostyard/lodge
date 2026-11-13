@@ -10,7 +10,8 @@
 #   USER       its system user (default frost<ID>): ^[a-z_][a-z0-9_-]{0,31}$
 #   KEY        its switcher key, one letter, or "" for none (default "")
 #   MODULE     its Go module path (default github.com/frostyard/<USER>)
-#   LODGE_REF  the lodge-client release (client/vX.Y.Z, default client/v0.2.0)
+#   LODGE_REF  the lodge-client release (client/vX.Y.Z; default: the newest
+#              client/vX.Y.Z tag of the lodge checkout render.sh runs from)
 #              or the lodge commit its web bundle pins lodge-client at
 #
 # DEST must not exist, or be empty: render.sh never overwrites a file.
@@ -23,7 +24,7 @@ name=${3:?$usage}
 user=${4:-frost$id}
 key=${5:-}
 module=${6:-github.com/frostyard/$user}
-ref=${7:-client/v0.2.0}
+ref=${7:-}
 here=$(cd "$(dirname "$0")" && pwd)
 
 fail() {
@@ -41,6 +42,11 @@ matches "$user" '[a-z_][a-z0-9_-]{0,31}' || fail "user $user must match ^[a-z_][
 case $user in root | lodge) fail "user $user may not run an app" ;; esac
 [ -z "$key" ] || matches "$key" '[a-z]' || fail "key $key must be one letter, a to z"
 matches "$module" '[A-Za-z0-9._/-]+' || fail "module $module is not a Go module path"
+if [ -z "$ref" ]; then # the newest client release of this checkout
+  ref=$(git -C "$here" tag --list --sort=-v:refname 'client/v*' 2>/dev/null |
+    grep -Ex 'client/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' | head -n 1) || true
+  [ -n "$ref" ] || fail "this checkout has no client/vX.Y.Z tag: run git fetch --tags, or give LODGE_REF"
+fi
 matches "$ref" '[0-9a-f]{7,40}|client/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' ||
   fail "lodge ref $ref is neither a client release (client/vX.Y.Z) nor a commit"
 if [ -e "$dest" ] && [ -n "$(ls -A -- "$dest")" ]; then
