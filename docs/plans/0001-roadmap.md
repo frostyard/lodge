@@ -12,7 +12,8 @@ Status (2026-10-22):
   ahead of that, on the user's go-ahead of 2026-10-18.
 - **Phase 1 is done.** The kit, with the RPC runtime extracted from the
   apps, and the client are tagged (`kit/v0.1.0`, then `kit/v0.2.0` and
-  `client/v0.2.0`; the latest are `kit/v0.3.0` and `client/v0.3.2`), and
+  `client/v0.2.0`; the newest of each series is in the tag list, as
+  [AGENTS.md](../../AGENTS.md#releases-and-dependencies) says), and
   notesd and maild run on the kit.
 - **Phase 2's code is merged, and lodge runs on its first host.** Notes
   moves behind it in frostnotes' plan 0006 Phase 7, from 2026-10-26.
