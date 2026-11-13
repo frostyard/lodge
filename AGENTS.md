@@ -26,17 +26,17 @@ the canonical paths; keep content tool-agnostic.
 
 Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
 2026-10-21. Phases 1 to 3 and 6 are built:
-- the kit and the client, tagged up to `kit/v0.3.1` (`netguard` since
-  `kit/v0.3.0`) and
-  `client/v0.3.2` (with the `rpc` subpath since `client/v0.3.0`);
+- the kit and the client, each in its own tag series
+  ([Releases and dependencies](#releases-and-dependencies)): `netguard`
+  since `kit/v0.3.0`, and the `rpc` subpath since `client/v0.3.0`;
 - lodge v1, which is the gateway, the shell, the development build and
   packaging;
 - the inference layer;
 - lodge's side of the assistant: the agent socket and the companion,
   released in `kit/v0.2.0` and `client/v0.2.0`;
-- the shared UI package, `@frostyard/lodge-ui`, tagged up to `ui/v0.6.0`
-  (2026-10-22): the tokens, the React primitives, and frostyard's cold-blue
-  accent since 0.5.0
+- the shared UI package, `@frostyard/lodge-ui`, in its own tag series
+  `ui/vX.Y.Z`: the tokens, the React primitives, and frostyard's
+  cold-blue accent since 0.5.0
   ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md) and
   [ADR-0019](docs/adr/0019-the-accent-is-frostyards-cold-blue.md), both
   Accepted).
@@ -217,15 +217,23 @@ them rather than improvising, whichever agent you are:
   their own series, and no workflow publishes them. The Makefile's
   `VERSION` (`git describe --tags`, for `make build` and `make dist`)
   takes the nearest tag of any series, so a development build can say
-  `kit/v0.3.1-5-g<commit>`; the release `.deb` takes its version from the
+  `kit/vX.Y.Z-5-g<commit>`; the release `.deb` takes its version from the
   `vX.Y.Z` tag (`DEB_VERSION`). The series:
 
-  | Series | What | Latest |
-  | --- | --- | --- |
-  | `vX.Y.Z` | lodge itself: the daemon, `lodgectl` and the shell, as a `.deb` | `v0.2.0` (2026-11-04); lodge's host runs it since 2026-11-05 ([packaging/README.md](packaging/README.md#update)) |
-  | `kit/vX.Y.Z` | the Go module `github.com/frostyard/lodge/kit` (`kit/`) | `kit/v0.3.1` (2026-10-28) |
-  | `client/vX.Y.Z` | `@frostyard/lodge-client` (`client/`) | `client/v0.3.2` (2026-10-22) |
-  | `ui/vX.Y.Z` | `@frostyard/lodge-ui` (`ui/`) | `ui/v0.6.0` (2026-10-22) |
+  | Series | What |
+  | --- | --- |
+  | `vX.Y.Z` | lodge itself: the daemon, `lodgectl` and the shell, as a `.deb` |
+  | `kit/vX.Y.Z` | the Go module `github.com/frostyard/lodge/kit` (`kit/`) |
+  | `client/vX.Y.Z` | `@frostyard/lodge-client` (`client/`) |
+  | `ui/vX.Y.Z` | `@frostyard/lodge-ui` (`ui/`) |
+
+  The tags are the record of each series, so this file names no latest
+  version. The newest tag of a series is the first line of
+  `git ls-remote --tags --refs --sort=-v:refname origin 'refs/tags/kit/v*'`
+  (or `refs/tags/client/v*`, `refs/tags/ui/v*` and, for lodge itself,
+  `refs/tags/v[0-9]*`), or GitHub > frostyard/lodge > Tags.
+  [packaging/README.md](packaging/README.md#update) records the release
+  that lodge's host runs.
 
 - **lodge's release.** `make bump` is the only way to push a `vX.Y.Z` tag.
   It runs on `main` when the tree is clean and equal to `origin/main`,
@@ -243,10 +251,11 @@ them rather than improvising, whichever agent you are:
 - **A library's release is its tag.** There is no registry, no workflow
   and no GitHub release
   ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)). Brian
-  tags the merge commit on `main` by hand with an annotated tag, for
-  example `kit/v0.3.1`. Each series follows semver, picked by hand from
-  what changed in its folder
-  (`git log --no-merges kit/v0.3.1..origin/main -- kit/`). The PR before
+  tags the merge commit on `main` by hand with an annotated tag of its
+  series, such as `kit/vX.Y.Z`. Each series follows semver, picked by hand
+  from what changed in its folder (for the kit, `git log --no-merges
+  "$(git describe --tags --abbrev=0 --match 'kit/v*' origin/main)"..origin/main
+  -- kit/`). The PR before
   the tag adds the version to [client/CHANGELOG.md](client/CHANGELOG.md)
   or [ui/CHANGELOG.md](ui/CHANGELOG.md); the UI package's semver rules are
   [rule 7 of its spec](docs/specs/ui-package.md#rules). The kit has no
@@ -260,13 +269,12 @@ them rather than improvising, whichever agent you are:
   `mise.toml` and `mise.lock`, and Node in each workflow's `NODE_VERSION`
   and `dev/nsl/provision.sh`.
 - **Who uses it.** frostnotes, frostmail, frostread and Porter pin the
-  kit in `go.mod` (all at `v0.3.1`), and the client and the UI package as
-  pnpm git dependencies (all at `client/v0.3.2` and `ui/v0.6.0`):
-  frostnotes and frostmail in `app/package.json`, frostread and Porter in
-  `web/package.json`, for example
-  `github:frostyard/lodge#ui/v0.6.0&path:ui`. Today every app pins a tag.
-  The contract lets an app pin a published commit or release, never a
-  local path
+  kit in `go.mod`, and the client and the UI package as pnpm git
+  dependencies: frostnotes and frostmail in `app/package.json`, frostread
+  and Porter in `web/package.json`, for example
+  `github:frostyard/lodge#ui/vX.Y.Z&path:ui`. Today every app pins a tag;
+  each app's `go.mod` and `package.json` say which. The contract lets an
+  app pin a published commit or release, never a local path
   ([app contract, Versioning](docs/specs/app-contract.md#versioning)).
   After a library tag, bump each app that needs it in a PR of its own, by
   that app's AGENTS.md. Snosi uses lodge's `.deb`. The shell is not one of

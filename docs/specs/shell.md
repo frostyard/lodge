@@ -92,6 +92,10 @@ resolve the light or dark value from the `data-theme` the shell sets
 - **The manifest names the same colours**, as ADR-0008 requires:
   `background_color` is the window's background (`#ffffff`), and
   `theme_color` the chrome (`#f2f2f4`).
+- **The page's `theme-color` metas name the chrome too:** `#f2f2f4` light
+  and `#2a2a2c` dark, the token `--bg-sidebar`. A mobile browser takes them
+  over the manifest. `test/theme-color.test.ts` checks the metas and the
+  manifest against the UI package's tokens.
 - **The home-screen icons** are drawn from the accent (`#007aff`) and the
   window's background (`#ffffff`), by `scripts/icons.mjs`.
 
