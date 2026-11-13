@@ -38,7 +38,9 @@ Contracts: [specs/app-contract.md](../specs/app-contract.md),
   development build and packaging) and the inference layer are merged, and
   run on lodge's first host.
 - Claude Code's checks on `/mcp` passed (2026-10-19). The checks on the
-  user's phone and Chrome's PDF viewer are not done. The Codex provider
+  user's phone are not done. Chromium's PDF viewer drew a PDF under
+  lodge-content's sandbox (2026-11-13), so no PDF exception is pinned
+  ([lodge-http.md](../specs/lodge-http.md#content-routes)). The Codex provider
   (the owner's ChatGPT plan) is built
   ([ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md)),
   and so is the Copilot provider (the owner's Copilot plan,
