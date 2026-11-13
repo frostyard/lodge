@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "node-types",
+  "correction": "@types/node must keep the Node major that CI and the nsl machine run (NODE_VERSION); Dependabot proposed 24 -> 26 in the ui-npm group while Node stays 24.21.0",
+  "evidence": "lodge#53, triage of head b8eaadb: ui/package.json @types/node 26.6.6 against NODE_VERSION 24.21.0",
+  "promoted_to": "internal/workflowcheck/nodetypes_test.go"
+}

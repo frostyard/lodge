@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-05",
+  "scope": "packaging-readme",
+  "correction": "a quoted version line in prose must name the command that prints it: lodge --version prints lodge X.Y.Z (commit), but lodgectl version prints lodgectl X.Y.Z (commit)",
+  "evidence": "lodge#47, cross-review (openai/gpt-6.1-sol) of head 3fc8e01, finding 1",
+  "promoted_to": "internal/packagecheck/readme_test.go"
+}

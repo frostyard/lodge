@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "risk-paths",
+  "correction": "a guard that a required path matches a glob must also check that the path exists: a wide glob such as .github/workflows/** still matches the name of a deleted caller",
+  "evidence": "lodge#49, cross-review (openai/gpt-6.1-sol) of head 93a6ccc, finding 2",
+  "promoted_to": "internal/workflowcheck/baseline_test.go"
+}
