@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-10",
+  "scope": "ui-package-consumers",
+  "correction": "the shell takes client/ and ui/ from lodge's checkout (link:), not from a tag: a doc must not list it among the apps that bump to a library tag",
+  "evidence": "lodge#62, cross-review (openai/gpt-6.1-sol) of head 17ea75f, finding 1: ADR-0021 listed the shell with the apps that bump to ui/v0.7.0",
+  "promoted_to": "AGENTS.md"
+}

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "node-types",
+  "correction": "a check of workflow values must read the parsed YAML (workflows(t)), not match text lines: a quoted key such as \"NODE_VERSION\" or a .yaml workflow passes a line pattern in silence",
+  "evidence": "lodge#55, cross-review (openai/gpt-6.1-sol) of head 7ad33d7, finding 1",
+  "promoted_to": "internal/workflowcheck/nodetypes_test.go"
+}

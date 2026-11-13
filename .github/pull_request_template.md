@@ -36,4 +36,4 @@ Risk tier: 1 — <!-- justification -->
 - [ ] The apps that pin the kit, the client or the UI package still build on it, for a change under `kit/`, `client/` or `ui/` that a tag will carry
 - [ ] Revert test for a fix: the new test fails with the fix reverted; command: <!-- name it -->
 - [ ] Workflows changed: every action is SHA-pinned with `# vX.Y.Z`, `permissions: {}`, and `persist-credentials: false`
-- [ ] Blocking review point fixed: guard added and 1 `.memory/corrections.jsonl` line added
+- [ ] Blocking review point fixed: guard added and 1 file added under `.memory/corrections/`
