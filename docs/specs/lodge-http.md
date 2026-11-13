@@ -422,11 +422,18 @@ response it adds:
 - `Cache-Control` is `private, no-cache` when the app sends none.
 - A content URL may be opened as a top-level page in a new tab, and is
   sandboxed there too.
-- **PDFs:** no exception is pinned. *Verify review item 12 in Phase 2.* If
-  Chrome's viewer refuses a sandboxed PDF, this section gains an exception
-  for `application/pdf` that keeps `default-src 'none'` and drops
-  `sandbox`. Until then apps offer a download link (`Content-Disposition:
-  attachment`).
+- **PDFs:** no exception. A PDF gets the same policy, `sandbox`
+  included, as every content response: lodge's policy does not depend on
+  the `Content-Type` (`ContentPolicy` and `contentHeaders` in
+  [headers.go](../../internal/gateway/headers.go)). Review item 12 is
+  answered (2026-11-13,
+  [frostnotes' plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md#open-questions)):
+  a 1-page PDF served with this section's headers, `sandbox` included,
+  opened as a top-level page in Chromium 156 on Linux, and the viewer drew
+  it as it does without the headers; only its page thumbnail stayed blank.
+  That check ran on loopback, not through lodge, and not in the user's
+  Chrome. An app may also offer a download link (`Content-Disposition:
+  attachment`), as notes does.
 
 ### `/mcp/<id>`
 

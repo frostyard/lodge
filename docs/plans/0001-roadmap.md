@@ -178,8 +178,12 @@ lodge itself, with frostnotes' M4 moving notes behind it. Implements
     - It first probes MCP 2026-07-28's `server/discover`. The kit answers
       that 400, and Claude Code falls back to `initialize`;
   - Chrome's viewer with a sandboxed PDF in a new tab (review item 12), and
-    images and media in a new tab. The PDF exception in lodge-http.md is
-    decided here;
+    images and media in a new tab. **The PDF part is answered
+    (2026-11-13):** Chromium 156 on Linux drew a PDF under lodge-content's
+    headers, `sandbox` included, so lodge-http.md pins no PDF exception
+    ([content routes](../specs/lodge-http.md#content-routes)). That check
+    ran on loopback, not through lodge, and not in the user's Chrome.
+    Images and media in a new tab are not recorded;
   - that nothing reaches Tailscale's log host in the live run (M6);
   - that Add to Home Screen opens standalone, with `viewport-fit=cover` and
     the safe area (L13);
