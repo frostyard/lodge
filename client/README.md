@@ -10,8 +10,13 @@ Apps pin it to a release, a lodge tag `client/vX.Y.Z`, as a pnpm git
 dependency in this subdirectory:
 
 ```json
-"@frostyard/lodge-client": "github:frostyard/lodge#client/v0.2.0&path:client"
+"@frostyard/lodge-client": "github:frostyard/lodge#client/vX.Y.Z&path:client"
 ```
+
+Take the newest `client/v*` tag: the first line of
+`git ls-remote --tags --refs --sort=-v:refname https://github.com/frostyard/lodge 'refs/tags/client/v*'`,
+or GitHub > frostyard/lodge > Tags. An older tag can lack what this page
+describes: the `rpc` subpath is in `client/v0.3.0` and later.
 
 Between releases an app may pin a pushed lodge commit in its place
 (`#<commit>&path:client`). The Go kit has its own tags, `kit/vX.Y.Z`.

@@ -169,8 +169,10 @@ The shared type roles, at frostmail's sizes: `text-list-sender`,
 ## How an app consumes it
 
 ```json
-"@frostyard/lodge-ui": "github:frostyard/lodge#ui/v0.1.0&path:ui"
+"@frostyard/lodge-ui": "github:frostyard/lodge#ui/vX.Y.Z&path:ui"
 ```
+
+`ui/vX.Y.Z` is the newest `ui/v*` tag ([README](../../ui/README.md#how-an-app-takes-it)).
 
 ```css
 @import "tailwindcss";

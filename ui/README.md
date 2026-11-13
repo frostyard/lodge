@@ -19,8 +19,13 @@ Pin it to a release, a lodge tag `ui/vX.Y.Z`, as a pnpm git dependency in
 this subdirectory, as the apps pin `@frostyard/lodge-client`:
 
 ```json
-"@frostyard/lodge-ui": "github:frostyard/lodge#ui/v0.1.0&path:ui"
+"@frostyard/lodge-ui": "github:frostyard/lodge#ui/vX.Y.Z&path:ui"
 ```
+
+Take the newest `ui/v*` tag: the first line of
+`git ls-remote --tags --refs --sort=-v:refname https://github.com/frostyard/lodge 'refs/tags/ui/v*'`,
+or GitHub > frostyard/lodge > Tags. An older tag can lack what this page
+describes: [CHANGELOG.md](CHANGELOG.md) says what each version added.
 
 Between releases an app may pin a pushed lodge commit instead
 (`#<commit>&path:ui`). The shell takes it from the checkout, with
