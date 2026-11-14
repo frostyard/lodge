@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build vulncheck deb deb-check bump svu-version-check
+.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build site site-serve vulncheck deb deb-check bump svu-version-check
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -163,6 +163,22 @@ shell-fmt: ## Format shell/ and organize its imports with Biome (nsl)
 
 shell-build: ## Build the shell into shell/dist/ (nsl)
 	$(IN_NSL) 'cd shell && pnpm install --frozen-lockfile --silent && pnpm run build'
+
+# The documentation site (site/, core ADR-0070), built with pinned ProperDocs
+# and MaterialX in a Python venv under build/. No gate (check, verify, ci)
+# builds it, so a change that does not touch site/ needs no Python toolchain.
+SITE_VENV := build/site-venv
+
+$(SITE_VENV)/bin/properdocs: site/requirements.txt
+	python3 -m venv $(SITE_VENV)
+	$(SITE_VENV)/bin/pip install -q --require-hashes -r site/requirements.txt
+	touch $@
+
+site: $(SITE_VENV)/bin/properdocs ## Build the documentation site into site/dist/ (strict; python3)
+	$(SITE_VENV)/bin/properdocs build --strict -f site/properdocs.yml
+
+site-serve: $(SITE_VENV)/bin/properdocs ## Preview the documentation site at http://127.0.0.1:8000/lodge/
+	$(SITE_VENV)/bin/properdocs serve -f site/properdocs.yml
 
 # Pinned svu, from mise.toml (core ADR-0043). `svu --version` prints a
 # "GitVersion:    MAJOR.MINOR.PATCH" line.

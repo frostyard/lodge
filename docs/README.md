@@ -1,5 +1,8 @@
 # Documentation
 
+User documentation is the site, <https://frostyard.github.io/lodge/>, with
+its source in `site/`. This directory holds the maintainers' docs.
+
 Docs are split by the question they answer (frostyard/core ADR-0025):
 
 | Directory | Question | Contents |

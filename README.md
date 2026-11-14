@@ -11,7 +11,7 @@ daemons.
 
 **Status:** pre-release. Notes, Mail, Read and Porter run behind it.
 
-**Documentation:** [docs/README.md](docs/README.md)
+**Documentation:** [frostyard.github.io/lodge](https://frostyard.github.io/lodge/)
 
 ## What it does
 
