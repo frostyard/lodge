@@ -127,6 +127,10 @@ Everything in the map is built.
 - `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
   build with three `dev/fakeapp` apps, one of them the companion, for
   smoke tests in a browser).
+- `site/`: the user documentation site (ProperDocs and MaterialX, core
+  ADR-0070). `make site` builds it (strict) and `make site-serve` previews
+  it. `.github/workflows/site.yml` deploys it to
+  `https://frostyard.github.io/lodge/`. `docs/` stays the maintainers' docs.
 - `internal/repocheck`: tests of the repository's rules. Relative links
   resolve, every doc has an index line, no private host is named, and
   `kit/` keeps its import boundary.
@@ -375,3 +379,5 @@ anchors valid) and add the back-links on the targets. Use relative paths.
 - New significant decision ⇒ new ADR *first*, then update the affected design
   docs/specs in the same change.
 - Convert relative dates ("next weekend") to absolute dates in all docs.
+- A change to user-visible behavior updates the affected page in
+  `site/content/` in the same pull request.
