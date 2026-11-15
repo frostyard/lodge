@@ -1,17 +1,20 @@
 # The apps it hosts
 
-lodge shows 4 first-party apps. Each one is a daemon of its own behind
+lodge shows 3 first-party apps. Each one is a daemon of its own behind
 lodge.
 
 | App | What it is | Pages |
 | --- | --- | --- |
 | Notes | frostnotes: notes as plain markdown files, with sync, and MCP for agents. | [frostyard.org](https://frostyard.org/docs/apps/frostnotes/), [repository](https://github.com/frostyard/frostnotes) |
 | Mail | frostmail: mail, contacts, calendars and tasks, kept in a daemon. | [frostyard.org](https://frostyard.org/docs/apps/frostmail/), [repository](https://github.com/frostyard/frostmail) |
-| Read | frostread: a feed reader and a read-later list. | [frostyard.org](https://frostyard.org/docs/apps/frostread/), [repository](https://github.com/frostyard/frostread) |
 | Porter | The assistant: a chat panel beside the app you are in. It reaches the other apps through their MCP endpoints. | [frostyard.org](https://frostyard.org/docs/apps/porter/), [repository](https://github.com/frostyard/porter) |
 
-frostnotes, frostmail and frostread also work on their own as desktop apps.
+frostnotes and frostmail also work on their own as desktop apps.
 lodge is optional for them.
+
+frostread, the feed reader (app `read`), is retired since 2026-11-15. A
+lodge that still has its package lists it until you remove the package
+and run `sudo lodgectl reload`.
 
 ## How an app arrives
 

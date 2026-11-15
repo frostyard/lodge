@@ -1,7 +1,7 @@
 # Spec: the UI package, `@frostyard/lodge-ui`
 
 What `ui/` exports, and the rules an app that consumes it must keep. Its
-consumers: frostmail, frostnotes, frostread, the shell and Porter, each of
+consumers: frostmail, frostnotes, the shell and Porter, each of
 which bundles its own copy at build time.
 
 Rationale: [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md). Where

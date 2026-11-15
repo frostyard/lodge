@@ -1,7 +1,7 @@
 # frostyard/lodge
 
 lodge is a tailnet-only web shell for frostyard's first-party apps:
-frostnotes, frostmail, frostread and the personal-assistant agent Porter.
+frostnotes, frostmail and the personal-assistant agent Porter.
 It gives them one address with a quick switcher, and each app runs in a
 frame that stays loaded. lodge is the only process on the network. Each
 app is a daemon on a Unix socket behind it. lodge also holds what the apps
@@ -40,13 +40,16 @@ Pre-release. The ADRs (2026-10-18 to 2026-10-20) were accepted on
   ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md) and
   [ADR-0019](docs/adr/0019-the-accent-is-frostyards-cold-blue.md), both
   Accepted).
-- **frostread, the third app, is built and deployed on lodge's host on
-  2026-10-21** ([its PRs](https://github.com/frostyard/frostread/pulls)); the
-  repository is public since 2026-10-23. Its reader is lodge's
-  app `read`; its fetcher uses the kit's `netguard`
+- **frostread, the third app, is retired on 2026-11-15**: a general feed
+  reader covers its use. It was built and deployed on lodge's host on
+  2026-10-21 ([its PRs](https://github.com/frostyard/frostread/pulls)) as
+  lodge's app `read`. On lodge's host its service is stopped and its
+  package removed, so lodge no longer lists `read`; its state is kept. Its
+  fetcher was the first user of the kit's `netguard`
   ([ADR-0017](docs/adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md)),
-  and its web app is the first on the UI package
-  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)).
+  and its web app the first on the UI package
+  ([ADR-0018](docs/adr/0018-a-ui-package-beside-the-client.md)). Both stay
+  for the other apps.
 - **Porter, the assistant, runs on lodge's host** on the agent socket and
   the companion (deployed from 2026-10-20;
   [its Deployments](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md#deployments)).
@@ -272,10 +275,10 @@ them rather than improvising, whichever agent you are:
   actions, both Go modules and the 3 npm packages. Tools stay pinned in
   `mise.toml` and `mise.lock`, and Node in each workflow's `NODE_VERSION`
   and `dev/nsl/provision.sh`.
-- **Who uses it.** frostnotes, frostmail, frostread and Porter pin the
+- **Who uses it.** frostnotes, frostmail and Porter pin the
   kit in `go.mod`, and the client and the UI package as pnpm git
-  dependencies: frostnotes and frostmail in `app/package.json`, frostread
-  and Porter in `web/package.json`, for example
+  dependencies: frostnotes and frostmail in `app/package.json`, and
+  Porter in `web/package.json`, for example
   `github:frostyard/lodge#ui/vX.Y.Z&path:ui`. Today every app pins a tag;
   each app's `go.mod` and `package.json` say which. The contract lets an
   app pin a published commit or release, never a local path
@@ -284,7 +287,8 @@ them rather than improvising, whichever agent you are:
   that app's AGENTS.md. Snosi uses lodge's `.deb`. The shell is not one of
   these apps: it links `../client` and `../ui`, so a change there reaches
   it at lodge's next build, with no tag. A doc that says who must bump to
-  a library tag names only the 4 apps.
+  a library tag names only the 3 apps. frostread, retired on 2026-11-15,
+  gets no more bumps.
 
 ## Repository baseline
 
@@ -381,3 +385,9 @@ anchors valid) and add the back-links on the targets. Use relative paths.
 - Convert relative dates ("next weekend") to absolute dates in all docs.
 - A change to user-visible behavior updates the affected page in
   `site/content/` in the same pull request.
+- An app that joins or leaves lodge updates every list of the hosted apps
+  in the same pull request: this file's intro and "Who uses it",
+  `README.md`, `site/content/index.md`, `site/content/guides/apps.md` and
+  `docs/design/overview.md`. Search for the app's display name (such as
+  `Read`) as well as its repository and daemon names (`frostread`,
+  `readd`).

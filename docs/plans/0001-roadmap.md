@@ -415,6 +415,10 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   owner's daily use, beside notes, mail and Porter: frostread is the
   second name in `agents`, and its notes token is scoped to `Reading/` in
   the owner's vault. The repository is public since 2026-10-23.
+  **Retired on 2026-11-15:** a general feed reader covers its use. On
+  lodge's host its service is stopped and disabled and its package is
+  removed, so lodge lists no `read`. Its state and its package are kept
+  for a reinstall, and the articles it saved stay as notes in frostnotes.
 - **The shared UI package.** `@frostyard/lodge-ui` is built: 0.1.0 with
   frostmail's token values unchanged
   ([ADR-0018](../adr/0018-a-ui-package-beside-the-client.md),
