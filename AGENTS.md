@@ -385,3 +385,9 @@ anchors valid) and add the back-links on the targets. Use relative paths.
 - Convert relative dates ("next weekend") to absolute dates in all docs.
 - A change to user-visible behavior updates the affected page in
   `site/content/` in the same pull request.
+- An app that joins or leaves lodge updates every list of the hosted apps
+  in the same pull request: this file's intro and "Who uses it",
+  `README.md`, `site/content/index.md`, `site/content/guides/apps.md` and
+  `docs/design/overview.md`. Search for the app's display name (such as
+  `Read`) as well as its repository and daemon names (`frostread`,
+  `readd`).

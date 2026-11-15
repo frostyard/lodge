@@ -12,7 +12,7 @@ hide:
 
 # One address on your tailnet for your apps
 
-<p class="fy-hero__lede">lodge is a tailnet-only web shell for frostyard's first-party apps. One address opens Notes, Mail, Read and the assistant Porter. A quick switcher moves between them, and each app stays loaded in its frame. lodge runs on 1 Linux host, beside the apps' daemons.</p>
+<p class="fy-hero__lede">lodge is a tailnet-only web shell for frostyard's first-party apps. One address opens Notes, Mail and the assistant Porter. A quick switcher moves between them, and each app stays loaded in its frame. lodge runs on 1 Linux host, beside the apps' daemons.</p>
 
 [Install lodge →](getting-started/install.md){ .md-button .md-button--primary }
 [Configure lodge](guides/configure.md){ .md-button }
@@ -31,7 +31,7 @@ hide:
 
     ---
 
-    `LODGE` (`lodge.<tailnet>.ts.net`) opens Notes, Mail, Read and Porter. A quick switcher moves between them. Each app stays loaded in its frame, so a switch keeps your place.
+    `LODGE` (`lodge.<tailnet>.ts.net`) opens Notes, Mail and Porter. A quick switcher moves between them. Each app stays loaded in its frame, so a switch keeps your place.
 
 -   **Only lodge is on the network**
 
@@ -79,7 +79,7 @@ hide:
 
 - <span class="fy-index">03</span> **[The apps it hosts](guides/apps.md)**
 
-    Notes, Mail, Read and Porter, and how an app arrives.
+    Notes, Mail and Porter, and how an app arrives.
 
 - <span class="fy-index">04</span> **[lodgectl](reference/lodgectl.md)**
 
@@ -93,4 +93,4 @@ hide:
 
 !!! note "Pre-release"
 
-    lodge has no stable release yet. Notes, Mail, Read and Porter run behind it. The [lodge page on frostyard.org](https://frostyard.org/docs/apps/lodge/) names the latest release.
+    lodge has no stable release yet. Notes, Mail and Porter run behind it. The [lodge page on frostyard.org](https://frostyard.org/docs/apps/lodge/) names the latest release.

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "docs",
+  "correction": "An app that leaves (or joins) lodge must be removed from (or added to) every list of the hosted apps, including README.md and site/content/index.md, which name apps by display name (Read), not by repository name (frostread). A search for the repository and daemon names alone misses them.",
+  "evidence": "frostyard/lodge#80, cross-review (openai/gpt-6.1-sol) of head 5151b2f, finding 1",
+  "promoted_to": "AGENTS.md"
+}

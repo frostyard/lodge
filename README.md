@@ -4,12 +4,13 @@
 [![CI](https://github.com/frostyard/lodge/actions/workflows/ci.yml/badge.svg)](https://github.com/frostyard/lodge/actions/workflows/ci.yml)
 
 lodge is a tailnet-only web shell for frostyard's first-party apps: Notes,
-Mail, Read and the assistant Porter, for the people on one owner's tailnet.
+Mail and the assistant Porter, for the people on one owner's tailnet.
 One address opens them all, a quick switcher moves between them, and each
 app stays loaded in its frame. It runs on 1 Linux host, beside the apps'
 daemons.
 
-**Status:** pre-release. Notes, Mail, Read and Porter run behind it.
+**Status:** pre-release. Notes, Mail and Porter run behind it. Read
+(frostread) is retired since 2026-11-15.
 
 **Documentation:** [frostyard.github.io/lodge](https://frostyard.github.io/lodge/)
 
