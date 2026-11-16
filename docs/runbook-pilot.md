@@ -63,8 +63,12 @@ Check each item. A missing item is not a failed line: fix it first.
    **Remove** on each.
 4. The events bridge is on, and Chani follows no topic.
    Expected: Pi Pocket > Menu > Extensions shows `events-bridge.ts` on.
-   Chani's `events_list` shows no subscription. If it shows one, tell
-   Chani to end it with `events_unsubscribe`. If the grants page lists a
+   Chani's `events_list` shows no subscription. If it shows one, write
+   down its topic and mode, to follow it again in
+   [After the run](#after-the-run). An unsubscribe deletes the events that
+   wait in it: let Chani read them with `events_pending` first, or stop
+   here and run the pilot later. Then tell Chani to end it with
+   `events_unsubscribe`. If the grants page lists a
    client `chani` with scope `events` under principal `chani`, the bridge
    is signed in already: L2 then shows no sign-in card (see L2, step 2).
 5. The bookmarklet of frostmarks is in the browser.
@@ -306,6 +310,7 @@ touches the bookmarks of a frostmarks that the computer has already.
    ```sh
    s=$d/frostmarks.sock
    $d/bin/frostmarksd -state-dir "$d/state" -socket "$s" &
+   pid=$!
    $d/bin/marksctl -socket "$s" create-folder /reading
    $d/bin/marksctl -socket "$s" create-bookmark -url https://example.com/ -title Example -folder /reading
    $d/bin/marksctl -socket "$s" list-bookmarks -recursive
@@ -330,7 +335,8 @@ touches the bookmarks of a frostmarks that the computer has already.
    `update_bookmark`, and no sign-in. The search returns the bookmark of
    step 2.
 4. Clean up: run `mcpdo disconnect marks` and `mcpdo daemon stop`, stop
-   this run's daemon (`kill %1`), and remove only this run's directory
+   this run's daemon by its PID (`kill "$pid"; wait "$pid"`), and remove
+   only this run's directory
    (`rm -r "$d"`).
 
 ## L7: an outside developer builds the example app from hearth's README
@@ -367,6 +373,9 @@ To restore Chani's access after L4:
    any (L1, steps 2 to 4).
 3. The next `events_subscribe` of Chani shows the bridge's sign-in card
    again (L2, step 2).
+4. Tell Chani to follow again each topic you wrote down before the run
+   (item 4), with its mode, by `events_subscribe`. The events of the time
+   between do not come back: a new subscription starts at new events.
 
 A new run starts again at [Before the run](#before-the-run): it removes
 the grant items that this run left.
