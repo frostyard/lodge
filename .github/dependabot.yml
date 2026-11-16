@@ -45,6 +45,17 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: npm
+    directory: /dev/mcp-e2e
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      mcp-e2e-npm:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
     directory: /client
     schedule:
       interval: weekly

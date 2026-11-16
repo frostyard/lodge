@@ -1,4 +1,4 @@
-.PHONY: help build e2e-build dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build site site-serve vulncheck deb deb-check bump svu-version-check
+.PHONY: help build e2e-build mcp-e2e dist install fmt lint lint-version-check test race cross verify check ci clean client-check client-fmt ui-check ui-fmt shell-check shell-fmt shell-build site site-serve vulncheck deb deb-check bump svu-version-check
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -26,10 +26,11 @@ build: ## Build lodge into build/
 
 # The development build (docs/specs/lodge-http.md, The development build):
 # loopback only, one fixed identity, no tailnet. Never install it.
-e2e-build: ## Build build/lodge-e2e (e2e tag), build/lodgectl and build/lodge-fakeapp
+e2e-build: ## Build build/lodge-e2e (e2e tag), build/lodgectl, build/lodge-fakeapp and build/lodge-hearthapp
 	CGO_ENABLED=0 go build -trimpath -tags e2e -ldflags '$(LDFLAGS)' -o build/lodge-e2e ./cmd/lodge
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o build/lodgectl ./cmd/lodgectl
 	CGO_ENABLED=0 go build -trimpath -o build/lodge-fakeapp ./dev/fakeapp
+	CGO_ENABLED=0 go build -trimpath -o build/lodge-hearthapp ./dev/hearthapp
 
 # A tarball to install on a host (packaging/install.sh), for linux/DIST_ARCH:
 # the binaries, the shell's bundle and the packaging. The shell builds in
@@ -163,6 +164,12 @@ shell-fmt: ## Format shell/ and organize its imports with Biome (nsl)
 
 shell-build: ## Build the shell into shell/dist/ (nsl)
 	$(IN_NSL) 'cd shell && pnpm install --frozen-lockfile --silent && pnpm run build'
+
+# The MCP gateway's end-to-end tests: the development build with hearth's
+# example app, driven by pi-mcp and by MCP Inspector (dev/mcp-e2e/run.sh).
+# They need the network for their pinned packages, so no gate runs them.
+mcp-e2e: e2e-build ## Run the MCP gateway's end-to-end tests with pi-mcp and MCP Inspector (nsl)
+	$(IN_NSL) 'dev/mcp-e2e/run.sh'
 
 # The documentation site (site/, core ADR-0070), built with pinned ProperDocs
 # and MaterialX in a Python venv under build/. No gate (check, verify, ci)

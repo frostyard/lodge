@@ -111,7 +111,7 @@ Proposed).
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `contract` | int | yes | the contract major this app speaks: `1` |
-| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `lodge`, `mcp`, `nats` or `oauth`; the URL segment |
+| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `gateway`, `lodge`, `mcp`, `nats` or `oauth`; the URL segment |
 | `name` | string | yes | 1 to 32 characters; shown in the rail and the switcher |
 | `icon` | string | yes | a relative path to an SVG file inside `web/` |
 | `version` | string | yes | the app's version, 1 to 64 visible ASCII characters |
@@ -123,7 +123,8 @@ Proposed).
 | `mcp` | bool | no | the app serves MCP |
 | `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; Porter: never) |
 | `companion` | bool | no | the app is the companion: it opens in a panel beside the current app, and is told that app's context ([shell.md](shell.md#the-companion)). At most one app |
-| `hearth` | string | no | the file name of the app's hearth manifest in its directory, `^[a-z0-9][a-z0-9._-]{0,63}\.json$`, not `app.json`. lodge reads its capabilities and selectors for the consent page ([oauth.md](oauth.md#the-apps-manifest)) |
+| `hearth` | string | no | the file name of the app's hearth manifest in its directory, `^[a-z0-9][a-z0-9._-]{0,63}\.json$`, not `app.json`. lodge reads its capabilities and selectors for the consent page ([oauth.md](oauth.md#the-apps-manifest)), and its operations ([apps on hearth](#apps-on-hearth)) |
+| `tools` | string | no | the file name of the app's tool catalog in its directory, by the same rule as `hearth`, and not the same file; only with `hearth` ([apps on hearth](#apps-on-hearth)) |
 
 A missing bool is `false`. Notes' manifest:
 
@@ -138,8 +139,8 @@ A missing bool is `false`. Notes' manifest:
   not break an older lodge.
 - An app is **disabled** when its manifest does not parse or breaks a
   constraint, its `contract` is not a major lodge speaks, `web/index.html`
-  or its icon is missing, or the hearth manifest it names cannot be read or
-  is not one lodge reads. lodge logs why, the rail shows it, and every route
+  or its icon is missing, or the hearth manifest or the tool catalog it
+  names cannot be read or breaks a rule of [apps on hearth](#apps-on-hearth). lodge logs why, the rail shows it, and every route
   of that app answers 503. The other apps are unaffected.
 - An icon that carries the attribute `data-lodge-placeholder` is the
   new-lodge-app scaffold's placeholder. The app stays enabled. lodge logs
@@ -239,7 +240,7 @@ client sent, then sets these:
 
 | Header | Value | Set for |
 | --- | --- | --- |
-| `Lodge-Caller` | `session`, `agent`, `device` or `content` | every request but lodge's `/health` polls |
+| `Lodge-Caller` | `session`, `agent`, `device`, `content` or `principal` | every request but lodge's `/health` polls |
 | `Lodge-Login` | the node owner's tailnet login (`alice@example.com`, `alice@github`) | `session`, `content`; `device` when the node is untagged |
 | `Lodge-Display-Name` | the owner's display name, when Tailscale has one | `session`, `content` |
 | `Lodge-Node-ID` | the node's Tailscale StableNodeID | `session`, `content`; `device` when WhoIs names the peer |
@@ -247,6 +248,8 @@ client sent, then sets these:
 | `Lodge-Session` | the session's ID, 16 lowercase hex digits | `session`, on the `/api` upgrade |
 | `Lodge-Token` | the MCP token's name, `[A-Za-z0-9@._-]{1,64}` | `agent` |
 | `Lodge-Scope` | the token's scope string, which lodge does not interpret | `agent` |
+| `Lodge-Principal` | the caller's principal: an OAuth principal, or a person's login | `principal` |
+| `Lodge-Grant` | the caller's grant for the app, JSON in base64url without padding | `principal` |
 
 - **Encoding.** `Lodge-Login` and `Lodge-Display-Name` are UTF-8,
   percent-encoded (RFC 3986) for every byte outside `A–Z a–z 0–9 - . _ ~ @
@@ -264,6 +267,74 @@ client sent, then sets these:
   and only after the peer check. An app's private socket (its CLI and
   desktop bridge) is separate, keeps caller `local`, and ignores these
   headers.
+
+### Apps on hearth
+
+An app on [frostyard/hearth](https://github.com/frostyard/hearth) names its
+hearth manifest in `app.json`'s `hearth` member, and its tool catalog in
+`tools`. It serves its API with the Connect protocol, and agents reach it
+through lodge's [MCP gateway](lodge-http.md#the-mcp-gateway), not through
+`/mcp/<id>`
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
+
+**The hearth manifest.** lodge reads its format major, its app, its
+capabilities and its selectors ([oauth.md](oauth.md#the-apps-manifest)),
+and its `operations`. Each operation, or the app is disabled with the
+reason:
+
+- `name` is the RPC's full name, `<package>.<Service>.<Method>`, with 3
+  or more parts, each `^[A-Za-z_][A-Za-z0-9_]*$`, and unique;
+- `permission` is one of the manifest's capabilities;
+- `effect` is `read`, `write` or `outward`;
+- `expose` holds 1 or 2 of `ui` and `agent`, each once;
+- `tool` is there exactly when `expose` holds `agent`, matches
+  `^[a-z][a-z0-9_]*$`, and is unique.
+
+**The tool catalog** is a JSON file of at most 1 MiB, in the shape of an
+MCP `tools/list` result, with 1 tool for each agent operation and no
+other:
+
+```json
+{"tools": [{"name": "list_notes", "description": "List the notes of 1 folder.",
+  "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}},
+  "outputSchema": {"type": "object"}}]}
+```
+
+- At most 128 tools. `name` matches `^[a-z][a-z0-9_]*$`, has at most 47
+  bytes, and is the `tool` of an agent operation; `<id>_<name>` is not
+  `request_access`.
+- `description` is a string of at most 4096 bytes.
+- `inputSchema` is a JSON object whose `type` is `"object"`;
+  `outputSchema`, when present, too.
+- lodge ignores the other members. The manifest, not the catalog, gives
+  each tool's permission, effect and hints.
+- An app with an agent operation and no `tools` member is disabled.
+
+hearth's `protoc-gen-hearth-mcp` writes each tool's description and
+schemas into the app's Go code; until hearth writes the catalog, an app
+writes it from those tools in its build.
+
+**The lodge socket.** The app serves, besides `GET /health`:
+
+| Request | `Lodge-Caller` | Purpose |
+| --- | --- | --- |
+| `POST /connect/<service>/<method>` | `principal` | 1 RPC, with the Connect unary protocol |
+
+- lodge sends `Lodge-Principal` and `Lodge-Grant` with each such request:
+  a person's login and every capability of the app on the root path, from
+  the frame's [app calls](lodge-http.md#app-calls-appidconnect); an OAuth
+  principal and its grant for the app, from the MCP gateway. A frame
+  reaches only `ui` operations, and the gateway only `agent` ones.
+- `Lodge-Grant` is the JSON array of the grant's items,
+  `[{"cap": "notelite:read", "sel": {"folder": "/Work"}}]`, in base64url
+  without padding (RFC 4648, section 5). An item without `sel` holds the
+  root path.
+- The app enforces the grant: hearth's lodge adapter reads both headers
+  only on the lodge socket after its peer check, and its generated checks
+  and hooks test each call. lodge checks only that the grant holds the
+  operation's permission at all.
+- It serves `GET /health` outside the hearth adapter, as every app does.
+- The app serves no `/mcp`; lodge answers `/mcp/<id>` with 404.
 
 ### Sessions
 
@@ -466,7 +537,8 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 3. Every app runs as its own system user, and no app can read another's
    state. Agents, the assistant included, reach other apps only through
    `/mcp/<id>`, with a token: on the tailnet, or on lodge's
-   agent socket.
+   agent socket; or, for an app on hearth, through lodge's MCP gateway
+   with an OAuth token.
 4. lodge serves every app's web files itself, from root-owned directories.
    No daemon serves code to the lodge origin.
 5. Untrusted bytes come only from `lodge-content`, under a `sandbox`
@@ -492,7 +564,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 ## References
 
-- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (the `hearth` member, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (the `hearth` member, Proposed), [ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (apps on hearth, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [lodge-http.md](lodge-http.md), [oauth.md](oauth.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
-- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [Phase 7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (the `hearth` member)
+- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [Phase 7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (the `hearth` member), [Phase 8](../plans/0001-roadmap.md#phase-8--the-mcp-gateway-and-apps-on-hearth) (apps on hearth)

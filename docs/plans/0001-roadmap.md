@@ -421,6 +421,39 @@ and design/overview.md's [agents](../design/overview.md#agents).
     at once;
   - `/mcp/<id>` with `lgm_` tokens works as before.
 
+## Phase 8 — The MCP gateway and apps on hearth
+
+Agents reach every app on frostyard/hearth through 1 MCP endpoint, under
+the grant an admin approved, and an app's frame calls its Connect API.
+Implements [lodge-http.md](../specs/lodge-http.md#the-mcp-gateway) (the
+gateway, [app calls](../specs/lodge-http.md#app-calls-appidconnect)),
+[app-contract.md](../specs/app-contract.md#apps-on-hearth) and the grants
+page's removal in [oauth.md](../specs/oauth.md#the-grants-page)
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)),
+and design/overview.md's [agents](../design/overview.md#agents).
+
+- **`kit/manifest`:** the reserved ID `gateway` and the `tools` member;
+  **`internal/apps`** reads the hearth manifest's operations and the tool
+  catalog.
+- **`internal/mcpgw`:** the MCP server on the Go MCP SDK, 1 per principal,
+  its tools from the grants, `request_access`, the Connect calls, and
+  `notifications/tools/list_changed` on a grant change.
+- **`internal/gateway`:** `/gateway/mcp` and its checks,
+  `/app/<id>/connect/`, and no `/mcp/<id>` for an app on hearth.
+- **`internal/oauth`:** `ErrScope`, a token's expiry, and the removal of
+  1 item of a grant on the grants page.
+- **Done when:**
+  - an agent signs in, calls `request_access`, and after the approval
+    sees the app's tools in the same session, after
+    `notifications/tools/list_changed`, and calls one through to the app,
+    which reads `Lodge-Principal` and `Lodge-Grant`;
+  - a token without `mcp` is refused with 403, a call outside the grant
+    is `insufficient_scope`, and a narrowed grant refuses the next call,
+    each with a test;
+  - pi-pocket's `mcp` module and MCP Inspector each do the same against
+    the development build, in the nsl machine;
+  - `/mcp/<id>` with `lgm_` tokens works as before.
+
 ## Later / ideas
 
 - One aggregated `/mcp` for clients that want a single connector.

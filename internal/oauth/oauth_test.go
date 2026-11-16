@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1189,8 +1190,8 @@ func TestCheckGuards(t *testing.T) {
 		if _, err := s.db.ExecContext(ctx, `UPDATE oauth_clients SET scope = 'mcp' WHERE id = 'lgc_test'`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Check(ctx, token, "events"); err == nil {
-			t.Error("Check(events) passes for a scope the client lost")
+		if _, err := s.Check(ctx, token, "events"); !errors.Is(err, ErrScope) {
+			t.Errorf("Check(events) = %v, want ErrScope for a scope the client lost", err)
 		}
 		if _, err := s.Check(ctx, token, "mcp"); err != nil {
 			t.Errorf("Check(mcp) = %v", err)
@@ -1740,5 +1741,295 @@ func TestUsedCodeRevokesItsFamilyFirst(t *testing.T) {
 	}
 	if access != 0 || refresh != 0 {
 		t.Errorf("the family holds %d access rows and %d active refresh rows, want none", access, refresh)
+	}
+}
+
+// TestItemHash checks the hash the grants page holds for 1 item of a grant:
+// its canonical form, and no other.
+func TestItemHash(t *testing.T) {
+	everything := Item{Cap: "marks:read"}
+	nothing := Item{Cap: "marks:read", Sel: map[string]string{}}
+	if ItemHash(everything) != ItemHash(nothing) {
+		t.Error("an empty selector map hashes another way than no selector")
+	}
+	one := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading", "tag": "/a"}}
+	two := Item{Cap: "marks:read", Sel: map[string]string{"tag": "/a", "folder": "/Reading"}}
+	if ItemHash(one) != ItemHash(two) {
+		t.Error("the order of a map's keys changes the hash")
+	}
+	narrowed := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading/Inbox", "tag": "/a"}}
+	other := Item{Cap: "marks:write", Sel: map[string]string{"folder": "/Reading", "tag": "/a"}}
+	for _, it := range []Item{everything, one, narrowed, other} {
+		got := ItemHash(it)
+		if len(got) != 64 || strings.ToLower(got) != got {
+			t.Errorf("ItemHash(%+v) = %q, want 64 lowercase hex digits", it, got)
+		}
+	}
+	hashes := map[string]bool{}
+	for _, it := range []Item{everything, one, narrowed, other} {
+		hashes[ItemHash(it)] = true
+	}
+	if len(hashes) != 4 {
+		t.Errorf("%d items made %d hashes", 4, len(hashes))
+	}
+	// It is the same form as the request's item form: its bytes are the
+	// canonical JSON, and its sum is SHA-256 of them.
+	b, err := canonicalItem(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"cap":"marks:read","sel":{"folder":"/Reading","tag":"/a"}}`; string(b) != want {
+		t.Errorf("canonicalItem = %s, want %s", b, want)
+	}
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:]); got != ItemHash(one) {
+		t.Errorf("ItemHash(%+v) = %q, want %q, the hex of its canonical JSON's SHA-256", one, ItemHash(one), got)
+	}
+}
+
+// TestCheckScope checks that a live token without the scope a caller needs is
+// ErrScope, never ErrNotFound, and that a dead or unknown token is neither.
+func TestCheckScope(t *testing.T) {
+	ctx := t.Context()
+	t.Run("a token without the scope", func(t *testing.T) {
+		s := boundServer(t)
+		token := mintAccessToken(t, s, "chani", "mcp")
+		if _, err := s.Check(ctx, token, "events"); !errors.Is(err, ErrScope) {
+			t.Errorf("Check(events) = %v, want ErrScope", err)
+		}
+	})
+	t.Run("a client that lost the scope", func(t *testing.T) {
+		s := boundServer(t)
+		token := mintAccessToken(t, s, "chani", "mcp", "events")
+		if _, err := s.db.ExecContext(ctx, `UPDATE oauth_clients SET scope = 'mcp' WHERE id = 'lgc_test'`); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.Check(ctx, token, "events")
+		if !errors.Is(err, ErrScope) {
+			t.Errorf("Check(events) = %v, want ErrScope", err)
+		}
+		if errors.Is(err, ErrNotFound) {
+			t.Error("a token without the scope is not a missing token")
+		}
+	})
+	t.Run("an unknown token", func(t *testing.T) {
+		s := boundServer(t)
+		if _, err := s.Check(ctx, "lgo_at_nonsense", "mcp"); err == nil || errors.Is(err, ErrScope) {
+			t.Errorf("Check of a made-up token = %v, want another error", err)
+		}
+	})
+	t.Run("a dead token", func(t *testing.T) {
+		s := boundServer(t)
+		token := mintAccessToken(t, s, "chani", "mcp")
+		setExpiry(t, s, kindAccess, "family-chani", string(fosite.AccessToken), time.Now().Add(-time.Minute))
+		if _, err := s.Check(ctx, token, "mcp"); err == nil || errors.Is(err, ErrScope) {
+			t.Errorf("Check of a dead token = %v, want another error", err)
+		}
+	})
+}
+
+// TestCheckExpiry checks that a token's answer holds the token's own expiry.
+func TestCheckExpiry(t *testing.T) {
+	ctx := t.Context()
+	s := boundServer(t)
+	token := mintAccessToken(t, s, "chani", "mcp")
+	access, err := s.Check(ctx, token, "mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(access.Expires); access.Expires.IsZero() || d < 55*time.Minute || d > time.Hour {
+		t.Errorf("the token expires in %v (%v), want about an hour", d, access.Expires)
+	}
+	// A dead token has no answer at all.
+	setExpiry(t, s, kindAccess, "family-chani", string(fosite.AccessToken), time.Now().Add(-time.Second))
+	if _, err := s.Check(ctx, token, "mcp"); err == nil {
+		t.Error("a dead token has an answer")
+	}
+}
+
+// TestRemoveGrantItem checks removing 1 item of a grant: the rest stays, the
+// last one deletes the grant, and an unknown one is ErrNotFound.
+func TestRemoveGrantItem(t *testing.T) {
+	ctx := t.Context()
+	t.Run("1 of 2 items", func(t *testing.T) {
+		var hooks [][2]string
+		s, _ := testServerWith(t, func(o *Options) {
+			o.OnGrant = func(principal, app string) { hooks = append(hooks, [2]string{principal, app}) }
+		})
+		insertClient(t, s, "lgc_test", "test", "chani")
+		if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
+			t.Fatal(err)
+		}
+		items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
+		if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(items[0])); err != nil {
+			t.Fatalf("RemoveGrantItem = %v", err)
+		}
+		granted, err := s.Grant(ctx, "chani", "marks")
+		if err != nil || len(granted) != 1 || granted[0].Cap != "marks:write" {
+			t.Errorf("the grant after 1 item went = %+v, %v", granted, err)
+		}
+		if len(hooks) != 1 || hooks[0] != [2]string{"chani", "marks"} {
+			t.Errorf("OnGrant was called with %+v, want once with chani and marks", hooks)
+		}
+	})
+	t.Run("the last item deletes the grant", func(t *testing.T) {
+		s := boundServer(t)
+		items := []Item{{Cap: "marks:read"}}
+		if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(items[0])); err != nil {
+			t.Fatalf("RemoveGrantItem = %v", err)
+		}
+		if granted, err := s.Grant(ctx, "chani", "marks"); err != nil || len(granted) != 0 {
+			t.Errorf("the grant after its last item went = %+v, %v", granted, err)
+		}
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM grants WHERE principal = 'chani' AND app = 'marks'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%d grant rows are left", n)
+		}
+	})
+	t.Run("an unknown item", func(t *testing.T) {
+		s := boundServer(t)
+		if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{{Cap: "marks:read"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(Item{Cap: "marks:write"})); !errors.Is(err, ErrNotFound) {
+			t.Errorf("an item that is not in the grant = %v, want ErrNotFound", err)
+		}
+		if granted, _ := s.Grant(ctx, "chani", "marks"); len(granted) != 1 {
+			t.Errorf("a refused removal changed the grant: %+v", granted)
+		}
+	})
+	t.Run("no grant and no principal", func(t *testing.T) {
+		s := boundServer(t)
+		if err := s.RemoveGrantItem(ctx, "chani", "plain", "x"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("an app with no grant = %v, want ErrNotFound", err)
+		}
+		if err := s.RemoveGrantItem(ctx, "bob", "marks", "x"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("an unknown principal = %v, want ErrNotFound", err)
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE principals SET revoked_at = ? WHERE name = 'chani'`, stamp(s.now())); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RemoveGrantItem(ctx, "chani", "marks", "x"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("a revoked principal = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// TestGrantsPageItemForm checks that the grants page holds 1 removal form for
+// each item of each grant, with the page's token and the item's hash.
+func TestGrantsPageItemForm(t *testing.T) {
+	ctx := t.Context()
+	s := boundServer(t)
+	items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
+	if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.grantsPage(rec, httptest.NewRequest(http.MethodGet, "/oauth/grants", nil), adminLogin)
+	page := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the grants page: %d %q", rec.Code, page)
+	}
+	csrf, ts := field(page, "csrf"), field(page, "ts")
+	if csrf == "" || ts == "" {
+		t.Fatalf("the page holds no CSRF token or no time: %q", page)
+	}
+	for _, it := range items {
+		if hash := ItemHash(it); !strings.Contains(page, `name="item" value="`+hash+`"`) {
+			t.Errorf("the page holds no item field with %q", hash)
+		}
+		if !strings.Contains(page, it.Cap) {
+			t.Errorf("the page does not show %q", it.Cap)
+		}
+	}
+	if got := strings.Count(page, `name="item" value="`); got != len(items) {
+		t.Errorf("the page holds %d item forms, want %d", got, len(items))
+	}
+	for _, want := range []string{`name="principal" value="chani"`, `name="app" value="marks"`, ">Remove<"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not hold %q", want)
+		}
+	}
+}
+
+// revoke posts a revocation the grants page makes.
+func revoke(t *testing.T, s *Server, admin string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/oauth/grants/revoke", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.revokeTarget(w, r, admin)
+	return w
+}
+
+// TestRevokeItemRoute checks the grants page's removal of 1 item of a grant,
+// through the route: 303 when it goes, 404 for a target that is not there, and
+// 400 for a form that names another mix.
+func TestRevokeItemRoute(t *testing.T) {
+	ctx := t.Context()
+	s := boundServer(t)
+	items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
+	if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.grantsPage(rec, httptest.NewRequest(http.MethodGet, "/oauth/grants", nil), adminLogin)
+	csrf, ts := field(rec.Body.String(), "csrf"), field(rec.Body.String(), "ts")
+	if csrf == "" || ts == "" {
+		t.Fatal("the grants page holds no CSRF token or no time")
+	}
+	item := func(hash string) url.Values {
+		return url.Values{"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}, "item": {hash}}
+	}
+	// A wrong CSRF token changes nothing.
+	bad := item(ItemHash(items[0]))
+	bad.Set("csrf", "wrong")
+	if w := revoke(t, s, adminLogin, bad); w.Code != http.StatusForbidden {
+		t.Errorf("a wrong CSRF token: %d %q", w.Code, w.Body.String())
+	}
+	// Any other mix of fields is 400.
+	for name, form := range map[string]url.Values{
+		"an item without the app":     {"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "item": {ItemHash(items[0])}},
+		"an item without a principal": {"csrf": {csrf}, "ts": {ts}, "app": {"marks"}, "item": {ItemHash(items[0])}},
+		"an app without the item":     {"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}},
+		"a client and an item":        {"csrf": {csrf}, "ts": {ts}, "client": {"lgc_test"}, "item": {ItemHash(items[0])}},
+		"nothing":                     {"csrf": {csrf}, "ts": {ts}},
+	} {
+		if w := revoke(t, s, adminLogin, form); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %q, want 400", name, w.Code, w.Body.String())
+		}
+	}
+	// An item that is not in the grant is 404, and an app with no grant is.
+	if w := revoke(t, s, adminLogin, item(ItemHash(Item{Cap: "marks:write", Sel: map[string]string{"folder": "/x"}}))); w.Code != http.StatusNotFound {
+		t.Errorf("an unknown item: %d %q", w.Code, w.Body.String())
+	}
+	noGrant := item(ItemHash(items[0]))
+	noGrant.Set("app", "plain")
+	if w := revoke(t, s, adminLogin, noGrant); w.Code != http.StatusNotFound {
+		t.Errorf("an app with no grant: %d %q", w.Code, w.Body.String())
+	}
+	// 1 of 2 items goes, and the grant keeps the other.
+	if w := revoke(t, s, adminLogin, item(ItemHash(items[0]))); w.Code != http.StatusSeeOther ||
+		w.Header().Get("Location") != "/oauth/grants" {
+		t.Fatalf("the removal: %d %q %q", w.Code, w.Body.String(), w.Header().Get("Location"))
+	}
+	if granted, _ := s.Grant(ctx, "chani", "marks"); len(granted) != 1 || granted[0].Cap != "marks:write" {
+		t.Errorf("the grant after the removal = %+v", granted)
+	}
+	// The last item deletes the grant.
+	if w := revoke(t, s, adminLogin, item(ItemHash(items[1]))); w.Code != http.StatusSeeOther {
+		t.Fatalf("the last item's removal: %d %q", w.Code, w.Body.String())
+	}
+	if granted, _ := s.Grant(ctx, "chani", "marks"); len(granted) != 0 {
+		t.Errorf("the grant after its last item went = %+v", granted)
 	}
 }

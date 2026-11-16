@@ -96,6 +96,27 @@ func (r Request) Hash() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// canonicalItem is the JSON of 1 item: the members in this order, no spaces,
+// the keys of its sel sorted, and no sel member when the item has no selector.
+// It is deterministic, and it is the form the items of a request's hash take.
+func canonicalItem(it Item) ([]byte, error) {
+	if len(it.Sel) == 0 {
+		it.Sel = nil
+	}
+	return json.Marshal(it, json.Deterministic(true))
+}
+
+// ItemHash is the item's SHA-256, in lowercase hex: what the grants page holds
+// for 1 item of a grant, and what RemoveGrantItem removes by.
+func ItemHash(it Item) string {
+	b, err := canonicalItem(it)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // principalPattern is the form of a principal's name.
 var principalPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 

@@ -1,0 +1,225 @@
+// Package hearthtest is hearth's example app, for lodge's tests and its
+// development build: 1 note service on hearth, with the operations, grants and
+// Connect API of an app on hearth (docs/specs/app-contract.md, Apps on hearth).
+//
+// It is a copy of frostyard/hearth's examples/notes-lite, which is its own
+// module and so cannot be imported; internal/hearthtest/notelite says what was
+// changed.
+package hearthtest
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"connectrpc.com/connect"
+
+	"github.com/frostyard/hearth/authz"
+	hearthlodge "github.com/frostyard/hearth/lodge"
+
+	"github.com/frostyard/lodge/internal/hearthtest/notelite"
+	"github.com/frostyard/lodge/internal/hearthtest/notelite/notesv1"
+)
+
+// ID is the app's ID, which its manifest names.
+const ID = "notelite"
+
+// Version is the app's version, which its manifest names.
+const Version = "0.1.0"
+
+// service is the app's Protobuf service, which its RPCs are under.
+const service = "example.notes.v1.NoteService"
+
+// Catalog is the app's tool catalog, in the shape of an MCP tools/list result:
+// 1 tool for each of its agent operations, with the description and the
+// schemas that hearth generates (docs/specs/app-contract.md, Apps on hearth).
+func Catalog() ([]byte, error) {
+	type tool struct {
+		Name         string         `json:"name"`
+		Description  string         `json:"description"`
+		InputSchema  jsontext.Value `json:"inputSchema"`
+		OutputSchema jsontext.Value `json:"outputSchema,omitzero"`
+	}
+	tools := notesv1.NoteServiceTools(nil)
+	out := struct {
+		Tools []tool `json:"tools"`
+	}{Tools: make([]tool, 0, len(tools))}
+	for _, t := range tools {
+		out.Tools = append(out.Tools, tool{Name: t.Name, Description: t.Description,
+			InputSchema: jsontext.Value(t.InputSchema), OutputSchema: jsontext.Value(t.OutputSchema)})
+	}
+	return json.Marshal(out, json.Deterministic(true))
+}
+
+// manifest is app id's app.json: an app on hearth, with its 2 files beside it.
+func manifest(user string) ([]byte, error) {
+	return json.Marshal(struct {
+		Contract int    `json:"contract"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Icon     string `json:"icon"`
+		Version  string `json:"version"`
+		User     string `json:"user"`
+		Hearth   string `json:"hearth"`
+		Tools    string `json:"tools"`
+	}{1, ID, "Notes Lite", "icon.svg", Version, user, "manifest.json", "tools.json"})
+}
+
+// Install writes the app into the layout under root, as lodge's installer would:
+// its app.json, its hearth manifest, its tool catalog and its web bundle.
+func Install(root, user string) error {
+	app, err := manifest(user)
+	if err != nil {
+		return err
+	}
+	catalog, err := Catalog()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(root, "usr/share/lodge/apps", ID)
+	files := map[string][]byte{
+		"app.json":      app,
+		"manifest.json": notelite.Manifest,
+		"tools.json":    catalog,
+		"web/index.html": []byte("<!doctype html><title>" + ID + "</title><p>" + ID +
+			" frame</p>"),
+		"web/icon.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>Notes Lite</title></svg>`),
+	}
+	for rel, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, body, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// App is the running app: its server, its database, and the caller of its last
+// request.
+type App struct {
+	// Server is the app's lodge socket's server.
+	Server *http.Server
+
+	db *sql.DB
+	mu sync.Mutex
+	// kind, principal and grant are Lodge-Caller, Lodge-Principal and
+	// Lodge-Grant of the last request that hearth's adapter admitted.
+	kind, principal, grant string
+}
+
+// LastCaller is the principal and the grant that the app last saw, as lodge
+// sent them: Lodge-Principal, and Lodge-Grant's base64url text.
+func (a *App) LastCaller() (principal, grant string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.principal, a.grant
+}
+
+// LastKind is the caller kind of the app's last request: Lodge-Caller, such as
+// session, principal or agent.
+func (a *App) LastKind() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.kind
+}
+
+// Close stops the app's server and closes its database.
+func (a *App) Close() error {
+	err := a.Server.Close()
+	if cerr := a.db.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// Serve opens the app's database at dbPath and serves it on l, the app's lodge
+// socket, for the connections of lodgeUID alone. It returns once the app is
+// serving: GET /health outside hearth's adapter, and the Connect API under
+// /connect/.
+func Serve(ctx context.Context, l net.Listener, lodgeUID int, dbPath string) (*App, error) {
+	db, err := notelite.Open(ctx, dbPath)
+	if err != nil {
+		return nil, err
+	}
+	app := &App{db: db}
+	api := (&notelite.Service{DB: db, Notify: func() {}}).API()
+	mux := http.NewServeMux()
+	mux.Handle("/"+service+"/CreateNote", unary[notesv1.CreateNoteRequest, notesv1.CreateNoteResponse](
+		"/"+service+"/CreateNote", api.CreateNote))
+	mux.Handle("/"+service+"/DeleteNote", unary[notesv1.DeleteNoteRequest, notesv1.DeleteNoteResponse](
+		"/"+service+"/DeleteNote", api.DeleteNote))
+	mux.Handle("/"+service+"/GetNote", unary[notesv1.GetNoteRequest, notesv1.GetNoteResponse](
+		"/"+service+"/GetNote", api.GetNote))
+	mux.Handle("/"+service+"/ListNotes", unary[notesv1.ListNotesRequest, notesv1.ListNotesResponse](
+		"/"+service+"/ListNotes", api.ListNotes))
+	root := http.NewServeMux()
+	root.HandleFunc("/health", health)
+	// The adapter trusts Lodge-Principal and Lodge-Grant on this socket only,
+	// after its peer check, so the app records them inside it (ADR-0024).
+	root.Handle("/connect/", hearthlodge.Handler(app.record(http.StripPrefix("/connect", mux))))
+	app.Server = &http.Server{Handler: root, ConnContext: hearthlodge.ConnContext,
+		ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		// Serve returns after Close, which a caller asks for.
+		_ = app.Server.Serve(hearthlodge.Listener(l, lodgeUID))
+	}()
+	return app, nil
+}
+
+// health answers the app's state, as every app does, outside the adapter.
+func health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ok":true,"version":"` + Version + `","protocol":1}`))
+}
+
+// record keeps the caller of the last request that hearth's adapter admitted:
+// a request it refused never reaches here.
+func (a *App) record(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := authz.CallerFrom(r.Context()); ok {
+			a.mu.Lock()
+			a.kind = r.Header.Get("Lodge-Caller")
+			a.principal, a.grant = r.Header.Get(hearthlodge.PrincipalHeader), r.Header.Get(hearthlodge.GrantHeader)
+			a.mu.Unlock()
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// unary serves 1 RPC with the Connect unary protocol, path procedure, and maps
+// the app's error to a Connect error.
+func unary[Req, Res any](procedure string, call func(context.Context, *Req) (*Res, error)) http.Handler {
+	return connect.NewUnaryHandler(procedure, func(ctx context.Context, req *connect.Request[Req]) (*connect.Response[Res], error) {
+		res, err := call(ctx, req.Msg)
+		if err != nil {
+			return nil, connectFailure(err)
+		}
+		return connect.NewResponse(res), nil
+	})
+}
+
+// connectFailure is err as a Connect error: a refused grant is permission
+// denied with the app's own text, a missing row is not found, and anything else
+// is the app's own failure.
+func connectFailure(err error) *connect.Error {
+	var denied *authz.DeniedError
+	switch {
+	case errors.As(err, &denied):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, sql.ErrNoRows):
+		return connect.NewError(connect.CodeNotFound, err)
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("the app failed: %w", err))
+}

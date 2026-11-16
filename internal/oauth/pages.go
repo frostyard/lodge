@@ -78,10 +78,12 @@ type selectorChoice struct {
 	Path string
 }
 
-// itemChoice is one item of an access request, with its checkbox.
+// itemChoice is one item of an access request or of a grant, with its
+// checkbox, and the hash its page holds.
 type itemChoice struct {
 	Index      int
 	Cap        string
+	Hash       string
 	Everything bool
 	Selectors  []selectorChoice
 }
@@ -113,7 +115,7 @@ type consentData struct {
 func itemViews(items []Item) []itemChoice {
 	out := make([]itemChoice, 0, len(items))
 	for i, it := range items {
-		v := itemChoice{Index: i, Cap: it.Cap, Everything: len(it.Sel) == 0}
+		v := itemChoice{Index: i, Cap: it.Cap, Hash: ItemHash(it), Everything: len(it.Sel) == 0}
 		names := make([]string, 0, len(it.Sel))
 		for name := range it.Sel {
 			names = append(names, name)
@@ -627,7 +629,8 @@ func (s *Server) grantsPage(w http.ResponseWriter, r *http.Request, admin string
 	s.render(w, "grants.html", data)
 }
 
-// revokeTarget revokes a client or a principal, from the grants page.
+// revokeTarget revokes a client, a principal, or 1 item of a grant, from the
+// grants page: exactly 1 of the 3 kinds of target per POST.
 func (s *Server) revokeTarget(w http.ResponseWriter, r *http.Request, admin string) {
 	ctx := r.Context()
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
@@ -641,30 +644,42 @@ func (s *Server) revokeTarget(w http.ResponseWriter, r *http.Request, admin stri
 	}
 	var err error
 	client, principal := r.PostForm.Get("client"), r.PostForm.Get("principal")
+	app, item := r.PostForm.Get("app"), r.PostForm.Get("item")
 	switch {
-	case client != "" && principal != "":
+	case client != "" && (principal != "" || app != "" || item != ""):
 		writeOneLine(w, http.StatusBadRequest, "a revocation names a client or a principal, not both")
 		return
 	case client != "":
 		err = s.RevokeClient(ctx, client)
-	case principal != "":
+	case principal == "" && (app != "" || item != ""):
+		writeOneLine(w, http.StatusBadRequest, "1 item of a grant names the principal and the app it belongs to")
+		return
+	case principal != "" && app == "" && item == "":
 		err = s.RevokePrincipal(ctx, principal)
-	default:
+	case principal != "" && app != "" && item != "":
+		err = s.RemoveGrantItem(ctx, principal, app, item)
+	case principal == "":
 		writeOneLine(w, http.StatusBadRequest, "a revocation names a client or a principal")
+		return
+	default:
+		writeOneLine(w, http.StatusBadRequest, "1 item of a grant names the principal, the app and the item")
 		return
 	}
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeOneLine(w, http.StatusNotFound, "no live client or principal of that name")
+		writeOneLine(w, http.StatusNotFound, "no live client, principal or item of that name")
 		return
 	case err != nil:
 		s.log.Error("revoke", "err", err)
 		writeOneLine(w, http.StatusInternalServerError, "lodge cannot revoke it")
 		return
 	}
-	if client != "" {
+	switch {
+	case client != "":
 		s.log.Info("oauth client revoked by an admin", "client", client, "admin", admin)
-	} else {
+	case item != "":
+		s.log.Info("oauth grant item removed by an admin", "principal", principal, "app", app, "item", item, "admin", admin)
+	default:
 		s.log.Info("oauth principal revoked by an admin", "principal", principal, "admin", admin)
 	}
 	w.Header().Set("Location", "/oauth/grants")

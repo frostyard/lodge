@@ -39,13 +39,15 @@ type Principal struct {
 // Live reports whether the principal may hold access.
 func (p Principal) Live() bool { return p.Revoked.IsZero() }
 
-// Access is what a live access token gives: the principal, the client and
-// the scopes the consent approved (docs/specs/oauth.md, lodge's own
-// callers).
+// Access is what a live access token gives: the principal, the client, the
+// scopes the consent approved and the token's expiry (docs/specs/oauth.md,
+// lodge's own callers).
 type Access struct {
 	Principal string   `json:"principal"`
 	Client    string   `json:"client"`
 	Scopes    []string `json:"scopes"`
+	// Expires is the access token's expiry.
+	Expires time.Time `json:"expires"`
 }
 
 // clientRow reads client id. An unknown or revoked client is ErrNotFound.
@@ -141,6 +143,20 @@ func (s *storage) principals(ctx context.Context) ([]Principal, error) {
 	return out, rows.Err()
 }
 
+// Live reports whether name is a live principal: lodge knows it, and it is not
+// revoked. The MCP gateway drops a revoked principal's sessions by it
+// (ADR-0024).
+func (s *Server) Live(ctx context.Context, name string) (bool, error) {
+	err := s.store.livePrincipal(ctx, nil, name)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
+}
+
 // Grant returns the principal's items for app: the grant that limits what a
 // client of the principal may do there.
 func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, error) {
@@ -230,18 +246,78 @@ func sameItem(a, b Item) bool {
 	return true
 }
 
+// RemoveGrantItem removes 1 item of the principal's grant for app, the one
+// whose ItemHash is hash, and deletes the grant when no item is left
+// (ADR-0024). A live principal is required. It is 1 transaction, and the
+// hook runs after the commit.
+func (s *Server) RemoveGrantItem(ctx context.Context, principal, app, hash string) error {
+	left := 0
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := s.store.livePrincipal(ctx, tx, principal); err != nil {
+			return err
+		}
+		var text string
+		switch err := tx.QueryRowContext(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`,
+			principal, app).Scan(&text); {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("principal %s has no grant for app %s: %w", principal, app, ErrNotFound)
+		case err != nil:
+			return fmt.Errorf("oauth: read a grant: %w", err)
+		}
+		var stored []Item
+		if err := jsonUnmarshal([]byte(text), &stored); err != nil {
+			return fmt.Errorf("oauth: decode a grant: %w", err)
+		}
+		kept, found := make([]Item, 0, len(stored)), false
+		for _, it := range stored {
+			if ItemHash(it) == hash {
+				found = true
+				continue
+			}
+			kept = append(kept, it)
+		}
+		if !found {
+			return fmt.Errorf("item %q is not in the grant of principal %s for app %s: %w", hash, principal, app, ErrNotFound)
+		}
+		if len(kept) == 0 {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM grants WHERE principal = ? AND app = ?`, principal, app); err != nil {
+				return fmt.Errorf("oauth: delete a grant: %w", err)
+			}
+			return nil
+		}
+		encoded, err := jsonMarshal(kept)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE grants SET items = ?, updated_at = ? WHERE principal = ? AND app = ?`,
+			string(encoded), stamp(s.now()), principal, app); err != nil {
+			return fmt.Errorf("oauth: write a grant: %w", err)
+		}
+		left = len(kept)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if s.onGrant != nil {
+		s.onGrant(principal, app)
+	}
+	s.log.Info("grant item removed", "principal", principal, "app", app, "items", left)
+	return nil
+}
+
 // Check answers what token gives, for a caller that needs scope: a live
 // access token that has the scope, from a live, bound client of a live
-// principal. It records the client's last use, at most once a minute.
+// principal. A live token that lacks the scope is ErrScope, never
+// ErrNotFound: a caller answers that with 403, not with a new sign-in. It
+// records the client's last use, at most once a minute.
 func (s *Server) Check(ctx context.Context, token, scope string) (Access, error) {
 	if token == "" {
 		return Access{}, ErrNotFound
 	}
-	var needed []string
-	if scope != "" {
-		needed = []string{scope}
-	}
-	use, req, err := s.provider.IntrospectToken(ctx, token, fosite.AccessToken, NewSession(), needed...)
+	// The introspection checks the token itself; the scopes are compared
+	// here, because fosite reports a missing scope as an invalid token.
+	use, req, err := s.provider.IntrospectToken(ctx, token, fosite.AccessToken, NewSession())
 	if err != nil {
 		return Access{}, fmt.Errorf("oauth: check a token: %w", err)
 	}
@@ -261,15 +337,19 @@ func (s *Server) Check(ctx context.Context, token, scope string) (Access, error)
 	if subject := req.GetSession().GetSubject(); subject != c.Principal {
 		return Access{}, fmt.Errorf("the token is for %q, not for the client's principal: %w", subject, ErrNotFound)
 	}
-	// The client's current scope limits the token, too: a revoked scope
-	// stops working at once.
+	// The scopes the consent approved and the client's current scope both
+	// limit the token: a revoked scope stops working at once.
+	if scope != "" && !has(req.GetGrantedScopes(), scope) {
+		return Access{}, fmt.Errorf("the token was not granted scope %q: %w", scope, ErrScope)
+	}
 	if scope != "" && !has(scopes(c.Scope), scope) {
-		return Access{}, fmt.Errorf("client %s has no scope %q: %w", c.ID, scope, ErrInvalid)
+		return Access{}, fmt.Errorf("client %s has no scope %q: %w", c.ID, scope, ErrScope)
 	}
 	if err := s.touch(ctx, c.ID); err != nil {
 		s.log.Warn("record a client's use", "client", c.ID, "err", err)
 	}
-	return Access{Principal: c.Principal, Client: c.ID, Scopes: append([]string{}, req.GetGrantedScopes()...)}, nil
+	return Access{Principal: c.Principal, Client: c.ID, Scopes: append([]string{}, req.GetGrantedScopes()...),
+		Expires: req.GetSession().GetExpiresAt(fosite.AccessToken)}, nil
 }
 
 // touch records a client's last use, at most once a minute.

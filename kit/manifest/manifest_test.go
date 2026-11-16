@@ -34,35 +34,44 @@ func TestValidateRefusesEachConstraint(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, edit := range map[string]func(*Manifest){
-		"contract 0":     func(m *Manifest) { m.Contract = 0 },
-		"id uppercase":   func(m *Manifest) { m.ID = "Notes" },
-		"id too long":    func(m *Manifest) { m.ID = "a234567890123456x" },
-		"id digit first": func(m *Manifest) { m.ID = "1notes" },
-		"id reserved":    func(m *Manifest) { m.ID = "lodge" },
-		"id app":         func(m *Manifest) { m.ID = "app" },
-		"id nats":        func(m *Manifest) { m.ID = "nats" },
-		"no name":        func(m *Manifest) { m.Name = "" },
-		"blank name":     func(m *Manifest) { m.Name = "  " },
-		"long name":      func(m *Manifest) { m.Name = strings.Repeat("n", 33) },
-		"no icon":        func(m *Manifest) { m.Icon = "" },
-		"absolute icon":  func(m *Manifest) { m.Icon = "/etc/icon.svg" },
-		"escaping icon":  func(m *Manifest) { m.Icon = "../icon.svg" },
-		"unclean icon":   func(m *Manifest) { m.Icon = "a/../icon.svg" },
-		"png icon":       func(m *Manifest) { m.Icon = "icon.png" },
-		"no version":     func(m *Manifest) { m.Version = "" },
-		"spaced version": func(m *Manifest) { m.Version = "1 2" },
-		"long version":   func(m *Manifest) { m.Version = strings.Repeat("1", 65) },
-		"root user":      func(m *Manifest) { m.User = "root" },
-		"lodge user":     func(m *Manifest) { m.User = "lodge" },
-		"bad user":       func(m *Manifest) { m.User = "Frost" },
-		"two-letter key": func(m *Manifest) { m.Key = "nn" },
-		"uppercase key":  func(m *Manifest) { m.Key = "N" },
-		"oauth id":       func(m *Manifest) { m.ID = "oauth" },
-		"hearth app":     func(m *Manifest) { m.Hearth = "app.json" },
-		"hearth upper":   func(m *Manifest) { m.Hearth = "Hearth.json" },
-		"hearth dir":     func(m *Manifest) { m.Hearth = "a/hearth.json" },
-		"hearth suffix":  func(m *Manifest) { m.Hearth = "hearth.json5" },
-		"hearth long":    func(m *Manifest) { m.Hearth = strings.Repeat("h", 65) + ".json" },
+		"contract 0":      func(m *Manifest) { m.Contract = 0 },
+		"id uppercase":    func(m *Manifest) { m.ID = "Notes" },
+		"id too long":     func(m *Manifest) { m.ID = "a234567890123456x" },
+		"id digit first":  func(m *Manifest) { m.ID = "1notes" },
+		"id reserved":     func(m *Manifest) { m.ID = "lodge" },
+		"id app":          func(m *Manifest) { m.ID = "app" },
+		"id nats":         func(m *Manifest) { m.ID = "nats" },
+		"no name":         func(m *Manifest) { m.Name = "" },
+		"blank name":      func(m *Manifest) { m.Name = "  " },
+		"long name":       func(m *Manifest) { m.Name = strings.Repeat("n", 33) },
+		"no icon":         func(m *Manifest) { m.Icon = "" },
+		"absolute icon":   func(m *Manifest) { m.Icon = "/etc/icon.svg" },
+		"escaping icon":   func(m *Manifest) { m.Icon = "../icon.svg" },
+		"unclean icon":    func(m *Manifest) { m.Icon = "a/../icon.svg" },
+		"png icon":        func(m *Manifest) { m.Icon = "icon.png" },
+		"no version":      func(m *Manifest) { m.Version = "" },
+		"spaced version":  func(m *Manifest) { m.Version = "1 2" },
+		"long version":    func(m *Manifest) { m.Version = strings.Repeat("1", 65) },
+		"root user":       func(m *Manifest) { m.User = "root" },
+		"lodge user":      func(m *Manifest) { m.User = "lodge" },
+		"bad user":        func(m *Manifest) { m.User = "Frost" },
+		"two-letter key":  func(m *Manifest) { m.Key = "nn" },
+		"uppercase key":   func(m *Manifest) { m.Key = "N" },
+		"oauth id":        func(m *Manifest) { m.ID = "oauth" },
+		"hearth app":      func(m *Manifest) { m.Hearth = "app.json" },
+		"hearth upper":    func(m *Manifest) { m.Hearth = "Hearth.json" },
+		"hearth dir":      func(m *Manifest) { m.Hearth = "a/hearth.json" },
+		"hearth suffix":   func(m *Manifest) { m.Hearth = "hearth.json5" },
+		"hearth long":     func(m *Manifest) { m.Hearth = strings.Repeat("h", 65) + ".json" },
+		"tools no hearth": func(m *Manifest) { m.Tools = "tools.json" },
+		"tools app.json":  func(m *Manifest) { m.Hearth = "hearth.json"; m.Tools = "app.json" },
+		"tools upper":     func(m *Manifest) { m.Hearth = "hearth.json"; m.Tools = "Tools.json" },
+		"tools dir":       func(m *Manifest) { m.Hearth = "hearth.json"; m.Tools = "a/tools.json" },
+		"tools long": func(m *Manifest) {
+			m.Hearth = "hearth.json"
+			m.Tools = strings.Repeat("t", 65) + ".json"
+		},
+		"tools is the hearth": func(m *Manifest) { m.Hearth = "hearth.json"; m.Tools = "hearth.json" },
 	} {
 		m := ok
 		edit(&m)
@@ -96,9 +105,57 @@ func TestHearth(t *testing.T) {
 	if ValidID("oauth") || ValidHearthFile("app.json") {
 		t.Error("oauth is an app ID, or app.json a hearth manifest")
 	}
+	if ValidID("gateway") {
+		t.Error("gateway is an app ID")
+	}
 	got, err := Parse([]byte(`{"contract":1,"id":"notes","name":"Notes","icon":"icon.svg","version":"1","user":"frostnotes","hearth":"hearth.json","other":2}`))
 	if err != nil || got.Hearth != "hearth.json" {
 		t.Errorf("Parse with hearth = %+v, %v", got, err)
+	}
+}
+
+// TestTools checks an app's tool catalog's file name: a name of a file beside
+// app.json, which is neither app.json nor the hearth manifest, and which needs
+// a hearth manifest (ADR-0024).
+func TestTools(t *testing.T) {
+	m := Manifest{Contract: 1, ID: "notes", Name: "Notes", Icon: "icon.svg", Version: "0.5.0", User: "frostnotes",
+		Hearth: "hearth.json"}
+	// At the rule: 64 characters before .json, and the form the ADR writes.
+	for _, name := range []string{"tools.json", "a.tools_b-c.json", "0.json", strings.Repeat("t", 64) + ".json"} {
+		m.Tools = name
+		if err := m.Validate(); err != nil {
+			t.Errorf("tools %q: %v", name, err)
+		}
+	}
+	// Past the rule: each break is refused, and the error says which.
+	for name, c := range map[string]struct {
+		tools, hearth, want string
+	}{
+		"past 64 chars":   {tools: strings.Repeat("t", 65) + ".json", hearth: "hearth.json", want: "tools"},
+		"app.json":        {tools: "app.json", hearth: "hearth.json", want: "tools"},
+		"uppercase":       {tools: "Tools.json", hearth: "hearth.json", want: "tools"},
+		"hidden":          {tools: ".tools.json", hearth: "hearth.json", want: "tools"},
+		"another dir":     {tools: "a/tools.json", hearth: "hearth.json", want: "tools"},
+		"not .json":       {tools: "tools.json5", hearth: "hearth.json", want: "tools"},
+		"the hearth file": {tools: "hearth.json", hearth: "hearth.json", want: "hearth manifest's file"},
+		"no hearth":       {tools: "tools.json", hearth: "", want: "tools needs hearth"},
+	} {
+		m := m
+		m.Tools, m.Hearth = c.tools, c.hearth
+		err := m.Validate()
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Validate = %v, want it to mention %q", name, err, c.want)
+		}
+	}
+	// A manifest that names no tools is valid with no hearth manifest.
+	bare := Manifest{Contract: 1, ID: "notes", Name: "Notes", Icon: "icon.svg", Version: "0.5.0", User: "frostnotes",
+		Hearth: "hearth.json"}
+	if err := bare.Validate(); err != nil {
+		t.Errorf("no tools: %v", err)
+	}
+	got, err := Parse([]byte(`{"contract":1,"id":"notes","name":"Notes","icon":"icon.svg","version":"1","user":"frostnotes","hearth":"hearth.json","tools":"tools.json","other":2}`))
+	if err != nil || got.Tools != "tools.json" || got.Hearth != "hearth.json" {
+		t.Errorf("Parse with tools = %+v, %v", got, err)
 	}
 }
 

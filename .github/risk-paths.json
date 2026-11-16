@@ -78,9 +78,14 @@
       "why": "auth: the tailnet nodes and WhoIs, the caller identity, the allow-lists of logins and nodes, and browser sessions"
     },
     {
-      "glob": "internal/gateway/{gateway,checks,kinds,headers,proxy,ws,files,broker}.go",
+      "glob": "internal/gateway/{gateway,checks,kinds,headers,proxy,ws,files,broker,connect}.go",
       "level": "L1",
-      "why": "auth: each route kind's checks, the Lodge-* headers, the proxy to app sockets, and the web files and content node's sandbox"
+      "why": "auth: each route kind's checks, the Lodge-* headers, the proxy to app sockets, the web files and content node's sandbox, the MCP gateway's route and the Connect route of an app on hearth"
+    },
+    {
+      "glob": "internal/mcpgw/**",
+      "level": "L1",
+      "why": "auth: the MCP gateway's tools, grants and Connect calls"
     },
     {
       "glob": "internal/oauth/**",

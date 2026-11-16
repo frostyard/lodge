@@ -21,7 +21,11 @@ messages inside the shell are [lodge-client.md](lodge-client.md) and
 [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
 (the agent socket),
 [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the
-broker, Proposed). Where it fits: [design/overview.md](../design/overview.md).
+broker, Proposed),
+[ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)
+(OAuth, Proposed),
+[ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)
+(the MCP gateway and app calls, Proposed). Where it fits: [design/overview.md](../design/overview.md).
 
 frostnotes' M4 drafted this for notesd's hub (its `docs/specs/hub-http.md`,
 local commit `0586e2b`). It is generalized here to every app, with the
@@ -34,6 +38,9 @@ to their route were added on 2026-10-19, and built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 [The broker](#the-broker) was added on 2026-11-15
 ([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md),
+Proposed). [The MCP gateway](#the-mcp-gateway) and
+[app calls](#app-calls-appidconnect) were added on 2026-11-16
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md),
 Proposed).
 
 ## Interface
@@ -121,14 +128,16 @@ On `LODGE`:
 | `/lodge/<path>` | `GET`, `HEAD` | browser | tailnet identity | the shell's files, and `/lodge/apps` |
 | `/app/<id>/api` | `GET` (WebSocket) | browser | tailnet identity, `Origin` | the app's `GET /api`, as a session |
 | `/app/<id>/x/<path>` | `GET`, `HEAD` | browser | tailnet identity | the app's `GET /x/<path>` |
+| `/app/<id>/connect/<service>/<method>` | `POST` | browser | tailnet identity, `Origin` | for an app on hearth, the app's `POST /connect/<service>/<method>` ([below](#app-calls-appidconnect)) |
 | `/app/<id>/<path>` | `GET`, `HEAD` | browser | tailnet identity | the app's `web/` |
-| `/mcp/<id>` | `POST`, `GET`, `DELETE` | agent | `Bearer` MCP token | the app's `/mcp` |
+| `/mcp/<id>` | `POST`, `GET`, `DELETE` | agent | `Bearer` MCP token | the app's `/mcp`; none for an app on hearth |
+| `/gateway/mcp` | `POST`, `GET`, `DELETE` | gateway | `Bearer` OAuth access token with scope `mcp` | lodge's MCP gateway ([below](#the-mcp-gateway)) |
 | `/device/<id>/<path>` | any | device | the app's own | the app's `/device/<path>` |
 | `/nats` | `GET` (WebSocket) | broker | the token in the `CONNECT` line | the event broker ([below](#the-broker)) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/gateway/mcp` | `GET`, `HEAD` | OAuth | none | lodge's OAuth metadata ([below](#oauth-routes)) |
 | `/oauth/register`, `/oauth/token`, `/oauth/revoke` | `POST` | OAuth | none, or the client's grant | lodge's OAuth server |
 | `/oauth/authorize`, `/oauth/consent/<id>`, `/oauth/grants` | `GET`, `HEAD`; `POST` on `/oauth/consent/<id>` | consent | tailnet identity, an admin's login | the consent and grants pages |
-| `/oauth/grants/revoke` | `POST` | consent | tailnet identity, an admin's login | revokes a client or a principal |
+| `/oauth/grants/revoke` | `POST` | consent | tailnet identity, an admin's login | revokes a client or a principal, or removes 1 item of a grant |
 
 On `CONTENT`:
 
@@ -207,7 +216,8 @@ and a WebSocket request fails before its upgrade.
    `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) passes from any
    site.
 4. **Method:** `GET` or `HEAD`, else 405. `/app/<id>/api` takes `GET` with
-   a WebSocket upgrade. A `GET` without one answers as an upgrade would, up
+   a WebSocket upgrade. `/app/<id>/connect/…` of an app on hearth takes
+   `POST` only, with its own checks ([app calls](#app-calls-appidconnect)). A `GET` without one answers as an upgrade would, up
    to the upgrade itself: a failed check with its line, else 426 Upgrade
    Required. A page whose WebSocket fails, which a browser does not tell
    why, learns the reason this way.
@@ -309,8 +319,8 @@ default-src 'none'; script-src https://LODGE/app/<id>/assets/; style-src https:/
 
 ### App files
 
-`GET` or `HEAD` `/app/<id>/<path>`, except `api` and `x/…`, from the app's
-`web/`:
+`GET` or `HEAD` `/app/<id>/<path>`, except `api`, `x/…` and, for an app on
+hearth, `connect/…`, from the app's `web/`:
 
 - `<path>` serves the file at that path under `web/` when every one of these
   holds:
@@ -385,6 +395,53 @@ The shell's files under `/lodge/` follow the same rules from
 to the app's `GET /x/<path>` with the query. It carries caller `session`
 and the identity headers, without `Lodge-Session`. The response takes the
 app policy's headers.
+
+### App calls, `/app/<id>/connect/`
+
+An app on hearth (one whose `app.json` names a hearth manifest,
+[app-contract.md](app-contract.md#apps-on-hearth)) serves its API with the
+Connect protocol. Its frame calls 1 RPC with
+`POST /app/<id>/connect/<service>/<method>`
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
+lodge writes nothing on this route. The checks, in order:
+
+1. **Host:** `Host` is `LODGE` or `LODGE:443`, else 403.
+2. **Origin:** an `Origin` header is present and exactly `https://LODGE`,
+   else 403.
+3. **Fetch metadata:** `Sec-Fetch-Site`, when present, is `same-origin`,
+   else 403.
+4. **Method:** `POST`, else 405 with `Allow: POST`. An upgrade is 400.
+5. **Identity:** every [identity check](#identity), a to e.
+6. **App:** an installed app, else 404; enabled, else 503 with the reason.
+   For an app without a hearth manifest, `/app/<id>/connect/…` is an
+   [app file](#app-files) path, and this list does not apply.
+7. **Operation:** the path has exactly 2 segments after `connect`;
+   `<service>` matches `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`,
+   `<method>` matches `^[A-Za-z_][A-Za-z0-9_]*$`, and `<service>.<method>`
+   is an operation of the app's hearth manifest that is exposed to `ui`.
+   Else 404.
+8. **Content type:** `Content-Type`, without its parameters, is
+   `application/json` or `application/proto`, the Connect protocol's
+   unary types, else 415. A form cannot send either.
+9. **Principal:** the login matches `^[A-Za-z0-9@._-]{1,64}$` and holds
+   `@`, else 403 `login LOGIN cannot be a principal of an app on hearth`.
+   An OAuth principal never holds `@` ([oauth.md](oauth.md#names)), so
+   the two never meet.
+
+lodge then proxies to the app's `POST /connect/<service>/<method>`, with
+the query:
+
+- It removes what [proxying](#proxying) removes, and sets
+  `Lodge-Caller: principal`, `Lodge-Principal: <login>` and
+  `Lodge-Grant`: an item `{"cap": C}` for each capability `C` of the app's
+  hearth manifest, in its order, as JSON in base64url without padding
+  ([app-contract.md](app-contract.md#apps-on-hearth)). An item without
+  `sel` holds the root path: a signed-in person may do everything in the
+  app, as in every app on `/api`.
+- The body is at most **4 MiB** (413 past it), and each read of it must
+  arrive within 30 s ([connections](#connections)).
+- The response passes through with the app policy's headers, as an `x/`
+  read's.
 
 ### Content routes
 
@@ -461,6 +518,9 @@ The checks, in order:
    `WWW-Authenticate: Bearer` and no detail. A token issued
    for the agent socket (`--agent`) is refused here the same way.
 6. **App:** an app that is disabled, or has no `mcp: true`, is 503 or 404.
+   An app whose `app.json` names `hearth` is 404, enabled or not:
+   agents reach it through
+   [the MCP gateway](#the-mcp-gateway).
 
 lodge then proxies to the app's `/mcp`:
 
@@ -476,6 +536,107 @@ lodge then proxies to the app's `/mcp`:
   every request and stream lodge is proxying for it. lodge knows a stream
   by the token's row, not its name, and checks the secret again once the
   stream is registered, so a new token of the same name changes nothing.
+- The response carries the [confined set](#device-routes) of device
+  responses, without `Cross-Origin-Resource-Policy`.
+
+### The MCP gateway
+
+`/gateway/mcp` on the `lodge` node is lodge's own MCP server, for the
+agents of every principal
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
+`internal/mcpgw` serves it on the Go MCP SDK. It is 404 when lodge's OAuth
+server is off. `gateway` is a reserved app ID. The checks, in order:
+
+1. **Host:** `Host` is `LODGE` or `LODGE:443`, else 403.
+2. **Origin:** a request with an `Origin` header is 403.
+3. **Method:** `POST`, `GET` or `DELETE`, else 405.
+4. **Peer:** identity checks a and b, else 403. Tags and allow-lists are
+   not consulted.
+5. **Token:** `Authorization: Bearer <token>` is a live OAuth access token
+   of a live, bound client of a live principal
+   ([oauth.md](oauth.md#lodges-own-callers)). Else, whether the token is
+   missing, malformed, unknown, expired, revoked or an `lgm_` token, the
+   answer is 401 with no detail and
+   `WWW-Authenticate: Bearer resource_metadata="https://LODGE/.well-known/oauth-protected-resource/gateway/mcp"`
+   (RFC 9728).
+6. **Scope:** the token's scopes and its client's scope both hold `mcp`,
+   else 403 with
+   `WWW-Authenticate: Bearer error="insufficient_scope", scope="mcp", resource_metadata="…"`.
+7. An upgrade is 400.
+
+Then lodge answers with the MCP Streamable HTTP transport, revision
+2025-06-18:
+
+- **Sessions** are stateful (`Mcp-Session-Id`). A session is bound to the
+  OAuth client whose token opened it: a request for it with another
+  client's token, even of the same principal, is 403. A session with no
+  request for **1 hour** closes, and a request with its ID is then 404;
+  the client opens a new one. A request ends when its token expires, so a
+  stream on `GET` ends then too, and the client comes back with a
+  refreshed token.
+- **The server** is named `lodge`, and declares `tools` with
+  `listChanged: true`.
+- **The tools of a session** are its principal's, in this order:
+  - for each enabled app on hearth, by ID, and each agent operation of its
+    hearth manifest, by tool name, whose permission is the `cap` of at
+    least 1 item of the principal's grant for that app: a tool named
+    `<id>_<tool>`, with the description, `inputSchema` and `outputSchema`
+    of the app's tool catalog
+    ([app-contract.md](app-contract.md#apps-on-hearth)), and the hints of
+    the operation's effect:
+
+    | Effect | `readOnlyHint` | `destructiveHint` | `openWorldHint` |
+    | --- | --- | --- | --- |
+    | `read` | `true` | `false` | `false` |
+    | `write` | `false` | `false` | `false` |
+    | `outward` | `false` | `true` | `true` |
+
+  - `request_access`, lodge's own tool.
+- **`request_access`** takes `{"app": "<id>", "items": [{"cap": "…",
+  "sel": {"<selector>": "<path>"}}]}`, 1 to 32 items, and makes an access
+  request for the session's client ([oauth.md](oauth.md#requests)). Its
+  description lists each enabled app on hearth: its ID, its name, its
+  capabilities and its selectors. Its result is
+  `{"request": "<id>", "url": "https://LODGE/oauth/consent/<id>",
+  "expires": "<RFC 3339 time>"}`, and 1 text that asks the agent's owner
+  to open the URL. A refused request (an app not on hearth, a bad item, 64
+  requests pending) is a tool error with the reason.
+- **A call of `<id>_<tool>`**, in order. A name that is `<id>_<tool>` of
+  an agent operation of an installed app on hearth reaches these steps
+  whether or not the session's tool list holds it: the list says what the
+  principal may call now, and the call reads the grant again. Any other
+  name is the MCP SDK's unknown-tool error.
+  1. The app is installed and enabled, with that agent operation, else a
+     tool error `app <id> is disabled: <reason>`.
+  2. lodge reads the principal's grant for the app again. Without an item
+     whose `cap` is the operation's permission, the call is a tool error
+     `insufficient_scope: principal <name> holds no <cap> for app <id>:
+     call request_access to ask for it`, and the app sees nothing. This is
+     not an HTTP 403: the OAuth scope is right, and a new sign-in cannot
+     widen a grant.
+  3. lodge sends `POST /connect/<service>/<method>` to the app's socket,
+     with `Content-Type: application/json`, `Connect-Protocol-Version: 1`,
+     `Connect-Timeout-Ms: 60000`, `Lodge-Caller: principal`,
+     `Lodge-Principal: <name>` and `Lodge-Grant`: the principal's grant for
+     the app, as JSON in base64url without padding
+     ([app-contract.md](app-contract.md#apps-on-hearth)). The body is the
+     call's arguments, `{}` when it has none.
+  4. A `200` answer with a JSON object of at most 4 MiB is the result: the
+     object as `structuredContent`, and the same JSON as 1 text content. A
+     Connect error `{"code": …, "message": …}` is a tool error: the
+     message for `permission_denied`, else `<code>: <message>`. Any other
+     answer is a tool error `app <id> answered HTTP <status>`, and no
+     answer is `app <id> cannot be reached`.
+- **A grant change reaches live sessions.** After an approval or the
+  grants page changes a principal's grant, and after a reload changes the
+  apps, lodge computes each principal's tools again. Every open session of
+  a principal whose tools changed gets `notifications/tools/list_changed`,
+  and stays open. The next call reads the new grant.
+- **Revoking** a client or a principal ([oauth.md](oauth.md#principals-clients-and-grants))
+  ends each request and stream of its clients at once, and their next
+  request is 401.
+- lodge logs each request's node name, principal, client, method and
+  status, and never a token.
 - The response carries the [confined set](#device-routes) of device
   responses, without `Cross-Origin-Resource-Policy`.
 
@@ -833,6 +994,11 @@ repository.
 - Only an enabled app's user connects to the broker's socket, and a pull
   request's reply stays in the account that sent it. Each has a test that
   fails it.
+- The MCP gateway lists an app's tool only to a principal whose grant holds
+  its permission, reads the grant again at each call, and binds each
+  session to its client. An app call reaches only an operation that its
+  manifest exposes to its caller. Each has a test that fails it.
+- Only `internal/mcpgw` imports the Go MCP SDK.
 - No response, log line or state file holds an MCP token.
 - A release build holds no e2e identity code, proved with `go tool nm`.
 - Nothing dials Tailscale's log host. A test runs a node against the
@@ -848,7 +1014,7 @@ repository.
 
 ## References
 
-- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and the consent routes), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed)
+- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and the consent routes), [ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (the MCP gateway and app calls), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [oauth.md](oauth.md), [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
-- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)
+- Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket); the MCP gateway and app calls in [Phase 8](../plans/0001-roadmap.md#phase-8--the-mcp-gateway-and-apps-on-hearth)

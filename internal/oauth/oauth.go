@@ -112,6 +112,10 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrTooMany means too many requests or clients are held.
 	ErrTooMany = errors.New("too many")
+	// ErrScope means a live token lacks the scope a caller needs: the client
+	// signs in again for more scope, which a grant cannot give it
+	// (ADR-0024).
+	ErrScope = errors.New("insufficient scope")
 )
 
 // Apps is what the consent page asks of the installed apps.

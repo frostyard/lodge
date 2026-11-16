@@ -1,0 +1,84 @@
+{
+  "hearth": 1,
+  "app": "notelite",
+  "version": "0.1.0",
+  "capabilities": [
+    "notelite:read",
+    "notelite:write"
+  ],
+  "selectors": [
+    "folder"
+  ],
+  "operations": [
+    {
+      "name": "example.notes.v1.NoteService.CreateNote",
+      "permission": "notelite:write",
+      "effect": "write",
+      "expose": [
+        "ui",
+        "agent"
+      ],
+      "selectors": [
+        {
+          "field": "folder",
+          "selector": "folder"
+        }
+      ],
+      "tool": "create_note"
+    },
+    {
+      "name": "example.notes.v1.NoteService.DeleteNote",
+      "permission": "notelite:write",
+      "effect": "write",
+      "expose": [
+        "ui",
+        "agent"
+      ],
+      "selectors": [],
+      "tool": "delete_note"
+    },
+    {
+      "name": "example.notes.v1.NoteService.GetNote",
+      "permission": "notelite:read",
+      "effect": "read",
+      "expose": [
+        "ui",
+        "agent"
+      ],
+      "selectors": [],
+      "tool": "get_note"
+    },
+    {
+      "name": "example.notes.v1.NoteService.ListNotes",
+      "permission": "notelite:read",
+      "effect": "read",
+      "expose": [
+        "ui",
+        "agent"
+      ],
+      "selectors": [
+        {
+          "field": "folder",
+          "selector": "folder"
+        }
+      ],
+      "tool": "list_notes"
+    }
+  ],
+  "events": [
+    {
+      "type": "org.frostyard.notelite.note.created",
+      "message": "example.notes.v1.NoteCreated",
+      "topic": "notelite.note.created.folder",
+      "selector": "folder",
+      "read_permission": "notelite:read"
+    },
+    {
+      "type": "org.frostyard.notelite.note.deleted",
+      "message": "example.notes.v1.NoteDeleted",
+      "topic": "notelite.note.deleted.folder",
+      "selector": "folder",
+      "read_permission": "notelite:read"
+    }
+  ]
+}

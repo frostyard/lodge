@@ -331,10 +331,11 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request, route mcpRout
 		return
 	}
 	tok = t
-	// 6. App.
+	// 6. App. An app on hearth is 404, enabled or not: agents reach it
+	// through the MCP gateway (ADR-0024).
 	a, ok := g.cfg.Apps.Get(id)
 	switch {
-	case !ok || (a.Enabled() && !a.Manifest.MCP):
+	case !ok || a.Manifest.Hearth != "" || (a.Enabled() && !a.Manifest.MCP):
 		fail(w, http.StatusNotFound, "not found", agentHeaders)
 		return
 	case !a.Enabled():
