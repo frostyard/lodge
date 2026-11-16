@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker",
+  "correction": "A test that expects a refusal over a real Unix socket must not require the refusal text alone: nats.go writes CONNECT and PING in 2 writes, and lodge closes a refused connection after its -ERR line, so the PING write can fail with EPIPE or ECONNRESET first. Accept those errors only together with proof of the refusal (the broker's log line for that cause), never in place of it.",
+  "evidence": "frostyard/lodge#84: TestDevelopmentUIDNamesItsApp (from lodge#81) failed in make bump for v0.4.0 with 'write: broken pipe, want an authorization violation'; reproduced in 12 parallel race runs; same class as frostyard/hearth#4",
+  "promoted_to": "internal/broker/options_test.go refusedUnnamed, used by TestDevelopmentUIDNamesItsApp"
+}

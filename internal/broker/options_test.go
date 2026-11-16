@@ -1,10 +1,15 @@
 package broker
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -115,12 +120,14 @@ func TestSyncAppsClosesAnAppsConnections(t *testing.T) {
 }
 
 // Under --root every app runs as the developer, which names its app in
-// CONNECT's user field, and that app must be enabled.
+// CONNECT's user field, and that app must be enabled. lodge itself must
+// refuse the other app, as its log shows: the NATS server answers an
+// authorization violation of its own for an account that it lacks.
 func TestDevelopmentUIDNamesItsApp(t *testing.T) {
 	dir := t.TempDir()
 	apps := &fakeApps{byUID: map[int]string{}, enabled: map[string]bool{"marks": true}}
-	b := New(Options{StoreDir: dir, Apps: apps, DevUID: os.Getuid(),
-		Log: slog.New(slog.DiscardHandler)})
+	logged := &logLines{}
+	b := New(Options{StoreDir: dir, Apps: apps, DevUID: os.Getuid(), Log: slog.New(logged)})
 	noErr(t, b.Start(t.Context()))
 	t.Cleanup(b.Close)
 	ln, err := Listen(filepath.Join(dir, "nats.sock"), "")
@@ -140,9 +147,60 @@ func TestDevelopmentUIDNamesItsApp(t *testing.T) {
 		other.Close()
 		t.Fatal("a developer connection that names an app which is not enabled was admitted")
 	}
-	if !strings.Contains(err.Error(), "Authorization Violation") {
+	refusedUnnamed(t, err, logged)
+}
+
+// unnamedRefusal is the broker's log line for a CONNECT line that names no
+// enabled app.
+const unnamedRefusal = "the broker refused a connection: lodge cannot name it"
+
+// refusedUnnamed checks the error of a nats.go connection that the broker
+// refused because lodge cannot name it. lodge writes the authorization
+// violation and closes the connection. nats.go writes CONNECT and PING in 2
+// writes, so the PING can reach a socket that lodge has already closed: the
+// client then fails with EPIPE or ECONNRESET and never reads the refusal
+// line. Such an error counts as this refusal only together with the
+// broker's log line, which lodge writes before it closes. Any other error,
+// or another answer from the server, fails the test.
+func refusedUnnamed(t *testing.T, err error, logged *logLines) {
+	t.Helper()
+	if !logged.has(unnamedRefusal) {
+		t.Errorf("the broker did not log %q; the connection ended with %v", unnamedRefusal, err)
+	}
+	switch {
+	case strings.Contains(err.Error(), "Authorization Violation"):
+	case errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ECONNRESET):
+		t.Logf("the client wrote after the refusal closed the socket: %v", err)
+	default:
 		t.Errorf("the refusal was %v, want an authorization violation", err)
 	}
+}
+
+// logLines records the messages of the broker's log, for a test to check
+// which refusal the broker made.
+type logLines struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (l *logLines) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *logLines) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs = append(l.msgs, r.Message)
+	return nil
+}
+
+func (l *logLines) WithAttrs([]slog.Attr) slog.Handler { return l }
+
+func (l *logLines) WithGroup(string) slog.Handler { return l }
+
+// has reports whether the log holds msg.
+func (l *logLines) has(msg string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Contains(l.msgs, msg)
 }
 
 // connectApp dials the broker's socket as user, whose CONNECT names an app
