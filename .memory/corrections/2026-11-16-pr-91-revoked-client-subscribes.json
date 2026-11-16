@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "lodge's token check happens on the HTTP request, and the subscription is registered later: a client that OAuth revokes in between would keep a subscription that no grant of a live client backs. The activation checks the client again inside the broker's lock (it exists, it is bound, it holds scope events, it is the token's principal), and answers ErrNotFound, which the gateway answers as 404. A revocation after that check finds the subscription registered, so its hook revokes it.",
+  "evidence": "frostyard/lodge#91 author's lifecycle audit after re-review 4: a client revoked in OAuth after the token check could register a subscription",
+  "promoted_to": "internal/events/acceptance_test.go TestARevokedClientGetsNoSubscription"
+}

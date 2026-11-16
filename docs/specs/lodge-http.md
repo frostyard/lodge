@@ -133,6 +133,7 @@ On `LODGE`:
 | `/mcp/<id>` | `POST`, `GET`, `DELETE` | agent | `Bearer` MCP token | the app's `/mcp`; none for an app on hearth |
 | `/gateway/mcp` | `POST`, `GET`, `DELETE` | gateway | `Bearer` OAuth access token with scope `mcp` | lodge's MCP gateway ([below](#the-mcp-gateway)) |
 | `/device/<id>/<path>` | any | device | the app's own | the app's `/device/<path>` |
+| `/gateway/events`, `/gateway/events/<sub>` | `GET`; `PUT`, `DELETE` | gateway | `Bearer` OAuth access token with scope `events` | the client's event subscriptions ([below](#event-subscriptions)) |
 | `/nats` | `GET` (WebSocket) | broker | the token in the `CONNECT` line | the event broker ([below](#the-broker)) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/gateway/mcp` | `GET`, `HEAD` | OAuth | none | lodge's OAuth metadata ([below](#oauth-routes)) |
 | `/oauth/register`, `/oauth/token`, `/oauth/revoke` | `POST` | OAuth | none, or the client's grant | lodge's OAuth server |
@@ -686,9 +687,9 @@ the address check.
 
 lodge embeds an event broker, a NATS server with JetStream
 ([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)).
-It is **off unless** the `broker` member of `/etc/lodge/config.json` is
-`{"enabled": true}`, which lodge reads at start; a change takes effect at
-the next start. A broken `broker` member, or a broker that cannot start,
+It is **on unless** the `broker` member of `/etc/lodge/config.json` is
+`{"enabled": false}`; a missing file, member or `enabled` leaves it on.
+lodge reads it at start, and a change takes effect at the next start. A broken `broker` member, or a broker that cannot start,
 leaves it off and logs why; the rest of lodge keeps serving. Off, there is
 no socket and no store, and `/nats` answers 404. On, it has 2 doors and no
 listener of its own.
@@ -719,9 +720,18 @@ listener of its own.
      set after the wrapper that would turn it off, so a message over it
      ends the connection with `1009` (message too big).
 
-  The `CONNECT` line's `auth_token` names the client. **lodge issues no
-  event token yet,** so every client is refused with
-  `-ERR 'Authorization Violation'` after the server's `INFO` line.
+  The `CONNECT` line's `auth_token` is an OAuth access token with scope
+  `events` ([oauth.md](oauth.md#lodges-own-callers)), and names the
+  client. Any other token, or none, is refused with
+  `-ERR 'Authorization Violation'` after the server's `INFO` line. The
+  client's broker name is `o` and the 16 bytes of its client ID in
+  lower-case base32 with no padding (27 characters).
+  - **Before the line reaches the server,** lodge checks the client's
+    consumers for a [resync](#event-subscriptions), within 2 s; a failure
+    is logged, and the connection goes on.
+  - **A connection closes when its token expires.** Each minute lodge
+    checks every open client connection's token again, and closes it when
+    the token no longer names that client.
 - **1 protocol line, never a message.** On either door lodge reads the
   connection's first line, which must be `CONNECT` and 1 JSON object (at
   most 8 KiB). A line whose options are no object, `null` included, is
@@ -733,8 +743,10 @@ listener of its own.
   is gone.
 - **An account per app and per client,** so that a reply subject cannot
   reach another app's stream:
-  - app `<id>`: its subject `<id>.>`, a stream `app_<id>` that holds 7
-    days and 1 GiB, and a JetStream `PubAck` to each publish;
+  - app `<id>`: its subject `<id>.>`, a stream `app_<id>` with the
+    subjects `<id>.>` and `lodge.<id>.>` that holds 7 days or 1 GiB,
+    whichever comes first, and discards the oldest, and a JetStream
+    `PubAck` to each publish. Only lodge publishes `lodge.<id>.>`;
   - client `<name>`: only its own consumers' pull requests and acks,
     `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` and
     `$JS.ACK.<stream>.<consumer>.>`, with an inbox under
@@ -743,8 +755,11 @@ listener of its own.
 - **1 durable pull consumer per client and subscription,** named
   `<client>-<sub>`, each of those names matching `^[a-z0-9_]{1,32}$`,
   with filters inside one app's `<id>.>`: an empty token, a space, or `>`
-  before the last token is refused. It acknowledges explicitly, takes new
-  messages, and a pull expires after at most 60 s and takes at most 256.
+  before the last token is refused. Its filters are those, and its own
+  resync subject `lodge.<id>.resync.<consumer>`. It acknowledges
+  explicitly, takes new messages, and a pull expires after at most 60 s
+  and takes at most 256. Its metadata names its client, its subscription
+  and the topic it asked for.
   **A subscription stays on 1 app:** subscribing the same client and
   subscription name to another app is refused, with an error that asks
   for an unsubscribe first, and that unsubscribe deletes the consumer it
@@ -752,7 +767,8 @@ listener of its own.
   client's subscribe and unsubscribe run 1 at a time, so the check and the
   consumer it makes are 1 step.
 - **A subscription change reconnects the client:** its permission names
-  its consumers.
+  its consumers. A change of a subscription's filters alone, by a
+  [grant change](#event-subscriptions), does not.
 - **Revoking a client closes it first.** lodge takes the client out of
   its index, closes its connections at once, and deletes its consumers
   after that, concurrently and within 1 s: a consumer's deletion can wait
@@ -787,6 +803,112 @@ listener of its own.
 - **lodge keeps no message.** It reads no message, indexes no message,
   and logs no message. Its index is which client has which consumers, and
   it is rebuilt from the consumers' metadata at the next start.
+
+### Event subscriptions
+
+`/gateway/events` on the `lodge` node is where a client with scope
+`events` subscribes to the broker
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)).
+It is 404 when the broker or lodge's OAuth server is off. The checks, in
+order:
+
+1. **Host:** `LODGE` or `LODGE:443`, else 403.
+2. **Origin:** a request with an `Origin` header is 403.
+3. **Method:** `GET` on `/gateway/events`; `PUT` or `DELETE` on
+   `/gateway/events/<sub>`; else 405 with `Allow`.
+4. **Peer:** identity checks a and b, else 403.
+5. **Token:** `Authorization: Bearer <token>` is a live OAuth access token
+   of a live, bound client of a live principal. Else 401 with no detail and
+   `WWW-Authenticate: Bearer resource_metadata="https://LODGE/.well-known/oauth-protected-resource"`.
+6. **Scope:** a live token without scope `events` is 403, with
+   `WWW-Authenticate: Bearer error="insufficient_scope", scope="events", …`.
+7. **Upgrade:** a WebSocket upgrade is 400.
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `GET /gateway/events` | none | 200, `{"subscriptions": [S, …]}`: the client's own |
+| `PUT /gateway/events/<sub>` | `{"topic": "<prefix>"}`, at most 4 KiB, no other member | 200, `S`: made, or its filters updated |
+| `DELETE /gateway/events/<sub>` | none | 204: the subscription and its consumer are gone |
+
+`S` is `{"name", "app", "topic", "stream", "consumer", "filters"}`: the
+stream and the consumer to pull from on `/nats`, and the filters the
+consumer holds, its resync subject included. `GET` reads them from the
+consumer itself.
+
+- **`<sub>`** matches `^[a-z0-9_]{1,32}$`, else 400.
+- **The topic is a prefix:** 1 to 32 tokens joined by `.`, each `*` or
+  a literal of `[A-Za-z0-9_%-]`, with no `>`; the first is the ID of an
+  installed, enabled app with a hearth manifest. It takes every subject
+  whose first tokens match it. A topic that breaks this is 400, and an
+  app that is not one is 404.
+- **The effective read prefixes.** For each item of the principal's grant
+  for the app, and each event of the app's manifest whose
+  `read_permission` is the item's `cap`
+  ([oauth.md](oauth.md#the-apps-manifest)):
+  - an event with no selector gives its topic alone;
+  - an event with a selector gives its topic, with 1 token for each
+    segment of the item's path for that selector, and every subject below
+    it; every byte of a segment outside `[A-Za-z0-9-]` is `%` and 2
+    upper-case hex digits; the root path, or none, adds no token;
+  - an item that names another selector at a path other than the root
+    gives nothing for that event.
+
+  Each is narrowed to the requested topic, token by token (2 different
+  literals give nothing; a literal wins over `*`), and one that another
+  covers is dropped. These are hearth's `events.ReadFilters`, and a test
+  in `internal/hearthtest` compares the two.
+- **A topic the grant gives nothing under is 403.** The consumer is made
+  only with at least 1 filter of the grant. A consumer takes at most 64
+  filters, its resync subject included: a topic under which the grant
+  gives more is 400, and asks for a narrower topic. A grant change that
+  would give more leaves the consumer only its resync subject, and logs
+  why: lodge never keeps filters that may be wider than the grant.
+- **A subscription stays on 1 app:** `PUT` of a `<sub>` that is another
+  app's is 409, and so is one during a revoke of the client. An unknown
+  `<sub>` on `DELETE` is 404. A broker that fails is 503.
+- **lodge reads the grant inside the client's lock,** so a subscription
+  and a grant change of the same client run 1 after the other. A new
+  subscription is 1 step under that lock: its consumer starts with its
+  resync subject alone and is registered; then lodge checks that the
+  OAuth client is still there with scope `events`, reads the grant again
+  and gives the consumer its filters. A grant change or a revoke that
+  comes after that read finds the subscription, so a subscription cannot
+  keep a grant the change narrowed. When the check or the second read
+  fails, the subscription is deleted before the lock is released. A
+  client whose OAuth client is gone gets 404; a lookup that fails for
+  another reason gets 503.
+- **A grant change refilters.** When a principal's grant for an app
+  changes, lodge computes each of its clients' subscriptions on that app
+  again and updates the consumer in place. The events not yet delivered
+  are filtered again; a grant that gives nothing leaves the consumer only
+  its resync subject. An event that was delivered and not acknowledged may
+  come again. **A refilter that fails fails closed:** when lodge cannot
+  read the grant or the client, or update the consumer, it revokes that
+  client in the broker, which closes its connections and deletes its consumers; the
+  client subscribes again.
+- **A revoke ends delivery.** Revoking a client or a principal revokes
+  each of its clients in the broker: connections first, then consumers,
+  [as above](#the-broker).
+- **Each minute** lodge checks for resyncs, checks the open connections'
+  tokens, computes every subscription's filters again, and revokes a
+  broker client whose OAuth client is gone or has no scope `events`.
+- **Resync.** When a consumer's stream position is before its stream's
+  first message, retention dropped events it never received. lodge then
+  publishes 1 message on its resync subject, with `Nats-Msg-Id` its `id`:
+
+  ```json
+  {"specversion": "1.0", "id": "<UUIDv7>", "source": "/lodge",
+   "type": "org.frostyard.lodge.resync", "subject": "<app>",
+   "time": "2026-11-16T12:00:00Z"}
+  ```
+
+  The consumer reads on from the stream's first message; the event tells
+  it to read the state again through the app's API. lodge publishes no
+  second one while one is pending: the check and the publish of a
+  consumer run 1 at a time. JetStream moves a consumer's position
+  only when it serves a pull, so lodge checks when a client connects,
+  before its `CONNECT` line reaches the server, and every consumer each
+  minute.
 
 ### OAuth routes
 
@@ -994,6 +1116,10 @@ repository.
 - Only an enabled app's user connects to the broker's socket, and a pull
   request's reply stays in the account that sent it. Each has a test that
   fails it.
+- A client receives only the events its grant reads, a narrowed grant
+  stops the events not yet delivered outside it, a revoke ends delivery,
+  and a consumer behind its stream's first message gets 1 resync event.
+  Each has a test that fails it.
 - The MCP gateway lists an app's tool only to a principal whose grant holds
   its permission, reads the grant again at each call, and binds each
   session to its client. An app call reaches only an operation that its

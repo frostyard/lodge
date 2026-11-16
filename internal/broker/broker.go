@@ -16,6 +16,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -69,6 +70,28 @@ const (
 	PullBatch = 256
 )
 
+// Lodge's own subjects: the reserved app id their first token is, and the
+// resync event that a consumer gets when retention dropped messages it never
+// saw (docs/specs/lodge-http.md, The broker).
+const (
+	// ReservedApp is the app id of lodge's own subjects. No app takes it, so
+	// no app's subjects overlap them.
+	ReservedApp = "lodge"
+	// ResyncType is the CloudEvents type of the resync event.
+	ResyncType = "org.frostyard.lodge.resync"
+	// MsgIDHeader names a message's ID, which the stream deduplicates by.
+	MsgIDHeader = "Nats-Msg-Id"
+)
+
+// ResyncSubject is the subject of the resync event of 1 consumer: lodge's
+// own, which only lodge publishes.
+func ResyncSubject(app, consumer string) string {
+	return ReservedApp + "." + app + ".resync." + consumer
+}
+
+// resyncWildcard is every resync subject of 1 app, which its stream keeps.
+func resyncWildcard(app string) string { return ReservedApp + "." + app + ".>" }
+
 // The hub's subjects that a client's account reaches: its own pull
 // requests, and its own acks.
 const (
@@ -82,6 +105,19 @@ const (
 const (
 	MetadataClient = "lodge.client"
 	MetadataSub    = "lodge.sub"
+	MetadataTopic  = "lodge.topic"
+)
+
+// The errors of a subscription that the caller answers apart.
+var (
+	// ErrConflict is a subscription whose app another subscription of the
+	// client holds, or a client whose revoke is in progress.
+	ErrConflict = errors.New("the subscription conflicts with another operation")
+	// ErrNotFound is a subscription that is not there.
+	ErrNotFound = errors.New("no such subscription")
+	// ErrNoFilters is a subscription whose filters are empty: it would take
+	// every subject.
+	ErrNoFilters = errors.New("a subscription needs at least one filter")
 )
 
 // readyTimeout bounds the wait for the server's readiness.
@@ -107,9 +143,18 @@ type Options struct {
 	// connections name their app in CONNECT's user field, and it must be
 	// an enabled app.
 	DevUID int
-	// Tokens names the client a connection's auth_token belongs to. A nil
-	// Tokens refuses every outside client: lodge issues no event token yet.
-	Tokens func(ctx context.Context, token string) (client string, ok bool)
+	// Tokens names the client a connection's auth_token belongs to, and when
+	// that token expires: a zero time never expires. A nil Tokens refuses
+	// every outside client.
+	Tokens func(ctx context.Context, token string) (client string, expires time.Time, ok bool)
+	// StreamMaxAge is how long a stream keeps a message [StreamMaxAge]. It
+	// is a field so that a test can lower it: the server refuses a max age
+	// under 100 ms.
+	StreamMaxAge time.Duration
+	// StreamDuplicates is how long a stream remembers a message ID
+	// [DuplicateWindow]. The server refuses a window larger than the
+	// stream's max age, and under 100 ms.
+	StreamDuplicates time.Duration
 	// Log is where the server's log goes [discard].
 	Log *slog.Logger
 }
@@ -128,6 +173,8 @@ type identity struct {
 	kind kind
 	// name is the app's id, the client's name, or "lodge".
 	name string
+	// token is the client's token, which CheckClients checks again.
+	token string
 }
 
 // key is the identity's key in the connection registry.
@@ -150,6 +197,13 @@ type consumerRef struct {
 // clientState is one client's subscriptions.
 type clientState struct {
 	subs map[string]*consumerRef
+	// topics are the topic each subscription asked for.
+	topics map[string]string
+}
+
+// newClientState is a client with no subscription.
+func newClientState() *clientState {
+	return &clientState{subs: map[string]*consumerRef{}, topics: map[string]string{}}
 }
 
 // Broker is lodge's embedded broker.
@@ -161,6 +215,16 @@ type Broker struct {
 	hub *server.Account
 	nc  *nats.Conn
 	js  jetstream.JetStream
+
+	// streamMaxAge and streamDuplicates are the limits of every app's
+	// stream, which a test lowers.
+	streamMaxAge     time.Duration
+	streamDuplicates time.Duration
+
+	// resyncMu makes each consumer's resync check and its publish 1 step, so
+	// that 2 checks cannot both find no resync event pending and publish 2.
+	// It is never held with b.mu.
+	resyncMu sync.Mutex
 
 	// peerUID reads a connection's peer uid (SO_PEERCRED); a test
 	// replaces it.
@@ -196,6 +260,10 @@ type Broker struct {
 	// subscription's one-app check has passed, and before its consumer is
 	// made.
 	afterOneAppCheck func()
+	// beforeActivate, when set, is a test's barrier: it runs once a new
+	// subscription is registered, and before its activation, inside the
+	// client's lifecycle lock.
+	beforeActivate func()
 	// accounts, exports and imports are what is registered, so that
 	// nothing is registered twice.
 	accounts map[string]*server.Account
@@ -216,22 +284,24 @@ func New(o Options) *Broker {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Broker{
-		o:          o,
-		log:        log,
-		peerUID:    peerUID,
-		pending:    map[string]identity{},
-		apps:       map[string]bool{},
-		clients:    map[string]*clientState{},
-		revoking:   map[string]map[consumerRef]bool{},
-		lifecycles: map[string]*sync.Mutex{},
-		epochs:     map[string]uint64{},
-		inflight:   map[string]int{},
-		accounts:   map[string]*server.Account{},
-		exports:    map[string]map[string]bool{},
-		imports:    map[string]map[string]bool{},
-		conns:      map[string]map[*conn]struct{}{},
-		refused:    map[int]time.Time{},
-		now:        time.Now,
+		o:                o,
+		log:              log,
+		streamMaxAge:     cmp.Or(o.StreamMaxAge, StreamMaxAge),
+		streamDuplicates: cmp.Or(o.StreamDuplicates, DuplicateWindow),
+		peerUID:          peerUID,
+		pending:          map[string]identity{},
+		apps:             map[string]bool{},
+		clients:          map[string]*clientState{},
+		revoking:         map[string]map[consumerRef]bool{},
+		lifecycles:       map[string]*sync.Mutex{},
+		epochs:           map[string]uint64{},
+		inflight:         map[string]int{},
+		accounts:         map[string]*server.Account{},
+		exports:          map[string]map[string]bool{},
+		imports:          map[string]map[string]bool{},
+		conns:            map[string]map[*conn]struct{}{},
+		refused:          map[int]time.Time{},
+		now:              time.Now,
 	}
 }
 
@@ -397,34 +467,74 @@ func (b *Broker) ensureApp(ctx context.Context, id string) error {
 		return err
 	}
 	if _, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:       "app_" + id,
-		Subjects:   []string{id + ".>"},
-		MaxAge:     StreamMaxAge,
+		Name: "app_" + id,
+		// The app's own subjects, and lodge's own: its resync events,
+		// which no app publishes.
+		Subjects:   []string{id + ".>", resyncWildcard(id)},
+		MaxAge:     b.streamMaxAge,
 		MaxBytes:   StreamMaxBytes,
 		Discard:    jetstream.DiscardOld,
 		Storage:    jetstream.FileStorage,
-		Duplicates: DuplicateWindow,
+		Duplicates: b.streamDuplicates,
 	}); err != nil {
 		return fmt.Errorf("make app %s's stream: %w", id, err)
 	}
 	return nil
 }
 
+// Spec is 1 subscription that a client asks for: its name, the app whose
+// events it takes, and the topic it wants.
+type Spec struct {
+	Client string
+	Sub    string
+	App    string
+	// Topic is the requested prefix of the subjects it takes, whose first
+	// token is App.
+	Topic string
+	// Activate installs a new subscription's filters after it is registered,
+	// still inside the client's lifecycle lock, and answers them. A caller
+	// whose filters come from a store outside the broker uses it, so that the
+	// subscription exists before its filters are read: a change of them that
+	// runs after that read finds it. It runs for a new subscription only: 1
+	// that is registered already keeps the callback's filters, because its
+	// consumer may hold events that its filters let it read.
+	Activate func(ctx context.Context, app, topic string) ([]string, error)
+}
+
 // Subscribe gives client's subscription sub the messages of app that its
 // filters take: 1 durable pull consumer, and one-time permissions that name
-// it. The client's connections close, so that it reconnects with them.
+// it. The client's connections close, so that it reconnects with them. It is
+// SubscribeWith with the app as the topic.
 func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters []string) error {
+	_, err := b.SubscribeWith(ctx, Spec{Client: client, Sub: sub, App: app, Topic: app},
+		func(context.Context) ([]string, error) { return filters, nil })
+	return err
+}
+
+// SubscribeWith gives client's subscription sub the messages of spec's app
+// that its filters take: 1 durable pull consumer, and one-time permissions
+// that name it. filters runs inside the client's lifecycle lock, after the
+// one-app check and before any consumer is made: its error, or an empty
+// answer, stops the call there, and so does a filter list that the broker
+// cannot install. With spec.Activate, a new subscription's consumer is made
+// with its resync subject alone, and spec.Activate's filters are installed
+// after it is registered, still under the client's lifecycle lock; a failed
+// activation removes the subscription. It answers the filters the consumer
+// holds when it returns. The client's connections close, so that it
+// reconnects with them.
+func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx context.Context) ([]string, error)) ([]string, error) {
+	client, sub, app := spec.Client, spec.Sub, spec.App
 	if err := validateName("client", client); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateName("sub", sub); err != nil {
-		return err
+		return nil, err
 	}
 	if !apps.ValidID(app) {
-		return fmt.Errorf("subscribe %s: %q is not an app's id", client, app)
+		return nil, fmt.Errorf("subscribe %s: %q is not an app's id", client, app)
 	}
-	if err := validateFilters(app, filters); err != nil {
-		return fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	if err := validateTopic(app, spec.Topic); err != nil {
+		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
 	}
 	// One operation of this client at a time: the check below and the
 	// consumer it makes are 1 step.
@@ -445,42 +555,69 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	if revoking {
 		// The revoke's own deletion would take the consumer this call
 		// would make, so it waits for it to end, which takes 1 s at most.
-		return fmt.Errorf("subscribe %s: a revoke of the client is in progress", client)
+		return nil, fmt.Errorf("subscribe %s: a revoke of the client is in progress: %w", client, ErrConflict)
 	}
 	if !ready {
-		return fmt.Errorf("subscribe %s to %s: the app is not enabled", client, app)
+		return nil, fmt.Errorf("subscribe %s to %s: the app is not enabled", client, app)
 	}
 	if on != nil && on.stream != "app_"+app {
-		return fmt.Errorf("subscribe %s: subscription %q is %s's; unsubscribe it before subscribing it to %s",
-			client, sub, appOf(on.stream), app)
+		return nil, fmt.Errorf("%w: subscribe %s: subscription %q is %s's; unsubscribe it before subscribing it to %s",
+			ErrConflict, client, sub, appOf(on.stream), app)
 	}
 	if hook := b.afterOneAppCheck; hook != nil {
 		hook()
+	}
+	// The grant is read here, under the client's lock, so that the consumer
+	// is made with the filters of the subscription's own grant.
+	fs, err := filters(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	}
+	if len(fs) == 0 {
+		return nil, fmt.Errorf("subscribe %s to %s: the filters are empty: %w", client, app, ErrNoFilters)
+	}
+	if err := validateFilters(app, fs); err != nil {
+		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	}
+	// A consumer's filters are never empty, which would mean every subject:
+	// its resync subject is always one of them, and the count includes it.
+	resync := ResyncSubject(app, client+"-"+sub)
+	fs = append(fs, resync)
+	if err := validateCount(fs); err != nil {
+		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	}
+	if spec.Activate != nil && on == nil {
+		// It is a new subscription: the callback's answer is the precheck,
+		// and its filters go in below, after it is registered and still under
+		// this lock. A subscription that is registered already keeps them
+		// now: its consumer may hold events that its filters let it read, and
+		// a narrower 1 in between would move it past them.
+		fs = []string{resync}
 	}
 	// A revoke that could not delete a consumer kept it for this client,
 	// and it stays first: a kept ref of this subscription's app would
 	// delete the consumer this call is about to make.
 	if err := b.retryRevoke(ctx, client); err != nil {
-		return err
+		return nil, err
 	}
 	acc, err := b.account("client_" + client)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ref := consumerRef{stream: "app_" + app, consumer: client + "-" + sub}
 	if err := b.addImports(acc, ref); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := b.js.CreateOrUpdateConsumer(ctx, ref.stream, jetstream.ConsumerConfig{
 		Durable:           ref.consumer,
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverNewPolicy,
-		FilterSubjects:    filters,
+		FilterSubjects:    fs,
 		MaxRequestExpires: PullExpires,
 		MaxRequestBatch:   PullBatch,
-		Metadata:          map[string]string{MetadataClient: client, MetadataSub: sub},
+		Metadata:          map[string]string{MetadataClient: client, MetadataSub: sub, MetadataTopic: spec.Topic},
 	}); err != nil {
-		return fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
 	}
 	// A revoke that ran meanwhile took the client and its consumers: this
 	// one is nobody's, and it goes again.
@@ -489,10 +626,11 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	if !moved {
 		c := b.clients[client]
 		if c == nil {
-			c = &clientState{subs: map[string]*consumerRef{}}
+			c = newClientState()
 			b.clients[client] = c
 		}
 		c.subs[sub] = &ref
+		c.topics[sub] = spec.Topic
 	}
 	b.mu.Unlock()
 	if moved {
@@ -501,12 +639,46 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 		kept, err := b.deleteRefs(dctx, []consumerRef{ref})
 		b.keepRefs(client, kept)
 		if err != nil {
-			return fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription, and its consumer is kept: %w", client, app, err)
+			return nil, fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription, and its consumer is kept: %w", client, app, err)
 		}
-		return fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription", client, app)
+		return nil, fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription", client, app)
+	}
+	// The filters go in here, still under the client's lifecycle lock: a
+	// request that deletes this subscription and puts another 1 in its place
+	// cannot slip between its registration and its activation, which would
+	// let this call clean up the replacement. A subscription that is
+	// registered already skipped that, above.
+	if spec.Activate != nil && on == nil {
+		if hook := b.beforeActivate; hook != nil {
+			hook()
+		}
+		installed, err := b.refilterLocked(ctx, client, sub, spec.Activate)
+		if err != nil {
+			return nil, b.cleanUpActivation(ctx, client, sub, err)
+		}
+		fs = installed
 	}
 	b.closeConns(identity{kind: kindClient, name: client}.key())
-	return nil
+	return fs, nil
+}
+
+// cleanUpActivation removes the subscription of an activation that failed, and
+// answers the activation's error. A subscription that is gone, a revoke under
+// way and a revoke that overtook the activation leave nothing to remove; a
+// cleanup that fails answers its error with ErrCleanup.
+func (b *Broker) cleanUpActivation(ctx context.Context, client, sub string, err error) error {
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrConflict), errors.Is(err, errRefilterRevoked):
+		return err
+	}
+	// The activation may have failed because its budget ran out: the cleanup
+	// has a budget of its own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+	defer cancel()
+	if uerr := b.unsubscribeLocked(cctx, client, sub); uerr != nil && !errors.Is(uerr, ErrNotFound) {
+		return fmt.Errorf("%w: %w: %w", err, ErrCleanup, uerr)
+	}
+	return err
 }
 
 // Unsubscribe deletes client's subscription sub and its consumer, and
@@ -520,6 +692,12 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	}
 	unlock := b.lifecycle(client)
 	defer unlock()
+	return b.unsubscribeLocked(ctx, client, sub)
+}
+
+// unsubscribeLocked is Unsubscribe under the client's lifecycle lock, which
+// the caller holds.
+func (b *Broker) unsubscribeLocked(ctx context.Context, client, sub string) error {
 	b.mu.Lock()
 	epoch := b.epochs[client]
 	c := b.clients[client]
@@ -529,7 +707,7 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	}
 	b.mu.Unlock()
 	if ref == nil {
-		return fmt.Errorf("unsubscribe %s: no subscription %q", client, sub)
+		return fmt.Errorf("unsubscribe %s: no subscription %q: %w", client, sub, ErrNotFound)
 	}
 	if err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return fmt.Errorf("unsubscribe %s/%s: %w", client, sub, err)
@@ -540,6 +718,7 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	if b.epochs[client] == epoch {
 		if c := b.clients[client]; c != nil {
 			delete(c.subs, sub)
+			delete(c.topics, sub)
 		}
 	}
 	b.mu.Unlock()
@@ -857,10 +1036,17 @@ func (b *Broker) restore(stream string, info *jetstream.ConsumerInfo) error {
 	b.mu.Lock()
 	c := b.clients[client]
 	if c == nil {
-		c = &clientState{subs: map[string]*consumerRef{}}
+		c = newClientState()
 		b.clients[client] = c
 	}
 	c.subs[sub] = &ref
+	// A consumer that an older lodge made has no topic: it asked for its
+	// whole app.
+	topic := info.Config.Metadata[MetadataTopic]
+	if topic == "" {
+		topic = appOf(stream)
+	}
+	c.topics[sub] = topic
 	b.mu.Unlock()
 	return nil
 }
@@ -976,7 +1162,7 @@ func (b *Broker) setPeerUID(f func(net.Conn) int) {
 
 // track registers c under idn, or refuses it past the identity's cap.
 func (b *Broker) track(idn identity, c net.Conn) (*conn, bool) {
-	tc := &conn{Conn: c, b: b, key: idn.key()}
+	tc := &conn{Conn: c, b: b, key: idn.key(), token: idn.token}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -1016,9 +1202,11 @@ func (b *Broker) closeConns(key string) int {
 // conn is a tracked connection.
 type conn struct {
 	net.Conn
-	b    *Broker
-	key  string
-	once sync.Once
+	b   *Broker
+	key string
+	// token is the client's token, which CheckClients checks again.
+	token string
+	once  sync.Once
 }
 
 // Close closes the connection and forgets it.

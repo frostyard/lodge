@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker",
+  "correction": "The write that stops a failed refilter's delivery can land after a revoke deleted the consumer, and CreateOrUpdateConsumer then recreates it: a consumer of a revoked client lives on. Both refilter paths, the failed one and the successful one, run the same epoch check after their write, and delete what they wrote when a revoke has moved the client's epoch.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 1 at 6ab694f (openai/gpt-6.1-sol): blocking finding 3, stopDelivery can recreate a consumer that a revoke deleted",
+  "promoted_to": "internal/broker/subscribe_test.go TestAFailedRefilterAfterARevokeLeavesNoConsumer"
+}

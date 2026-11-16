@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A subscription name that breaks its form is the caller's error, not a failure of the broker: Unsubscribe must check the name first and wrap ErrInvalid, so that the gateway answers 400 and not 503.",
+  "evidence": "frostyard/lodge#91 cross-review at 1e6f745 (openai/gpt-6.1-sol): blocking finding 5, an invalid DELETE name answers 503",
+  "promoted_to": "internal/events/acceptance_test.go TestUnsubscribeRefusesABadName; internal/gateway/events_test.go TestEventsDeleteName"
+}

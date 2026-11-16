@@ -137,15 +137,23 @@ func (b *Broker) serveApp(ctx context.Context, c net.Conn) {
 
 // ServeClient serves one outside connection on /nats, such as an agent's
 // event bridge, named by the token in its CONNECT line. It logs 1 line per
-// connection.
+// connection. The client's resync events go out before its CONNECT line
+// reaches the server, so that its first pull sees them; an error there is
+// logged, and the connection goes on.
 func (b *Broker) ServeClient(ctx context.Context, c net.Conn) {
 	tokens := b.o.Tokens
 	if tokens == nil {
-		// lodge issues no event token yet, so every client's CONNECT line
-		// is refused once it is read.
-		b.log.Warn("the broker refused a client: lodge issues no event token yet")
+		// lodge has no OAuth server, so every client's CONNECT line is
+		// refused once it is read.
+		b.log.Warn("the broker refused a client: lodge issues no event token")
 	}
 	var name, token string
+	var expiry *time.Timer
+	defer func() {
+		if expiry != nil {
+			expiry.Stop()
+		}
+	}()
 	b.serve(ctx, c, door{
 		admit: func(ctx context.Context, opts map[string]jsontext.Value) (identity, bool) {
 			if tokens == nil {
@@ -156,9 +164,18 @@ func (b *Broker) ServeClient(ctx context.Context, c net.Conn) {
 					return identity{}, false
 				}
 			}
-			named, ok := tokens(ctx, token)
+			named, expires, ok := tokens(ctx, token)
 			if !ok {
 				return identity{}, false
+			}
+			switch {
+			case !expires.IsZero() && !expires.After(b.now()):
+				b.log.Warn("the broker refused a client: its token has expired", "client", named)
+				return identity{}, false
+			case !expires.IsZero():
+				// The token's lifetime is the connection's: a token that
+				// expires closes it.
+				expiry = time.AfterFunc(time.Until(expires), func() { _ = c.Close() })
 			}
 			if _, err := b.account("client_" + named); err != nil {
 				b.log.Error("make a client's account", "client", named, "err", err)
@@ -166,17 +183,24 @@ func (b *Broker) ServeClient(ctx context.Context, c net.Conn) {
 			}
 			b.mu.Lock()
 			if b.clients[named] == nil {
-				b.clients[named] = &clientState{subs: map[string]*consumerRef{}}
+				b.clients[named] = newClientState()
 			}
 			b.mu.Unlock()
 			name = named
-			return identity{kind: kindClient, name: named}, true
+			// A consumer that retention overtook gets its resync event now:
+			// a pull moves its position, and after one the gap is gone.
+			rctx, cancel := context.WithTimeout(ctx, resyncTimeout)
+			defer cancel()
+			if err := b.Resync(rctx, named); err != nil {
+				b.log.Warn("resync a client's consumers", "client", named, "err", err)
+			}
+			return identity{kind: kindClient, name: named, token: token}, true
 		},
 		again: func(ctx context.Context) bool {
 			if tokens == nil {
 				return false
 			}
-			named, ok := tokens(ctx, token)
+			named, _, ok := tokens(ctx, token)
 			return ok && named == name
 		},
 	})

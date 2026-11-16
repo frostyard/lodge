@@ -1,11 +1,16 @@
 package broker
 
 import (
+	"context"
+	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // A subscription creates nothing while a consumer that its client's revoke
@@ -230,5 +235,364 @@ func TestSubscribeWaitsForARevokeInProgress(t *testing.T) {
 	h.b.mu.Unlock()
 	if ref == nil || ref.stream != "app_marks" || ref.consumer != "chani-s1" {
 		t.Errorf("the index holds %+v, want app_marks' chani-s1", ref)
+	}
+}
+
+// countingJS counts the consumers a broker writes, and passes the rest on.
+type countingJS struct {
+	jetstream.JetStream
+	mu      sync.Mutex
+	creates int
+}
+
+func (c *countingJS) CreateOrUpdateConsumer(ctx context.Context, stream string, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	c.mu.Lock()
+	c.creates++
+	c.mu.Unlock()
+	return c.JetStream.CreateOrUpdateConsumer(ctx, stream, cfg)
+}
+
+// countCreates replaces the broker's JetStream with a counter, and answers it
+// with what restores the real one.
+func (h *harness) countCreates() (*countingJS, func()) {
+	h.b.mu.Lock()
+	real := h.b.js
+	c := &countingJS{JetStream: real}
+	h.b.js = c
+	h.b.mu.Unlock()
+	return c, func() {
+		h.b.mu.Lock()
+		h.b.js = real
+		h.b.mu.Unlock()
+	}
+}
+
+// filterList answers n filters of the app.
+func filterList(app string, n int) []string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, app+".f"+strconv.Itoa(i))
+	}
+	return out
+}
+
+// A subscription takes at most MaxFilters filters, its own resync subject
+// included: the last one that fits is MaxFilters-1 read filters.
+func TestSubscribeFilterLimit(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", filterList("marks", MaxFilters-1)))
+	if got := len(h.consumer(t, "app_marks", "chani-s1").Config.FilterSubjects); got != MaxFilters {
+		t.Errorf("the consumer has %d filters, want %d", got, MaxFilters)
+	}
+	// 1 more read filter is past the limit, and makes no consumer.
+	err := h.b.Subscribe(t.Context(), "chani", "s2", "marks", filterList("marks", MaxFilters))
+	if !errors.Is(err, ErrTooManyFilters) {
+		t.Fatalf("a subscription with %d filters answered %v, want ErrTooManyFilters", MaxFilters+1, err)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Errorf("app_marks holds the consumers %q, want chani-s1 alone", names)
+	}
+}
+
+// A refilter past the limit fails closed: the consumer keeps its resync
+// subject alone, never filters that may be wider than the grant.
+func TestRefilterPastTheLimitStopsDelivery(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+	err := h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return filterList("marks", MaxFilters), nil
+	})
+	if !errors.Is(err, ErrTooManyFilters) {
+		t.Fatalf("a refilter with %d filters answered %v, want ErrTooManyFilters", MaxFilters+1, err)
+	}
+	// The old filters may be wider than the new grant: the consumer keeps its
+	// resync subject alone.
+	want := []string{"lodge.marks.resync.chani-s1"}
+	if got := consumerFilters(h.consumer(t, "app_marks", "chani-s1").Config); !sameFilters(got, want) {
+		t.Errorf("the consumer's filters are %q, want %q", got, want)
+	}
+}
+
+// A refilter that changes nothing writes nothing: the minute sweep runs it
+// over every subscription.
+func TestRefilterWritesNothingWhenNothingChanges(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+	counter, restore := h.countCreates()
+	defer restore()
+	same := func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.a"}, nil
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", same))
+	if got := counter.creates; got != 0 {
+		t.Errorf("an unchanged refilter wrote the consumer %d times, want 0", got)
+	}
+	// A changed list is written once.
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.b"}, nil
+	}))
+	if got := counter.creates; got != 1 {
+		t.Errorf("a changed refilter wrote the consumer %d times, want 1", got)
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.b"}, nil
+	}))
+	if got := counter.creates; got != 1 {
+		t.Errorf("a second unchanged refilter wrote the consumer %d times, want 1", got)
+	}
+	// An empty list leaves the resync subject alone, which the server keeps
+	// in the consumer's single filter subject.
+	none := func(context.Context, string, string) ([]string, error) { return nil, nil }
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", none))
+	info := h.consumer(t, "app_marks", "chani-s1")
+	if want := []string{ResyncSubject("marks", "chani-s1")}; !sameFilters(consumerFilters(info.Config), want) {
+		t.Fatalf("the consumer's filters are %q, want %q", consumerFilters(info.Config), want)
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", none))
+	if got := counter.creates; got != 2 {
+		t.Errorf("an unchanged empty refilter wrote the consumer %d times, want 2", got)
+	}
+	// A wider list replaces that single filter: the server refuses a config
+	// that names both.
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.a"}, nil
+	}))
+	info = h.consumer(t, "app_marks", "chani-s1")
+	want := []string{"lodge.marks.resync.chani-s1", "marks.a"}
+	if got := consumerFilters(info.Config); !sameFilters(got, want) || info.Config.FilterSubject != "" {
+		t.Errorf("the consumer's filters are %q (single %q), want %q", got, info.Config.FilterSubject, want)
+	}
+}
+
+// A refilter's config names its filters once: a consumer that held 1 filter in
+// FilterSubject is replaced by the list, which the server refuses beside a
+// single filter.
+func TestRefilterConfigClearsAFilterSubject(t *testing.T) {
+	cfg := refilterConfig(jetstream.ConsumerConfig{Durable: "chani-s1", FilterSubject: "marks.a"},
+		[]string{"marks.b", "lodge.marks.resync.chani-s1"}, "chani", "s1", "marks")
+	if cfg.FilterSubject != "" {
+		t.Errorf("the config keeps the single filter %q", cfg.FilterSubject)
+	}
+	if want := []string{"marks.b", "lodge.marks.resync.chani-s1"}; !sameFilters(cfg.FilterSubjects, want) {
+		t.Errorf("the config's filters are %q, want %q", cfg.FilterSubjects, want)
+	}
+	if cfg.Durable != "chani-s1" || cfg.Metadata[MetadataClient] != "chani" || cfg.Metadata[MetadataSub] != "s1" ||
+		cfg.Metadata[MetadataTopic] != "marks" {
+		t.Errorf("the config is %+v", cfg)
+	}
+	// A consumer's filters are read from either member.
+	if got := consumerFilters(jetstream.ConsumerConfig{FilterSubject: "marks.a"}); !sameFilters(got, []string{"marks.a"}) {
+		t.Errorf("consumerFilters answers %q, want marks.a", got)
+	}
+	if got := consumerFilters(jetstream.ConsumerConfig{FilterSubjects: []string{"marks.a", "marks.b"}}); len(got) != 2 {
+		t.Errorf("consumerFilters answers %q, want 2 filters", got)
+	}
+}
+
+// A refilter whose callback fails stops the consumer's delivery before the
+// error goes back: the filters it had may be wider than the grant.
+func TestRefilterStopsDeliveryWhenTheGrantFails(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a", "marks.b"}))
+	nc, _ := h.client(t, "chani", "tok-chani")
+	noErr(t, nc.Flush())
+	failure := errors.New("the store did not answer")
+	err := h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return nil, failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("a refilter whose callback failed answered %v, want the callback's error", err)
+	}
+	want := []string{"lodge.marks.resync.chani-s1"}
+	if got := consumerFilters(h.consumer(t, "app_marks", "chani-s1").Config); !sameFilters(got, want) {
+		t.Errorf("the consumer's filters are %q, want %q", got, want)
+	}
+	// The client's connection stays open: its permissions did not change.
+	if !nc.IsConnected() {
+		t.Error("a refilter whose callback failed closed the client's connection")
+	}
+}
+
+// A refilter that a revoke overtakes leaves no consumer: the delivery it stops
+// is not written after the revoke deleted the consumer.
+func TestAFailedRefilterAfterARevokeLeavesNoConsumer(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a", "marks.b"}))
+
+	// The refilter stops in its callback, which holds the client's lifecycle
+	// lock, and the revoke comes while it is there: a revoke never waits for
+	// a subscription.
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	t.Cleanup(release)
+	failure := errors.New("the store did not answer")
+	done := make(chan error, 1)
+	go func() {
+		done <- h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+			close(entered)
+			<-proceed
+			return nil, failure
+		})
+	}()
+	<-entered
+	revoked := make(chan error, 1)
+	go func() { revoked <- h.b.Revoke(t.Context(), "chani") }()
+	select {
+	case err := <-revoked:
+		noErr(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the revoke did not return while a refilter was under way")
+	}
+	release()
+	if err := <-done; !errors.Is(err, errRefilterRevoked) {
+		t.Fatalf("the refilter answered %v, want the revoke's error", err)
+	}
+	// The write that stopped the delivery is nobody's: the revoke took it.
+	wait(t, func() ([]string, error) {
+		names := h.names(t, "app_marks")
+		if len(names) > 0 {
+			return nil, errNotYet
+		}
+		return names, nil
+	})
+}
+
+// A new subscription is registered and activated under 1 lock: a request that
+// deletes it and puts another 1 in its place waits for it, and its replacement
+// survives the activation's cleanup.
+func TestActivateCleansUpUnderOneLock(t *testing.T) {
+	h := newHarness(t)
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	t.Cleanup(release)
+	failure := errors.New("the store did not answer")
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.b.SubscribeWith(t.Context(), Spec{Client: "chani", Sub: "s1", App: "marks", Topic: "marks",
+			Activate: func(context.Context, string, string) ([]string, error) {
+				close(entered)
+				<-proceed
+				return nil, failure
+			}}, func(context.Context) ([]string, error) { return []string{"marks.a"}, nil })
+		done <- err
+	}()
+	<-entered
+
+	// Another request replaces the subscription: its delete and its new
+	// subscription both wait for the lock that the activation holds.
+	replaced := make(chan error, 1)
+	deleted := make(chan error, 1)
+	go func() {
+		err := h.b.Unsubscribe(t.Context(), "chani", "s1")
+		deleted <- err
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			replaced <- err
+			return
+		}
+		_, serr := h.b.SubscribeWith(t.Context(), Spec{Client: "chani", Sub: "s1", App: "notes", Topic: "notes"},
+			func(context.Context) ([]string, error) { return []string{"notes.>"}, nil })
+		replaced <- serr
+	}()
+	release()
+
+	if err := <-done; !errors.Is(err, failure) {
+		t.Fatalf("the subscription answered %v, want the activation's error", err)
+	}
+	noErr(t, <-replaced)
+	// The activation's cleanup went first: the other request's delete found
+	// the subscription gone, which is what 1 lock means here.
+	if err := <-deleted; !errors.Is(err, ErrNotFound) {
+		t.Errorf("another request's delete answered %v, want the subscription gone by the cleanup", err)
+	}
+	// The replacement is s1 on notes, and the activation's own subscription
+	// is gone.
+	subs := h.b.ClientSubscriptions("chani")
+	if len(subs) != 1 || subs[0].Sub != "s1" || subs[0].App != "notes" {
+		t.Fatalf("the client's subscriptions are %+v, want s1 on notes", subs)
+	}
+	if names := h.names(t, "app_notes"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Errorf("app_notes holds the consumers %q, want chani-s1", names)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 0 {
+		t.Errorf("app_marks holds the consumers %q, want none", names)
+	}
+}
+
+// An activation whose budget ran out still removes its subscription: the
+// cleanup has a budget of its own, so the client is not revoked for it.
+func TestActivateCleansUpAfterItsBudget(t *testing.T) {
+	h := newHarness(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	// The budget runs out once the subscription is registered, and before
+	// its activation.
+	h.b.beforeActivate = cancel
+	_, err := h.b.SubscribeWith(ctx, Spec{Client: "chani", Sub: "s1", App: "marks", Topic: "marks",
+		Activate: func(context.Context, string, string) ([]string, error) { return []string{"marks.a"}, nil }},
+		func(context.Context) ([]string, error) { return []string{"marks.a"}, nil })
+	if err == nil {
+		t.Fatal("an activation with a spent budget answered no error")
+	}
+	if errors.Is(err, ErrCleanup) {
+		t.Errorf("the cleanup failed: %v", err)
+	}
+	if subs := h.b.ClientSubscriptions("chani"); len(subs) != 0 {
+		t.Errorf("the client keeps the subscriptions %+v", subs)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 0 {
+		t.Errorf("app_marks holds the consumers %q, want none", names)
+	}
+}
+
+// A new subscription is registered and activated under 1 lifecycle lock:
+// another request that deletes it and makes a new one of the same name, at
+// the point between its registration and its activation, waits for it. So a
+// failed activation removes its own subscription, and never the replacement.
+func TestNoGapBetweenRegistrationAndActivation(t *testing.T) {
+	h := newHarness(t)
+	replaced := make(chan error, 1)
+	var first atomic.Bool
+	h.b.beforeActivate = func() {
+		if !first.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			if err := h.b.Unsubscribe(t.Context(), "chani", "s1"); err != nil && !errors.Is(err, ErrNotFound) {
+				replaced <- err
+				return
+			}
+			_, err := h.b.SubscribeWith(t.Context(), Spec{Client: "chani", Sub: "s1", App: "notes", Topic: "notes"},
+				func(context.Context) ([]string, error) { return []string{"notes.>"}, nil })
+			replaced <- err
+		}()
+		// With 1 lock the other request cannot run here, and this wait
+		// ends with no answer; with a gap, the replacement is made now.
+		select {
+		case err := <-replaced:
+			replaced <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	failure := errors.New("the store did not answer")
+	_, err := h.b.SubscribeWith(t.Context(), Spec{Client: "chani", Sub: "s1", App: "marks", Topic: "marks",
+		Activate: func(context.Context, string, string) ([]string, error) { return nil, failure }},
+		func(context.Context) ([]string, error) { return []string{"marks.a"}, nil })
+	if !errors.Is(err, failure) {
+		t.Fatalf("the subscription answered %v, want the activation's error", err)
+	}
+	noErr(t, <-replaced)
+	subs := h.b.ClientSubscriptions("chani")
+	if len(subs) != 1 || subs[0].Sub != "s1" || subs[0].App != "notes" {
+		t.Fatalf("the client's subscriptions are %+v, want the replacement, s1 on notes", subs)
+	}
+	if names := h.names(t, "app_notes"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Errorf("app_notes holds the consumers %q, want the replacement's chani-s1", names)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 0 {
+		t.Errorf("app_marks holds the consumers %q, want none", names)
 	}
 }

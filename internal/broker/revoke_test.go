@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,14 +200,17 @@ func TestSubscribeStaysOnOneApp(t *testing.T) {
 	}
 }
 
-// A subscription on the same app updates its filters, as before.
+// A subscription on the same app updates its filters, as before. Its resync
+// subject is always 1 of them.
 func TestSubscribeKeepsItsFilters(t *testing.T) {
 	h := newHarness(t)
 	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
 	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
-	info := h.consumer(t, "app_marks", "chani-s1")
-	if got := info.Config.FilterSubjects; len(got) != 1 || got[0] != "marks.a" {
-		t.Errorf("the consumer's filters are %q, want marks.a", got)
+	want := []string{"lodge.marks.resync.chani-s1", "marks.a"}
+	got := slices.Clone(h.consumer(t, "app_marks", "chani-s1").Config.FilterSubjects)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("the consumer's filters are %q, want %q", got, want)
 	}
 }
 

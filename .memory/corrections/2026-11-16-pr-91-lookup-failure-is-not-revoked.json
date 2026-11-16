@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A failed OAuth client lookup is a revoked client only when OAuth says the client is not found (oauth.ErrNotFound). Any other lookup error, such as a store that does not answer, says nothing about the client: it must not wrap events.ErrNotFound (404), so the gateway answers 503, and the subscription still goes.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 5 at 1498766 (openai/gpt-6.1-sol): blocking finding 1, liveClient wrapped every OAuth.Client error with ErrNotFound, so a store failure answered 404",
+  "promoted_to": "internal/events/acceptance_test.go TestAClientLookupFailureDuringActivationIs503"
+}

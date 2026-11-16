@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A grant read that happens before the consumer is registered cannot be repaired by comparing a generation afterwards: a new consumer exists, and can deliver, with the filters of a grant that a narrowing has already replaced. The subscription is made inactive instead, with its resync subject alone, and a read inside the broker's lifecycle lock after the registration installs its filters; a grant change that runs after that read finds the subscription and refilters it through the same lock. A subscription that cannot be activated is unsubscribed, and its client is revoked when even that fails.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 1 at 6ab694f (openai/gpt-6.1-sol): blocking finding 1, a new consumer can deliver with the old grant before the generation repair",
+  "promoted_to": "internal/events/acceptance_test.go TestANewSubscriptionDeliversNothingBeforeItsGrantIsRead, TestSubscribeSeesAGrantChange"
+}

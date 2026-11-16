@@ -16,26 +16,28 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// LoadConfig reads the broker member: a missing file or member is a broker
-// that is off, and an unknown member is refused.
+// LoadConfig reads the broker member: the broker is on unless a member
+// turns it off, and an unknown member is refused.
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "none.json")
-	if c, err := LoadConfig(missing); err != nil || c.Enabled {
-		t.Errorf("a missing file: %+v %v, want a broker that is off", c, err)
+	if c, err := LoadConfig(missing); err != nil || !c.Enabled {
+		t.Errorf("a missing file: %+v %v, want a broker that is on", c, err)
 	}
 	for name, tt := range map[string]struct {
 		body    string
 		enabled bool
 		fails   bool
 	}{
-		"empty":          {body: `{}`},
-		"no member":      {body: `{"inference": {}}`},
-		"off":            {body: `{"broker": {"enabled": false}}`},
-		"on":             {body: `{"broker": {"enabled": true}}`, enabled: true},
-		"unknown member": {body: `{"broker": {"enabled": true, "port": 4222}}`, fails: true},
-		"not an object":  {body: `{"broker": true}`, fails: true},
-		"not json":       {body: `{`, fails: true},
+		"empty":             {body: `{}`, enabled: true},
+		"no member":         {body: `{"inference": {}}`, enabled: true},
+		"no enabled member": {body: `{"broker": {}}`, enabled: true},
+		"off":               {body: `{"broker": {"enabled": false}}`},
+		"on":                {body: `{"broker": {"enabled": true}}`, enabled: true},
+		"unknown member":    {body: `{"broker": {"enabled": true, "port": 4222}}`, fails: true},
+		"not an object":     {body: `{"broker": true}`, fails: true},
+		"null":              {body: `{"broker": null}`, enabled: true},
+		"not json":          {body: `{`, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")

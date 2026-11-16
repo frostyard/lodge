@@ -68,6 +68,9 @@ type Config struct {
 	// Broker is the event broker's door, which /nats serves. A nil Broker
 	// is a broker that is off.
 	Broker Broker
+	// Events are the broker's event subscriptions, which /gateway/events
+	// serves. A nil Events, or a nil OAuth, serves no route.
+	Events Events
 }
 
 // Gateway serves lodge's routes.
@@ -253,6 +256,8 @@ func (g *Gateway) Lodge(who peer.WhoIs) http.Handler {
 			g.appRoute(w, r, who, segs[1], escaped)
 		case escaped == gatewayPath:
 			g.gatewayMCP(w, r, who)
+		case first == "gateway" && len(segs) >= 2 && segs[1] == "events":
+			g.eventsRoute(w, r, who, segs)
 		case first == "mcp" && len(segs) == 2 && apps.ValidID(segs[1]):
 			g.mcp(w, r, who, segs[1])
 		case first == "device" && len(segs) >= 2 && apps.ValidID(segs[1]):

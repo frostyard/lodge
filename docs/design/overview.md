@@ -84,6 +84,7 @@ tells the app in headers, and moves the bytes.
    │       └─▶ the local model (MODEL_HOST), the owner's ChatGPT plan (codex)
    ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid)
    ├─ internal/broker: NATS with JetStream, in this process, no listener
+   ├─ internal/events: grant-driven subscriptions and resync
    │    ├─ /nats (WebSocket) ◀── outside clients, never a browser (a token in CONNECT)
    │    └─ /run/lodge/nats.sock ◀── app daemons: each publishes only <id>.>
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
@@ -349,8 +350,8 @@ home-screen app. No service worker is registered.
 `internal/broker` is a NATS server with JetStream, in lodge's own process
 ([app-contract.md](../specs/app-contract.md#events);
 [lodge-http.md](../specs/lodge-http.md#the-broker) pins lodge's side;
-[ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)). Off
-unless the `broker` member of `/etc/lodge/config.json` enables it.
+[ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)). On
+unless the `broker` member of `/etc/lodge/config.json` turns it off.
 
 - It has no listener of its own: 2 doors reach it, both lodge's. An app
   daemon connects on `/run/lodge/nats.sock`, admitted by its user's uid.
@@ -364,11 +365,21 @@ unless the `broker` member of `/etc/lodge/config.json` enables it.
   in the account that sent the request. That last point is why the
   accounts exist: with subject permissions alone, a forged reply subject
   stores a forged message in another app's stream.
-- Each app has one stream, `app_<id>`, keeping 7 days or 1 GiB. lodge
-  manages the streams and the consumers with its own client of the
-  server, and rebuilds its index of clients and consumers at start from
-  the consumers' metadata.
-- lodge issues no event token yet, so `/nats` refuses every client.
+- Each app has one stream, `app_<id>`, keeping 7 days or 1 GiB and
+  discarding the oldest. lodge manages the streams and the consumers with
+  its own client of the server, and rebuilds its index of clients and
+  consumers at start from the consumers' metadata.
+- A client is an OAuth client with scope `events`. `internal/events`
+  holds the policy: it names the client from its token, subscribes it on
+  `/gateway/events` by topic prefix, and gives its consumer the effective
+  read prefixes, its principal's grant read through the app's manifest
+  events and narrowed to that prefix
+  ([lodge-http.md](../specs/lodge-http.md#event-subscriptions)). A grant
+  change refilters the consumer in place, and a revoke deletes it.
+- A consumer whose position is before its stream's first message gets 1
+  `org.frostyard.lodge.resync` event, checked when its client connects and
+  each minute.
+- Built in [roadmap — Phase 9](../plans/0001-roadmap.md#phase-9--grant-driven-events).
 
 ### Inference
 

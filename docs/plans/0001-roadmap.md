@@ -454,6 +454,37 @@ and design/overview.md's [agents](../design/overview.md#agents).
     the development build, in the nsl machine;
   - `/mcp/<id>` with `lgm_` tokens works as before.
 
+## Phase 9 — Grant-driven events
+
+An agent follows an app's events under the grant an admin approved, and
+receives only what that grant reads. Implements
+[lodge-http.md](../specs/lodge-http.md#event-subscriptions) (the
+subscriptions, the [broker](../specs/lodge-http.md#the-broker)'s tokens and
+resync) and the manifest's events in
+[oauth.md](../specs/oauth.md#the-apps-manifest)
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)),
+and design/overview.md's [events](../design/overview.md#events).
+
+- **`internal/apps`** reads the hearth manifest's events.
+- **`internal/events`:** the effective read prefixes, the client's broker
+  name, subscriptions, the grant and revoke hooks, and the minute sweep.
+- **`internal/broker`:** tokens of scope `events` on `/nats`, a
+  subscription's topic and its resync subject, refilters in place, the
+  resync event, and the broker on by default.
+- **`internal/gateway`:** `/gateway/events` and its checks.
+- **Done when:**
+  - a token with scope `events` subscribes by topic prefix, and its
+    consumer's filters are the effective read prefixes; a token without
+    it is refused, each with a test;
+  - of 100 events in 10 folders, a grant on 1 folder receives exactly that
+    folder's 10; a narrowed grant stops the undelivered events outside it;
+    a revoke ends delivery, each with a test;
+  - a stream keeps 7 days or 1 GiB, and a consumer older than its
+    stream's first event gets 1 resync event, with a test;
+  - the release runs on lodge's host, and frostnotes and frostmail by
+    `/mcp/<id>`, the PocketJournal, Porter by the agent socket and Chani's
+    frostnotes entry still work.
+
 ## Later / ideas
 
 - One aggregated `/mcp` for clients that want a single connector.

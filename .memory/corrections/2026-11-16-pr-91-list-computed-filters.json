@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "The list of a client's subscriptions must name the filters its consumers have, which are the filters that JetStream applies, and not the filters that the grant would give now: after a refilter that failed closed the 2 differ, and a client that reads the computed ones sees access it does not have. List and the subscribe answer read the consumer's own filters through the broker, and answer none when the consumer cannot be read.",
+  "evidence": "frostyard/lodge#91 cross-review at 1e6f745 (openai/gpt-6.1-sol): blocking finding 4, GET reports computed filters and not the consumer's",
+  "promoted_to": "internal/events/acceptance_test.go TestListAnswersTheConsumersFilters"
+}

@@ -15,6 +15,19 @@
   ([ADR-0006](0006-agents-reach-each-app-through-its-own-mcp-endpoint.md)).
 - **Events are durable and at least once.** A consumer that was away
   catches up, resumes at its own position, and acknowledges what it took.
+- **A grant says what a consumer may read.** A principal's grant
+  ([ADR-0023](0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md))
+  holds items `{cap, sel}`. An app on hearth declares, for each event, a
+  topic `<app>.<object>.<verb>`, with `.<selector>` and 1 token per path
+  segment when the event carries a selector, and the capability that
+  reads it. So a read grant on a path is a topic prefix, and the broker
+  can filter on it before it delivers. A consumer allowed 1 event of 100
+  receives 1.
+- **A stream cannot keep everything.** An app's events pile up while a
+  consumer is away. A stream needs a limit, and a consumer that comes back
+  after the limit dropped what it had not read must learn that it missed
+  something: events are thin, so it can read the current state again
+  through the app's API.
 - **Only lodge listens on the network,** and it adds no port
   ([ADR-0003](0003-lodge-is-the-only-process-on-the-network.md),
   [ADR-0004](0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md),
@@ -43,9 +56,10 @@
   in its own process. Its store is `/var/lib/lodge/jetstream`, and it has
   no listener of its own: `DontListen`, no monitor, no cluster, no
   leafnode, no gateway, no WebSocket port of NATS's.
-  - It is **off by default**. The `broker` member of
-    `/etc/lodge/config.json` is `{"enabled": true}` to start it, read at
-    start; a change takes effect at the next start. Off, lodge makes no
+  - It is **on by default**. The `broker` member of
+    `/etc/lodge/config.json` is `{"enabled": false}` to turn it off; a
+    file or a member without `enabled` leaves it on. lodge reads it at
+    start, and a change takes effect at the next start. Off, lodge makes no
     socket and no store. A broken member, or a broker that cannot start,
     leaves it off with a log line, and the rest of lodge keeps serving.
   - It installs no signal handler (`NoSigs`), because lodge owns SIGHUP
@@ -88,16 +102,23 @@
     and its own acks, `$JS.ACK.<stream>.<consumer>.>`, from the hub's 2
     exports. Its user may publish exactly those subjects, and subscribe
     `_INBOX.NAME.>`. With no consumer it may publish nothing.
-- **1 stream per app,** named `app_ID`, subjects `ID.>`, 7 days and 1 GiB,
-  discarding the oldest. A publish from the app is acknowledged by
-  JetStream, and a duplicate message ID within 2 minutes is stored once.
+- **1 stream per app,** named `app_ID`, subjects `ID.>` and `lodge.ID.>`.
+  It keeps 7 days or 1 GiB, whichever comes first, and discards the
+  oldest. A publish from the app is acknowledged by JetStream, and a
+  duplicate message ID within 2 minutes is stored once. Only lodge
+  publishes `lodge.ID.>`, its resync events; `lodge` is a reserved app ID,
+  so no app's subjects overlap it.
 - **1 durable pull consumer per client and subscription,** named
   `<client>-<sub>` (each matching `^[a-z0-9_]{1,32}$`, so the name has no
   ambiguity), acknowledging explicitly, from new messages, with filters
   inside one app's subjects. A pull expires after at most 60 s, below the
   2 minute response threshold of a service export, and takes at most 256
-  messages. The consumer's metadata names its client and subscription, so
-  the index comes back at lodge's next start.
+  messages. The consumer's metadata names its client, its subscription
+  and the topic it asked for, so the index comes back at lodge's next
+  start.
+  - **Its filters are the effective read prefixes,** and its own resync
+    subject, `lodge.ID.resync.<consumer>`. So its filter list is never
+    empty, which JetStream would read as every subject.
   - **A subscription stays on 1 app.** Its name is 1 consumer's, so
     subscribing the same client and subscription name to another app is
     refused, with an error that asks for an unsubscribe first. Subscribing
@@ -135,9 +156,63 @@
     starts while it deletes, because the revoke's deletion would take the
     consumer the subscribe would make. A revoke ends within 1 s, so the
     subscribe need only ask again.
-- **lodge issues no event token yet.** `/nats` answers every client with
-  `-ERR 'Authorization Violation'` until lodge has a token to issue: the
-  door, the proxy and the accounts are the whole of it for now.
+- **A client is an OAuth client with scope `events`.** Its access token
+  ([ADR-0023](0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md))
+  is the `CONNECT` line's `auth_token` on `/nats`. Its broker name is
+  `o` and the 16 bytes of its client ID in lower-case base32, which fits
+  the name rule and maps back to the client. A token without scope
+  `events` is refused. A connection closes when its token expires, and
+  each minute lodge checks every open connection's token again, so a
+  revoked token ends within a minute.
+- **A client subscribes by topic prefix** on `/gateway/events`, with the
+  same token: 1 or more tokens, `*` or literal, the first an app's ID.
+  lodge computes the **effective read prefixes**: for each item of the
+  principal's grant for that app, and each event of the app's manifest
+  that the item's capability reads, the event's topic with the item's
+  path, as hearth's `events.ReadFilters` does; then each is narrowed to
+  the requested prefix, and a prefix that another covers is dropped. A
+  request that the grant gives nothing under is refused. lodge reads the
+  grant inside the client's lock. A new subscription is 1 step under that
+  lock: its consumer starts with its resync subject alone and is
+  registered before lodge checks its OAuth client and reads the grant
+  that gives its filters, so a grant change or a revoke after that read
+  finds it, and a failure removes it before the lock is released. A grant
+  change and a subscription cannot cross.
+- **A grant change refilters in place.** When an approval or a removal
+  changes a principal's grant for an app, lodge computes the filters of
+  each of that principal's subscriptions on the app again and updates the
+  consumer. The events it has not delivered yet are filtered again, so a
+  narrowed grant stops them; a grant that gives nothing leaves only the
+  resync subject. The client's permissions name its consumer, not its
+  filters, so its connections stay open.
+  - **A refilter that fails fails closed.** When lodge cannot read the
+    grant or the client, or update the consumer, it revokes the client in
+    the broker:
+    its connections close and its consumers go, and it subscribes again.
+    A consumer never keeps filters wider than the grant it was last told.
+  - An event delivered before the change and not acknowledged may come
+    again: JetStream redelivers by sequence, not by filter. It was
+    readable when it was delivered.
+- **Revoking a client or a principal ends delivery.** lodge's OAuth hook
+  revokes each client in the broker, as above: its connections close and
+  its consumers go. Each minute lodge also revokes a broker client whose
+  OAuth client is gone or no longer has scope `events`, and refilters
+  every subscription, in case a hook was missed or an app's manifest
+  changed.
+- **A consumer older than its stream's first event gets 1 resync
+  event.** When a consumer's stream position is before the stream's
+  first message, retention dropped events it never saw. lodge then
+  publishes 1 CloudEvents message on the consumer's resync subject:
+  `type` `org.frostyard.lodge.resync`, `source` `/lodge`, `subject` the
+  app's ID, a UUIDv7 `id`, which is also its `Nats-Msg-Id`, and no data.
+  The consumer reads on from the stream's first event, and the resync
+  tells it to read the state again through the app's API. lodge sends no
+  second one while the first is pending: a consumer's check and publish
+  run 1 at a time.
+  - JetStream moves a consumer's position only when it serves a pull, and
+    after that pull the gap cannot be seen. So lodge checks a client's
+    consumers when it connects, before its `CONNECT` line reaches the
+    server, and every consumer each minute.
 - [specs/lodge-http.md](../specs/lodge-http.md#the-broker) and
   [specs/app-contract.md](../specs/app-contract.md#events) pin it, and
   [design/overview.md](../design/overview.md#events) shows where it fits.
@@ -161,8 +236,16 @@
 - **A pull expires after at most 60 s,** so an idle client re-asks. That
   is below the 2 minute threshold at which the server drops a service
   import's response mapping, and every pull asks again anyway.
-- **No client connects until lodge issues event tokens.** The door is
-  built and tested, and closed: a browser cannot reach the broker yet.
+- **An agent reads only what its grant reads.** The filter is the
+  grant's, computed by lodge from the app's manifest, and JetStream
+  applies it before delivery; a client cannot widen it, because it reaches
+  only its own consumer's pull requests and acks.
+- **Retention is a limit, not a promise.** A consumer away for more than
+  7 days, or more than 1 GiB behind, loses events, and learns it from 1
+  resync event. A client that stays connected and keeps pulling while its
+  backlog ages out can pass the gap between 2 checks of lodge's, and get
+  no resync: the limit is sized so that an agent that reads at all is
+  never that far behind.
 - **Revoking a client is lodge's:** its connections close first, its
   consumers go within 1 s, and nothing of its is left to read. A deletion
   that cannot finish yet is lodge's to retry, not a consumer's to keep.
@@ -187,6 +270,14 @@
   hold each consumer's position, its acks and its redelivery, and would
   parse the messages it moves. That is a broker written badly, in the one
   process that must stay small.
+- **A filter that the client sends:** a client could ask for any
+  subject, and lodge would have to check each one against the grant at
+  every change. lodge owns the consumer and computes its filter, so the
+  grant is the only input.
+- **Resync by a new consumer at the stream's first event:** deleting and
+  making the consumer again would move it at once, but a pull or an ack
+  in between fails, and its pending acknowledgements go. A message on its
+  own subject reaches it in order, with no new consumer.
 - **NATS JWT accounts or an auth callout:** operator keys, account
   claims and another issuer to run, for accounts lodge makes in its own
   memory. The one-time secret names an identity lodge already decided,
@@ -194,6 +285,6 @@
 
 ## References
 
-- Shapes: [specs/lodge-http.md](../specs/lodge-http.md#the-broker), [specs/app-contract.md](../specs/app-contract.md#events), [design/overview.md](../design/overview.md#events)
-- Builds on: [ADR-0003](0003-lodge-is-the-only-process-on-the-network.md) (only lodge listens), [ADR-0006](0006-agents-reach-each-app-through-its-own-mcp-endpoint.md) (an agent reaches an app through its MCP), [ADR-0004](0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md) (the nodes and their listeners), [ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md) (a socket's peer uid as identity)
+- Shapes: [specs/lodge-http.md](../specs/lodge-http.md#the-broker) (the broker and [`/gateway/events`](../specs/lodge-http.md#event-subscriptions)), [specs/app-contract.md](../specs/app-contract.md#events), [specs/oauth.md](../specs/oauth.md#the-apps-manifest) (the manifest's events), [design/overview.md](../design/overview.md#events)
+- Builds on: [ADR-0003](0003-lodge-is-the-only-process-on-the-network.md) (only lodge listens), [ADR-0006](0006-agents-reach-each-app-through-its-own-mcp-endpoint.md) (an agent reaches an app through its MCP), [ADR-0004](0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md) (the nodes and their listeners), [ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md) (a socket's peer uid as identity), [ADR-0023](0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth clients, scope `events` and grants), [ADR-0024](0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (apps on hearth and their manifests)
 - Related: [ADR-0011](0011-a-shared-inference-layer-routes-apps-to-models.md) (an app's own socket, admitted by uid); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md) (first-party apps behind lodge)
