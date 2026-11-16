@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "cmd/lodge: the reload of the apps",
+  "correction": "The reload returned at a failed broker step (SyncApps) after the registry had loaded the new manifests, so the gateway's tools and the event consumers' filters were not refreshed, and a grant that an app's new major version took out of force could keep its events until the next sweep. The reload now runs every step, then tells every reader of the manifests, and reports the steps' errors joined.",
+  "evidence": "Cross-review of PR #94 at 992335ffbdb5921d13168816d3f0dc4c9e058a42 (openai/gpt-6.1-sol): cmd/lodge/main.go returned the SyncApps error before events.Service.AppsChanged",
+  "promoted_to": "cmd/lodge TestAfterAppsLoadTellsTheReaders"
+}

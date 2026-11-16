@@ -270,23 +270,27 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		reg.Poll(ctx)
 		inf.Load(inference.LoadConfig(configPath))
 		ag.Load(agents.LoadConfig(configPath))
+		var steps []func() error
 		if br != nil {
-			if err := br.SyncApps(ctx, brokerApps(reg)); err != nil {
-				return err
-			}
+			steps = append(steps, func() error { return br.SyncApps(ctx, brokerApps(reg)) })
 		}
-		// A reload changes the apps' tools, which every open session of the
-		// gateway learns of.
-		if gw := mcpGateway.Load(); gw != nil {
-			gw.AppsChanged()
-		}
-		// It can also change what a grant reads, or take a grant out of
-		// force with an app's new major version: every event subscription
-		// is refiltered at once.
-		if svc := eventsSvc.Load(); svc != nil {
-			svc.AppsChanged()
-		}
-		return nil
+		return afterAppsLoad(steps, []func(){
+			// A reload changes the apps' tools, which every open session of
+			// the gateway learns of.
+			func() {
+				if gw := mcpGateway.Load(); gw != nil {
+					gw.AppsChanged()
+				}
+			},
+			// It can also change what a grant reads, or take a grant out
+			// of force with an app's new major version: every event
+			// subscription is refiltered at once.
+			func() {
+				if svc := eventsSvc.Load(); svc != nil {
+					svc.AppsChanged()
+				}
+			},
+		})
 	}
 
 	// The tailnet nodes start without waiting to join: the control socket
@@ -569,6 +573,25 @@ func startBroker(ctx context.Context, store string, reg *apps.Registry, o broker
 }
 
 // brokerApps is the id of each enabled app: each has one stream.
+// afterAppsLoad runs what follows a load of the apps' registry: each step,
+// such as the broker's streams, then each reader of the apps' manifests. The
+// loaded registry is in force already, so every reader runs even when a step
+// fails: a grant that a new manifest takes out of force never outlives a
+// reload in the gateway's tools or an event consumer's filters. It returns
+// the steps' errors, joined.
+func afterAppsLoad(steps []func() error, readers []func()) error {
+	var errs []error
+	for _, step := range steps {
+		if err := step(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, read := range readers {
+		read()
+	}
+	return errors.Join(errs...)
+}
+
 func brokerApps(reg *apps.Registry) []string {
 	var ids []string
 	for _, a := range reg.List() {
