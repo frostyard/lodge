@@ -185,6 +185,13 @@ type Broker struct {
 	// overtakes sees it and deletes the consumer it made. A revoke takes
 	// no lifecycle lock, and never waits for a subscription under way.
 	epochs map[string]uint64
+	// inflight are the revokes of each client that are still deleting,
+	// which a subscription of that client waits out: the revoke's own
+	// deletion would take the consumer it makes.
+	inflight map[string]int
+	// beforeRevokeDelete, when set, is a test's barrier: it runs after a
+	// revoke takes the client, and before it deletes the consumers.
+	beforeRevokeDelete func()
 	// afterOneAppCheck, when set, is a test's barrier: it runs once a
 	// subscription's one-app check has passed, and before its consumer is
 	// made.
@@ -218,6 +225,7 @@ func New(o Options) *Broker {
 		revoking:   map[string]map[consumerRef]bool{},
 		lifecycles: map[string]*sync.Mutex{},
 		epochs:     map[string]uint64{},
+		inflight:   map[string]int{},
 		accounts:   map[string]*server.Account{},
 		exports:    map[string]map[string]bool{},
 		imports:    map[string]map[string]bool{},
@@ -424,6 +432,7 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	defer unlock()
 	b.mu.Lock()
 	epoch := b.epochs[client]
+	revoking := b.inflight[client] > 0
 	ready := b.apps[app]
 	// A subscription stays on 1 app: its name is 1 consumer's, and a
 	// second durable would leave the first one with nobody to read it.
@@ -433,6 +442,11 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 		on = &ref
 	}
 	b.mu.Unlock()
+	if revoking {
+		// The revoke's own deletion would take the consumer this call
+		// would make, so it waits for it to end, which takes 1 s at most.
+		return fmt.Errorf("subscribe %s: a revoke of the client is in progress", client)
+	}
 	if !ready {
 		return fmt.Errorf("subscribe %s to %s: the app is not enabled", client, app)
 	}
@@ -552,17 +566,31 @@ func (b *Broker) Revoke(ctx context.Context, client string) error {
 	defer cancel()
 	b.mu.Lock()
 	b.epochs[client]++
+	b.inflight[client]++
+	defer b.endRevoke(client)
 	refs := b.refsLocked(client)
 	delete(b.clients, client)
 	delete(b.revoking, client)
 	b.mu.Unlock()
 	b.closeConns(identity{kind: kindClient, name: client}.key())
+	if hook := b.beforeRevokeDelete; hook != nil {
+		hook()
+	}
 	if len(refs) == 0 {
 		return nil
 	}
 	kept, err := b.deleteRefs(ctx, refs)
 	b.keepRefs(client, kept)
 	return err
+}
+
+// endRevoke records that a client's revoke has finished deleting.
+func (b *Broker) endRevoke(client string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.inflight[client]--; b.inflight[client] <= 0 {
+		delete(b.inflight, client)
+	}
 }
 
 // lifecycle locks a client's subscription lifecycle, and answers what

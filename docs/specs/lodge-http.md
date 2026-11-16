@@ -610,6 +610,11 @@ listener of its own.
   error that says the client was revoked during the subscription; if that
   deletion fails, it is kept for the client's next revoke. So no consumer
   is left that nobody deletes.
+- **A subscribe waits out a revoke in progress.** While a revoke of that
+  client is still deleting, a subscribe of it fails at once with an error
+  that says the revoke is in progress, and creates nothing: the revoke's
+  own deletion would take the consumer the subscribe would make. A revoke
+  ends within 1 s, so asking again then works.
 - **Connections.** An app or a client holds at most 64 connections at
   once; past that a connection is refused. The socket's
   [limits](#connections) do not apply to it: the broker counts an

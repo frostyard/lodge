@@ -130,6 +130,11 @@
     made, and fails. So a revoke finishes within its 1 s budget however
     long a subscription's JetStream calls take, and no consumer is left
     that nobody deletes.
+  - **A subscription waits out a revoke that is in progress.** A revoke
+    counts itself, and fails at once any subscribe of that client that
+    starts while it deletes, because the revoke's deletion would take the
+    consumer the subscribe would make. A revoke ends within 1 s, so the
+    subscribe need only ask again.
 - **lodge issues no event token yet.** `/nats` answers every client with
   `-ERR 'Authorization Violation'` until lodge has a token to issue: the
   door, the proxy and the accounts are the whole of it for now.

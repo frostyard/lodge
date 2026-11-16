@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -167,4 +168,67 @@ func TestRevokeDoesNotWaitForASubscribe(t *testing.T) {
 		}
 		return names, nil
 	})
+}
+
+// A subscription of a client whose revoke is still deleting waits for it: the
+// revoke's own deletion would take the consumer the subscription makes, and
+// the index would then name a consumer that does not exist.
+func TestSubscribeWaitsForARevokeInProgress(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+
+	// The revoke stops after it takes the client, and before it deletes.
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	h.b.beforeRevokeDelete = func() {
+		close(entered)
+		<-proceed
+	}
+	t.Cleanup(release)
+
+	revoked := make(chan error, 1)
+	go func() { revoked <- h.b.Revoke(t.Context(), "chani") }()
+	<-entered
+
+	// A subscription that starts while the revoke deletes makes nothing.
+	err := h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"})
+	if err == nil {
+		t.Fatal("a subscription went on while its client's revoke was deleting")
+	}
+	if !strings.Contains(err.Error(), "revoke") {
+		t.Errorf("the subscription answered %v, want an error naming the revoke", err)
+	}
+
+	release()
+	if err := <-revoked; err != nil {
+		t.Errorf("the revoke answered %v, want nothing", err)
+	}
+	h.b.mu.Lock()
+	_, kept := h.b.clients["chani"]
+	h.b.mu.Unlock()
+	if kept {
+		t.Error("the index holds chani after its revoke")
+	}
+	wait(t, func() ([]string, error) {
+		names := h.names(t, "app_marks")
+		if len(names) > 0 {
+			return nil, errNotYet
+		}
+		return names, nil
+	})
+
+	// Once the revoke has ended, a subscription goes on, and the index
+	// names the consumer it made.
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	if names := h.names(t, "app_marks"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Fatalf("app_marks holds the consumers %q, want chani-s1", names)
+	}
+	h.b.mu.Lock()
+	ref := h.b.clients["chani"].subs["s1"]
+	h.b.mu.Unlock()
+	if ref == nil || ref.stream != "app_marks" || ref.consumer != "chani-s1" {
+		t.Errorf("the index holds %+v, want app_marks' chani-s1", ref)
+	}
 }
