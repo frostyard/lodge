@@ -147,6 +147,11 @@ type Options struct {
 	// checks the client again itself. internal/gateway's tests use it; lodge
 	// leaves it nil.
 	BeforeRequestInsert func()
+	// AfterAccessRevoked, when it is set, is called at the end of the
+	// storage's RevokeAccessToken, inside its revocation, with the context
+	// that holds the revocation's transaction. internal/oauth's tests use it;
+	// lodge leaves it nil.
+	AfterAccessRevoked func(ctx context.Context)
 	// BeforePrincipalRevoked, when it returns an error, stops a principal's
 	// revocation after its clients are revoked and before its own row is
 	// marked: the whole cascade rolls back. internal/gateway's tests use it;
@@ -202,7 +207,7 @@ func New(ctx context.Context, o Options) (*Server, error) {
 	if s.pagesKey, err = s.key(ctx, "pages"); err != nil {
 		return nil, err
 	}
-	s.store = &storage{db: o.DB, now: s.now, log: s.log}
+	s.store = &storage{db: o.DB, now: s.now, log: s.log, afterAccessRevoked: o.AfterAccessRevoked}
 	cfg := &fosite.Config{
 		AccessTokenLifespan:            AccessTokenLifespan,
 		RefreshTokenLifespan:           RefreshTokenLifespan,

@@ -31,6 +31,10 @@ type storage struct {
 	db  *sql.DB
 	now func() time.Time
 	log *slog.Logger
+	// afterAccessRevoked, when it is set, is called at the end of
+	// RevokeAccessToken, with the context its transaction lives in. It is
+	// Options.AfterAccessRevoked: a test's seam, nil in lodge.
+	afterAccessRevoked func(ctx context.Context)
 }
 
 var (
@@ -151,6 +155,15 @@ func (s *storage) queryRow(ctx context.Context, q string, args ...any) *sql.Row 
 // query runs a query in fosite's transaction when there is one.
 func (s *storage) query(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	return s.at(ctx, nil).QueryContext(ctx, q, args...)
+}
+
+// revokeReusedFamily revokes a family whose code was used already: in the
+// transaction of ctx when it holds one, else in a transaction of its own.
+func (s *storage) revokeReusedFamily(ctx context.Context, family string) error {
+	if st, ok := ctx.Value(txKey{}).(*txState); ok && st.depth > 0 {
+		return s.revokeFamilyIn(ctx, family)
+	}
+	return s.revokeFamily(ctx, family)
 }
 
 // revokeFamily revokes a family in a transaction of its own, for a caller
@@ -442,7 +455,12 @@ func (s *storage) GetAuthorizeCodeSession(ctx context.Context, code string, sess
 		return nil, err
 	}
 	if !r.active {
-		// A code used already: fosite's code flow revokes its family.
+		// A code used already: revoke its family first, in 1 transaction, so
+		// that no token of it can be issued between the writes fosite's code
+		// flow makes next, and only then report the used code.
+		if err := s.revokeReusedFamily(ctx, r.requestID); err != nil {
+			return nil, fmt.Errorf("oauth: revoke a used code's family: %w", err)
+		}
 		return req, fosite.ErrInvalidatedAuthorizeCode
 	}
 	return req, nil
@@ -551,6 +569,9 @@ func (s *storage) RevokeRefreshToken(ctx context.Context, requestID string) erro
 func (s *storage) RevokeAccessToken(ctx context.Context, requestID string) error {
 	if _, err := s.exec(ctx, `DELETE FROM oauth_sessions WHERE kind = ? AND request_id = ?`, kindAccess, requestID); err != nil {
 		return fmt.Errorf("oauth: revoke an access token: %w", err)
+	}
+	if s.afterAccessRevoked != nil {
+		s.afterAccessRevoked(ctx)
 	}
 	return nil
 }

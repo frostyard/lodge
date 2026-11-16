@@ -3,7 +3,6 @@ package oauth
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -392,13 +391,11 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		// the family here, in a transaction of its own, and answers
 		// invalid_grant either way.
 		if errors.Is(err, fosite.ErrInvalidatedAuthorizeCode) {
-			if ok, rerr := s.revokeUsedCode(ctx, r.PostForm.Get("code")); rerr != nil {
-				s.log.Error("revoke a used code's family", "err", rerr)
-			} else if ok {
-				s.writeError(w, http.StatusBadRequest, "invalid_grant",
-					"the code was used already: every token of its sign-in is revoked")
-				return
-			}
+			// The storage revoked the used code's family already, in 1
+			// transaction, before it reported the code.
+			s.writeError(w, http.StatusBadRequest, "invalid_grant",
+				"the code was used already: every token of its sign-in is revoked")
+			return
 		}
 		s.provider.WriteAccessError(ctx, w, req, err)
 		return
@@ -413,25 +410,6 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	// lifespan it configured instead (docs/specs/oauth.md, Tokens).
 	resp.SetExpiresIn(AccessTokenLifespan)
 	s.provider.WriteAccessResponse(ctx, w, req, resp)
-}
-
-// revokeUsedCode revokes the family of a code that a second request
-// presented, in a transaction of its own, and reports whether it found it.
-func (s *Server) revokeUsedCode(ctx context.Context, code string) (bool, error) {
-	ctx = context.WithoutCancel(ctx)
-	var family string
-	err := s.store.queryRow(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
-		kindCode, s.strategy.AuthorizeCodeSignature(ctx, code)).Scan(&family)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("oauth: read a used code: %w", err)
-	}
-	if err := s.store.revokeFamily(ctx, family); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // revoke is the revocation endpoint (RFC 7009).

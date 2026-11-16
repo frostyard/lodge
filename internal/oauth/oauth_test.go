@@ -1633,3 +1633,112 @@ func TestReuseRevokesInTheTransaction(t *testing.T) {
 		}
 	})
 }
+
+// TestUsedCodeRevokesItsFamilyFirst checks that the family of a used code is
+// revoked in 1 transaction before fosite's code flow reports the code: when
+// the family's access tokens go, its refresh tokens are inactive already, so
+// a refresh that runs while they are written gets no pair.
+func TestUsedCodeRevokesItsFamilyFirst(t *testing.T) {
+	ctx := t.Context()
+	var (
+		refreshToken string
+		refreshSig   string
+		done         = make(chan struct{})
+		once         sync.Once
+		mu           sync.Mutex
+		stillActive  bool
+		readErr      error
+		status       int
+		body         string
+	)
+	var f *flow
+	f = newFlowWith(t, func(o *Options) {
+		o.AfterAccessRevoked = func(txCtx context.Context) {
+			once.Do(func() {
+				// The family's refresh tokens must be inactive already: the
+				// revocation writes both parts in 1 transaction, refresh
+				// first. Read in that transaction, so that its own writes are
+				// seen.
+				var err error
+				_, err = f.s.store.GetRefreshTokenSession(txCtx, refreshSig, nil)
+				mu.Lock()
+				readErr, stillActive = err, err == nil
+				mu.Unlock()
+				// And a refresh through the token endpoint must get no pair.
+				go func() {
+					defer close(done)
+					form := url.Values{"grant_type": {"refresh_token"}, "client_id": {f.clientID},
+						"refresh_token": {refreshToken}}
+					w := httptest.NewRecorder()
+					f.s.ServeOAuth(w, formRequest(http.MethodPost, "/oauth/token", form.Encode()), RouteToken)
+					mu.Lock()
+					status, body = w.Code, w.Body.String()
+					mu.Unlock()
+				}()
+			})
+		}
+	})
+	code, tok := f.signinFlow("chani", "mcp")
+	refreshToken = tok.RefreshToken
+	refreshSig = f.s.strategy.RefreshTokenSignature(ctx, refreshToken)
+	// The family of the pair.
+	var family string
+	if err := f.s.db.QueryRowContext(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
+		kindRefresh, refreshSig).Scan(&family); err != nil {
+		t.Fatal(err)
+	}
+	// The used code again: its family is revoked before fosite reports it.
+	again := f.token(url.Values{"grant_type": {"authorization_code"}, "client_id": {f.clientID},
+		"code": {code}, "redirect_uri": {redirectURI}, "code_verifier": {verifier}})
+	var refused tokenJSON
+	if err := jsonUnmarshal([]byte(again.body), &refused); err != nil {
+		t.Fatal(err)
+	}
+	if again.status != http.StatusBadRequest || refused.Error != "invalid_grant" {
+		t.Errorf("the second exchange: %d %q", again.status, again.body)
+	}
+	// The refresh that ran while the revocation was written got no pair.
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the refresh in the seam never finished")
+	}
+	mu.Lock()
+	active, rerr, gotStatus, gotBody := stillActive, readErr, status, body
+	mu.Unlock()
+	if active {
+		t.Errorf("the family's refresh token was still active while its revocation was written: a refresh there gets a pair")
+	}
+	if rerr != nil && !errors.Is(rerr, fosite.ErrInactiveToken) {
+		t.Errorf("the read in the seam = %v, want the inactive token", rerr)
+	}
+	if gotStatus == http.StatusOK {
+		t.Errorf("the refresh in the seam got a pair: %d %s", gotStatus, gotBody)
+	}
+	var refreshed tokenJSON
+	if err := jsonUnmarshal([]byte(gotBody), &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Error != "invalid_grant" && refreshed.Error != "invalid_request" {
+		t.Errorf("the refresh in the seam = %d %q", gotStatus, gotBody)
+	}
+	// No token of the family works afterwards.
+	if _, err := f.s.Check(ctx, tok.AccessToken, "mcp"); err == nil {
+		t.Error("the family's access token works after its code was used twice")
+	}
+	if _, err := f.s.store.GetRefreshTokenSession(ctx, refreshSig, nil); err == nil {
+		t.Error("the family's refresh token is still active")
+	}
+	var access, refresh int
+	if err := f.s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM oauth_sessions WHERE request_id = ? AND kind = ?`, family, kindAccess).Scan(&access); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM oauth_sessions WHERE request_id = ? AND kind = ? AND active = 1`, family, kindRefresh).Scan(&refresh); err != nil {
+		t.Fatal(err)
+	}
+	if access != 0 || refresh != 0 {
+		t.Errorf("the family holds %d access rows and %d active refresh rows, want none", access, refresh)
+	}
+}
