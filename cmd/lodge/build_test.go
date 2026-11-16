@@ -301,9 +301,10 @@ func TestDevelopmentBuildEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The broker is off unless the configuration enables it: no socket.
-	if _, err := os.Stat(filepath.Join(l.root, "run/lodge/nats.sock")); err == nil {
-		t.Error("the development build made the broker's socket with no broker.enabled")
+	// The broker is on unless the configuration turns it off: its socket is
+	// there, and this configuration has no broker member.
+	if _, err := os.Stat(filepath.Join(l.root, "run/lodge/nats.sock")); err != nil {
+		t.Errorf("the development build made no broker's socket: %v", err)
 	}
 	if code, _, body := get(l.lodge, "/fake/a/b", nil); code != http.StatusOK || !strings.Contains(body, "shell") {
 		t.Errorf("the shell page: %d %q", code, body)
@@ -695,18 +696,19 @@ func listenPorts(t *testing.T, pid int) []string {
 	return out
 }
 
-// The development build with the broker on: no listener but its 2 plain
-// ones, a socket for apps, and /nats for clients (ADR-0022;
-// docs/specs/lodge-http.md, The broker).
+// The development build with the broker on, which is its default: no
+// listener but its 2 plain ones, a socket for apps, and /nats for clients
+// (ADR-0022; docs/specs/lodge-http.md, The broker).
 func TestDevelopmentBuildBroker(t *testing.T) {
 	_, e2e := binaries(t)
 	l := startLodge(t, e2e, func(root string) {
 		apptest.Install(t, root, "fake", map[string]any{"name": "Fake", "key": "f"}, nil)
+		// A configuration without a broker member leaves the broker on.
 		path := filepath.Join(root, "etc/lodge/config.json")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(`{"broker": {"enabled": true}}`), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(`{"inference": {}}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}, "--listen", "127.0.0.1:0", "--content-listen", "127.0.0.1:0")

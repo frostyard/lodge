@@ -107,7 +107,8 @@
   [ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
   An OAuth token works on no route that takes an `lgm_` token, and an
   `lgm_` token on no OAuth route. The OAuth tokens serve lodge's MCP
-  gateway and its broker, which other changes add.
+  gateway and its broker
+  ([ADR-0022](0022-lodge-embeds-a-nats-broker-for-app-events.md)).
 - [specs/oauth.md](../specs/oauth.md) pins the server, the consent and
   grants pages and the storage.
   [specs/lodge-http.md](../specs/lodge-http.md#oauth-routes) lists the
@@ -151,4 +152,5 @@
 
 - Shapes: [specs/oauth.md](../specs/oauth.md), [specs/lodge-http.md](../specs/lodge-http.md#oauth-routes), [specs/app-contract.md](../specs/app-contract.md#the-manifest-appjson), [design/overview.md](../design/overview.md#agents), [roadmap — Phase 7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants)
 - Builds on: [ADR-0005](0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0014](0014-agents-on-lodges-host-use-a-local-agent-socket.md)
+- Related: [ADR-0022](0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, which takes an access token of scope `events`)
 - External: [MCP authorization, revision 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization), [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414), [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591), [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636), [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009), [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252#section-7.3), [hearth's manifest](https://github.com/frostyard/hearth/blob/main/schema/manifest-v1.json)

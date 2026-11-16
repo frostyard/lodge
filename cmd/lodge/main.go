@@ -29,6 +29,7 @@ import (
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/broker"
 	"github.com/frostyard/lodge/internal/control"
+	"github.com/frostyard/lodge/internal/events"
 	"github.com/frostyard/lodge/internal/gateway"
 	"github.com/frostyard/lodge/internal/inference"
 	"github.com/frostyard/lodge/internal/mcpgw"
@@ -185,6 +186,12 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	// reach the gateway through the pointer, which is set before lodge serves.
 	var mcpGateway atomic.Pointer[mcpgw.Gateway]
 
+	// The event subscriptions of the broker, /gateway/events. The OAuth
+	// server is made before the broker, and the broker's door needs the
+	// service's token check: its hooks reach the service through the
+	// pointer, which is set before lodge serves.
+	var eventsSvc atomic.Pointer[events.Service]
+
 	// lodge's OAuth server, its consent page and its grants page
 	// (docs/specs/oauth.md).
 	oauthSrv, err := oauth.New(ctx, oauth.Options{DB: db, Apps: reg,
@@ -193,10 +200,16 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 			if gw := mcpGateway.Load(); gw != nil {
 				gw.GrantChanged(principal, app)
 			}
+			if svc := eventsSvc.Load(); svc != nil {
+				svc.GrantChanged(principal, app)
+			}
 		},
 		OnRevoke: func(principal string, clients []string) {
 			if gw := mcpGateway.Load(); gw != nil {
 				gw.Revoked(principal, clients)
+			}
+			if svc := eventsSvc.Load(); svc != nil {
+				svc.Revoked(principal, clients)
 			}
 		}})
 	if err != nil {
@@ -232,11 +245,21 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	}
 	if bcfg.Enabled {
 		br, err = startBroker(ctx, brokerStore, reg, broker.Options{StoreDir: stateDir, Apps: reg, DevUID: devUID,
+			// A client's token is an OAuth token of scope events, which the
+			// service checks.
+			Tokens: func(ctx context.Context, token string) (string, time.Time, bool) {
+				if svc := eventsSvc.Load(); svc != nil {
+					return svc.Tokens(ctx, token)
+				}
+				return "", time.Time{}, false
+			},
 			Log: log.With("part", "broker")})
 		if err != nil {
 			log.Error("the broker did not start; it is off", "err", err)
 		} else {
 			defer br.Close()
+			eventsSvc.Store(events.New(events.Options{Broker: br, OAuth: oauthSrv, Apps: reg,
+				Log: log.With("part", "events")}))
 		}
 	}
 
@@ -286,6 +309,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	if br != nil {
 		gcfg.Broker = br
 	}
+	if svc := eventsSvc.Load(); svc != nil {
+		gcfg.Events = svc
+	}
 	g := gateway.New(gcfg)
 	deps := control.Deps{
 		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log, Inference: inf, Agents: ag,
@@ -333,6 +359,9 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	wg.Go(func() { reg.Run(ctx) })
 	wg.Go(func() { g.Run(ctx) })
 	wg.Go(func() { oauthSrv.Run(ctx) })
+	if svc := eventsSvc.Load(); svc != nil {
+		wg.Go(func() { svc.Run(ctx) })
+	}
 	wg.Go(func() {
 		if err := control.New(deps).Serve(ctx, ctlLn); err != nil {
 			errs <- err

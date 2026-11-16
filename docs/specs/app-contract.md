@@ -422,7 +422,7 @@ any other agent.
 
 lodge embeds an event broker
 ([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md),
-[lodge-http.md](lodge-http.md#the-broker)). Off by default, and when on:
+[lodge-http.md](lodge-http.md#the-broker)). On by default, and then:
 
 - **Where.** `/run/lodge/nats.sock`, owner `lodge`, group `lodge-apps`,
   0660, or `DIR/run/lodge/nats.sock` under `LODGE_ROOT`. It is a NATS
@@ -439,6 +439,13 @@ lodge embeds an event broker
 - **What it may subscribe to.** `_INBOX.>` only: an app's replies are its
   own, in its own account. An app reads another app's events only through
   that app's MCP, as it reads its data.
+- **Who reads it.** An OAuth client with scope `events`, through a
+  consumer that lodge makes and filters by its principal's grant
+  ([lodge-http.md](lodge-http.md#event-subscriptions)). For an app on
+  hearth, the manifest's `events` say which capability reads each topic
+  ([oauth.md](oauth.md#the-apps-manifest)), so the app publishes each
+  event on its topic and path, as hearth's publishers do; a topic outside
+  its manifest reaches no client.
 - **What it never sees.** Another app's messages, a client's pull
   requests, and the JetStream API. Each app has its own account, so a
   reply subject cannot carry a message into another app's stream.

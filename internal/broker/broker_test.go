@@ -49,6 +49,8 @@ type harness struct {
 
 	mu     sync.Mutex
 	tokens map[string]string
+	// expires is when the tokens expire: zero never.
+	expires time.Time
 }
 
 // newHarness starts a broker whose app stream is marks', and whose second
@@ -80,12 +82,19 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-// token names the client a token belongs to.
-func (h *harness) token(_ context.Context, token string) (string, bool) {
+// token names the client a token belongs to, and when it expires.
+func (h *harness) token(_ context.Context, token string) (string, time.Time, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	name, ok := h.tokens[token]
-	return name, ok
+	return name, h.expires, ok
+}
+
+// expireIn makes every token expire after d.
+func (h *harness) expireIn(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.expires = time.Now().Add(d)
 }
 
 // issue lets token name client.

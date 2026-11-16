@@ -1,11 +1,16 @@
 package broker
 
 import (
+	"context"
+	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // A subscription creates nothing while a consumer that its client's revoke
@@ -230,5 +235,156 @@ func TestSubscribeWaitsForARevokeInProgress(t *testing.T) {
 	h.b.mu.Unlock()
 	if ref == nil || ref.stream != "app_marks" || ref.consumer != "chani-s1" {
 		t.Errorf("the index holds %+v, want app_marks' chani-s1", ref)
+	}
+}
+
+// countingJS counts the consumers a broker writes, and passes the rest on.
+type countingJS struct {
+	jetstream.JetStream
+	mu      sync.Mutex
+	creates int
+}
+
+func (c *countingJS) CreateOrUpdateConsumer(ctx context.Context, stream string, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	c.mu.Lock()
+	c.creates++
+	c.mu.Unlock()
+	return c.JetStream.CreateOrUpdateConsumer(ctx, stream, cfg)
+}
+
+// countCreates replaces the broker's JetStream with a counter, and answers it
+// with what restores the real one.
+func (h *harness) countCreates() (*countingJS, func()) {
+	h.b.mu.Lock()
+	real := h.b.js
+	c := &countingJS{JetStream: real}
+	h.b.js = c
+	h.b.mu.Unlock()
+	return c, func() {
+		h.b.mu.Lock()
+		h.b.js = real
+		h.b.mu.Unlock()
+	}
+}
+
+// filterList answers n filters of the app.
+func filterList(app string, n int) []string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, app+".f"+strconv.Itoa(i))
+	}
+	return out
+}
+
+// A subscription takes at most MaxFilters filters, its own resync subject
+// included: the last one that fits is MaxFilters-1 read filters.
+func TestSubscribeFilterLimit(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", filterList("marks", MaxFilters-1)))
+	if got := len(h.consumer(t, "app_marks", "chani-s1").Config.FilterSubjects); got != MaxFilters {
+		t.Errorf("the consumer has %d filters, want %d", got, MaxFilters)
+	}
+	// 1 more read filter is past the limit, and makes no consumer.
+	err := h.b.Subscribe(t.Context(), "chani", "s2", "marks", filterList("marks", MaxFilters))
+	if !errors.Is(err, ErrTooManyFilters) {
+		t.Fatalf("a subscription with %d filters answered %v, want ErrTooManyFilters", MaxFilters+1, err)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Errorf("app_marks holds the consumers %q, want chani-s1 alone", names)
+	}
+}
+
+// A refilter past the limit fails closed: the consumer keeps its resync
+// subject alone, never filters that may be wider than the grant.
+func TestRefilterPastTheLimitStopsDelivery(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+	err := h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return filterList("marks", MaxFilters), nil
+	})
+	if !errors.Is(err, ErrTooManyFilters) {
+		t.Fatalf("a refilter with %d filters answered %v, want ErrTooManyFilters", MaxFilters+1, err)
+	}
+	// The old filters may be wider than the new grant: the consumer keeps its
+	// resync subject alone.
+	want := []string{"lodge.marks.resync.chani-s1"}
+	if got := consumerFilters(h.consumer(t, "app_marks", "chani-s1").Config); !sameFilters(got, want) {
+		t.Errorf("the consumer's filters are %q, want %q", got, want)
+	}
+}
+
+// A refilter that changes nothing writes nothing: the minute sweep runs it
+// over every subscription.
+func TestRefilterWritesNothingWhenNothingChanges(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+	counter, restore := h.countCreates()
+	defer restore()
+	same := func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.a"}, nil
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", same))
+	if got := counter.creates; got != 0 {
+		t.Errorf("an unchanged refilter wrote the consumer %d times, want 0", got)
+	}
+	// A changed list is written once.
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.b"}, nil
+	}))
+	if got := counter.creates; got != 1 {
+		t.Errorf("a changed refilter wrote the consumer %d times, want 1", got)
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.b"}, nil
+	}))
+	if got := counter.creates; got != 1 {
+		t.Errorf("a second unchanged refilter wrote the consumer %d times, want 1", got)
+	}
+	// An empty list leaves the resync subject alone, which the server keeps
+	// in the consumer's single filter subject.
+	none := func(context.Context, string, string) ([]string, error) { return nil, nil }
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", none))
+	info := h.consumer(t, "app_marks", "chani-s1")
+	if want := []string{ResyncSubject("marks", "chani-s1")}; !sameFilters(consumerFilters(info.Config), want) {
+		t.Fatalf("the consumer's filters are %q, want %q", consumerFilters(info.Config), want)
+	}
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", none))
+	if got := counter.creates; got != 2 {
+		t.Errorf("an unchanged empty refilter wrote the consumer %d times, want 2", got)
+	}
+	// A wider list replaces that single filter: the server refuses a config
+	// that names both.
+	noErr(t, h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.a"}, nil
+	}))
+	info = h.consumer(t, "app_marks", "chani-s1")
+	want := []string{"lodge.marks.resync.chani-s1", "marks.a"}
+	if got := consumerFilters(info.Config); !sameFilters(got, want) || info.Config.FilterSubject != "" {
+		t.Errorf("the consumer's filters are %q (single %q), want %q", got, info.Config.FilterSubject, want)
+	}
+}
+
+// A refilter's config names its filters once: a consumer that held 1 filter in
+// FilterSubject is replaced by the list, which the server refuses beside a
+// single filter.
+func TestRefilterConfigClearsAFilterSubject(t *testing.T) {
+	cfg := refilterConfig(jetstream.ConsumerConfig{Durable: "chani-s1", FilterSubject: "marks.a"},
+		[]string{"marks.b", "lodge.marks.resync.chani-s1"}, "chani", "s1", "marks")
+	if cfg.FilterSubject != "" {
+		t.Errorf("the config keeps the single filter %q", cfg.FilterSubject)
+	}
+	if want := []string{"marks.b", "lodge.marks.resync.chani-s1"}; !sameFilters(cfg.FilterSubjects, want) {
+		t.Errorf("the config's filters are %q, want %q", cfg.FilterSubjects, want)
+	}
+	if cfg.Durable != "chani-s1" || cfg.Metadata[MetadataClient] != "chani" || cfg.Metadata[MetadataSub] != "s1" ||
+		cfg.Metadata[MetadataTopic] != "marks" {
+		t.Errorf("the config is %+v", cfg)
+	}
+	// A consumer's filters are read from either member.
+	if got := consumerFilters(jetstream.ConsumerConfig{FilterSubject: "marks.a"}); !sameFilters(got, []string{"marks.a"}) {
+		t.Errorf("consumerFilters answers %q, want marks.a", got)
+	}
+	if got := consumerFilters(jetstream.ConsumerConfig{FilterSubjects: []string{"marks.a", "marks.b"}}); len(got) != 2 {
+		t.Errorf("consumerFilters answers %q, want 2 filters", got)
 	}
 }

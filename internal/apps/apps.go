@@ -51,8 +51,27 @@ type Hearth struct {
 	Selectors []string `json:"selectors"`
 	// Operations are the app's RPCs (ADR-0024).
 	Operations []Operation `json:"operations"`
+	// Events are the app's events, which a grant's capability reads.
+	Events []Event `json:"events"`
 	// Tools are the app's agent tools, from its catalog (ADR-0024).
 	Tools []Tool `json:"tools"`
+}
+
+// Event is 1 event of an app's hearth manifest: its CloudEvents type, the
+// message that carries it, its topic, its selector, and the capability a
+// reader of it needs.
+type Event struct {
+	// Type is the event's CloudEvents type, org.frostyard.<app>.<object>.<verb>.
+	Type string `json:"type"`
+	// Message is the full name of the message that carries the event.
+	Message string `json:"message"`
+	// Topic is the broker topic, <app>.<object>.<verb>, with .<selector>
+	// when the event carries a selector.
+	Topic string `json:"topic"`
+	// Selector is the selector the event carries, or "" for none.
+	Selector string `json:"selector,omitzero"`
+	// ReadPermission is the capability that a reader of the event needs.
+	ReadPermission string `json:"read_permission"`
 }
 
 // Operation is 1 RPC of an app's hearth manifest: its full name, the
@@ -481,6 +500,7 @@ func loadHearth(dir, name, id string, a *App) error {
 		Capabilities []string    `json:"capabilities"`
 		Selectors    []string    `json:"selectors"`
 		Operations   []Operation `json:"operations"`
+		Events       []Event     `json:"events"`
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
 		return fmt.Errorf("its hearth manifest %s: %w", name, err)
@@ -505,7 +525,55 @@ func loadHearth(dir, name, id string, a *App) error {
 	if err := checkOperations(name, m.Operations, m.Capabilities); err != nil {
 		return err
 	}
-	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors, Operations: m.Operations}
+	if err := checkEvents(name, id, m.Events, m.Selectors, m.Capabilities); err != nil {
+		return err
+	}
+	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors, Operations: m.Operations, Events: m.Events}
+	return nil
+}
+
+// checkEvents checks a hearth manifest's events: each topic, its selector,
+// its read permission, and that no type or topic repeats. A topic is the
+// app's own subject, with at least 3 tokens (docs/specs/oauth.md, The app's
+// manifest).
+func checkEvents(name, id string, events []Event, selectors, capabilities []string) error {
+	types, topics := map[string]bool{}, map[string]bool{}
+	for _, ev := range events {
+		label := "an event without a type"
+		if ev.Type != "" {
+			label = "event " + ev.Type
+		}
+		bad := func(format string, args ...any) error {
+			return fmt.Errorf("its hearth manifest %s: %s: %s", name, label, fmt.Sprintf(format, args...))
+		}
+		if types[ev.Type] {
+			return bad("its type is another event's")
+		}
+		types[ev.Type] = true
+		if topics[ev.Topic] {
+			return bad("its topic is another event's")
+		}
+		topics[ev.Topic] = true
+		tokens := strings.Split(ev.Topic, ".")
+		if len(tokens) < 3 || tokens[0] != id {
+			return bad("its topic %q must be %s.<object>.<verb>", ev.Topic, id)
+		}
+		for _, tok := range tokens {
+			if !hearthName.MatchString(tok) {
+				return bad("its topic %q has the token %q, which must match %s", ev.Topic, tok, hearthName)
+			}
+		}
+		switch {
+		case ev.Selector == "":
+		case !slices.Contains(selectors, ev.Selector):
+			return bad("its selector %q is not one of the app's", ev.Selector)
+		case !strings.HasSuffix(ev.Topic, "."+ev.Selector):
+			return bad("its topic %q must end with %q, its selector", ev.Topic, "."+ev.Selector)
+		}
+		if !slices.Contains(capabilities, ev.ReadPermission) {
+			return bad("its read permission %q is not one of the app's capabilities", ev.ReadPermission)
+		}
+	}
 	return nil
 }
 

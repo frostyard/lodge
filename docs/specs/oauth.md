@@ -6,7 +6,8 @@ principals, clients, grants and tokens. `internal/oauth` implements it on
 `github.com/ory/fosite`, and `internal/gateway` routes to it after the
 checks of [lodge-http.md](lodge-http.md#oauth-routes). Its clients are MCP
 clients such as pi-pocket's `mcp` module, and lodge's MCP gateway and
-broker, which take its tokens (other changes add them). Rationale:
+broker, which take its tokens
+([lodge-http.md](lodge-http.md#event-subscriptions) for the broker's). Rationale:
 [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md).
 Where it fits: [design/overview.md](../design/overview.md#agents).
 
@@ -175,7 +176,9 @@ token revokes its family: every token of the approval that issued it
     added twice.
 - **Effective access is the principal's grant limited by the client's
   scope.** The gateway uses the grant only for a token with scope `mcp`,
-  the broker only for one with scope `events`.
+  the broker only for one with scope `events`, where a grant's read items
+  become a consumer's filters
+  ([lodge-http.md](lodge-http.md#event-subscriptions)).
 - **Last use** is recorded for a client when one of its access tokens is
   checked, at most once a minute. A principal's last use is the latest of
   its clients'.
@@ -196,6 +199,7 @@ that file in the app's directory:
 | `app` | the app's ID |
 | `capabilities` | strings `<app>:<name>`, `name` matching `^[a-z][a-z0-9_]*$` |
 | `selectors` | strings matching `^[a-z][a-z0-9_]*$` |
+| `events` | the app's events, each `{type, message, topic, selector, read_permission}`: `topic` of 3 or more tokens matching `^[a-z][a-z0-9_]*$`, the first the app's ID, and ending in `.<selector>` when `selector` is set; `selector` one of `selectors` or absent; `read_permission` one of `capabilities`; no 2 events with the same `type` or `topic` |
 
 lodge ignores the other members
 ([hearth's schema](https://github.com/frostyard/hearth/blob/main/schema/manifest-v1.json)).
@@ -354,6 +358,8 @@ All of it is in lodge's database in `/var/lib/lodge/`:
 - `RemoveGrantItem(ctx, principal, app, hash)`: removes 1 item of a grant
   ([the grants page](#the-grants-page)).
 - `Grant(ctx, principal, app)`: the principal's items for the app.
+- `Client(ctx, id)`: a live client, with its principal and scope; else
+  `ErrNotFound`. The broker's sweep uses it.
 - `RequestAccess(ctx, client, app, items)`: an access request
   ([above](#requests)).
 - Hooks it calls after a change: a grant changed (principal, app), and a

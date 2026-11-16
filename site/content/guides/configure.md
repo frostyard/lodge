@@ -18,7 +18,7 @@ sudo cp /usr/share/lodge/config.example.json /etc/lodge/config.json
 ```json
 {
   "agents": [],
-  "broker": { "enabled": false },
+  "broker": { "enabled": true },
   "inference": {
     "providers": {
       "home": { "type": "openai", "baseURL": "http://MODEL_HOST/v1", "slots": 4, "home": true }
@@ -35,11 +35,11 @@ sudo cp /usr/share/lodge/config.example.json /etc/lodge/config.json
 - **`agents`** lists up to 16 system user names of agents on lodge's host,
   such as Porter's user. `root` and `lodge` are refused. Each agent's user
   also joins the group `lodge-agents`.
-- **`broker`** starts the event broker, which carries each app's events and
-  lets a client read them. It is off by default, and a change takes effect
-  at the next start of lodge, not on a reload. Its messages are kept in
-  `/var/lib/lodge/jetstream/`, and its store grows to 7 days or 1 GiB for
-  each app.
+- **`broker`** runs the event broker, which carries each app's events and
+  lets a client read them. It is on by default; `{"enabled": false}` turns
+  it off. A change takes effect at the next start of lodge, not on a
+  reload. Its messages are kept in `/var/lib/lodge/jetstream/`, for 7 days
+  or 1 GiB for each app, whichever comes first; the oldest go first.
 - **`inference.providers`** names each model provider. `type` is `openai`
   (any OpenAI-compatible server), `codex` or `copilot`. `slots` is the
   number of requests the provider runs at once. `home: true` marks a
@@ -150,6 +150,26 @@ Apps built on [hearth](https://github.com/frostyard/hearth) have no
   appear in the same session, with no restart.
 - A call outside the grant answers `insufficient_scope`, and the app sees
   nothing.
+
+## Events for agents
+
+An agent that signs in with the scope `events` can follow what happens in
+an app on hearth, such as a bookmark saved in a folder, without asking
+again and again. It receives only the events its grant lets it read: a
+grant on 1 folder gives that folder's events, and no other.
+
+- The agent subscribes at `https://LODGE/gateway/events` with a topic
+  prefix, such as `marks` for all it may read, and reads its events from
+  the broker at `wss://LODGE/nats` with the same token.
+- When you narrow a grant on the grants page, the events outside it that
+  the agent has not received yet do not reach it. When you revoke the
+  client or the principal, its events stop at once.
+- An agent away for more than 7 days, or 1 GiB behind, gets 1 `resync`
+  event when it comes back: it then reads the app's state again.
+
+The
+[HTTP spec](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#event-subscriptions)
+has the details.
 
 The tokens `lodgectl token issue` prints keep working beside OAuth.
 [lodge's OAuth server](https://github.com/frostyard/lodge/blob/main/docs/specs/oauth.md)

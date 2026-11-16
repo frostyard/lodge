@@ -177,6 +177,12 @@ func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, erro
 	return items, nil
 }
 
+// Client returns the live client id: an OAuth client of lodge, revoked or
+// unknown ones are ErrNotFound (docs/specs/oauth.md, Clients).
+func (s *Server) Client(ctx context.Context, id string) (Client, error) {
+	return s.store.clientRow(ctx, id)
+}
+
 // grants returns every grant of a principal, by app.
 func (s *storage) grants(ctx context.Context, principal string) (map[string][]Item, error) {
 	rows, err := s.query(ctx, `SELECT app, items FROM grants WHERE principal = ? ORDER BY app`, principal)
