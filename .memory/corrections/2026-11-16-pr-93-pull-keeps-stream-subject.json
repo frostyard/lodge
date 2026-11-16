@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker, internal/gateway: tests of the broker's client door",
+  "correction": "The client door's tests pulled with nats.go only, whose request mux gives a message of an unknown subject to its single open request; so no test saw that a pulled message keeps its stream subject, and a nats.js client that pulled with request() and its subject-keyed mux got no event. A test of the client door now drives a pull over /nats with the protocol's own lines and checks the delivered subject, the reply and the ack, and the spec tells clients to read a pull on a subscription of their own.",
+  "evidence": "Pilot run 2026-11-16, line L2: the hub's consumer delivered stream seq 5 17 times with no ack and never delivered seq 6; a reproduction with the bridge's vendored @nats-io/nats-core 3.4.0 over a WebSocket door timed out on every request() pull while the trace showed MSG marks.a 1 $JS.ACK...; the same pull with noMux returned the message",
+  "promoted_to": "internal/gateway TestNatsPullKeepsTheStreamSubject; docs/specs/lodge-http.md, The broker: a pulled message keeps its stream subject"
+}
