@@ -315,6 +315,9 @@ func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items 
 			return err
 		}
 		req.Principal = c.Principal
+		if s.beforeRequestInsert != nil {
+			s.beforeRequestInsert()
+		}
 		return s.createRequest(ctx, tx, req)
 	})
 	if err != nil {

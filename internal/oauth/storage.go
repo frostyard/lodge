@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/ory/fosite"
@@ -31,6 +33,17 @@ type storage struct {
 	db  *sql.DB
 	now func() time.Time
 	log *slog.Logger
+	// revokeFails, when it returns an error, makes the write of a family's
+	// revocation fail. It is Options.RevokeFails: a test's seam, nil in
+	// lodge.
+	revokeFails func(family string) error
+
+	// mu guards waiting.
+	mu sync.Mutex
+	// waiting are the families whose revocation is not stored yet. Every
+	// read of their tokens is refused until it is, so that a revocation
+	// whose write failed is not lost.
+	waiting map[string]struct{}
 }
 
 var (
@@ -114,7 +127,8 @@ func (s *storage) Rollback(ctx context.Context) error {
 }
 
 // revokeFamilies revokes each family durably: fosite's transaction is gone,
-// so the revocation is not undone with it.
+// so the revocation is not undone with it. A family whose write fails stays
+// in the waiting set, and its tokens stay refused.
 func (s *storage) revokeFamilies(ctx context.Context, families []string) {
 	if len(families) == 0 {
 		return
@@ -123,13 +137,69 @@ func (s *storage) revokeFamilies(ctx context.Context, families []string) {
 	for _, family := range families {
 		if err := s.revokeFamily(ctx, family); err != nil {
 			s.log.Error("revoke a token family after its reuse", "family", family, "err", err)
+			continue
 		}
+		s.revocationStored(family)
+	}
+}
+
+// awaitRevocation puts a family in the waiting set, before lodge tries to
+// write its revocation.
+func (s *storage) awaitRevocation(family string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.waiting[family] = struct{}{}
+}
+
+// revocationStored takes a family out of the waiting set: its revocation is
+// in the database.
+func (s *storage) revocationStored(family string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.waiting, family)
+}
+
+// revoked reports whether a family waits for its revocation to be stored, in
+// which case its tokens are refused as if it were revoked.
+func (s *storage) revoked(family string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.waiting[family]
+	return ok
+}
+
+// waitingFamilies lists the families whose revocation is not stored yet.
+func (s *storage) waitingFamilies() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.waiting))
+	for family := range s.waiting {
+		out = append(out, family)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// retryRevocations writes the revocation of every waiting family again, and
+// is what the hourly tick asks for.
+func (s *storage) retryRevocations(ctx context.Context) {
+	for _, family := range s.waitingFamilies() {
+		if err := s.revokeFamily(context.WithoutCancel(ctx), family); err != nil {
+			s.log.Error("revoke a token family again", "family", family, "err", err)
+			continue
+		}
+		s.revocationStored(family)
 	}
 }
 
 // revokeFamily marks every refresh token of a family inactive, and deletes
 // its access tokens, in a transaction of its own.
 func (s *storage) revokeFamily(ctx context.Context, family string) error {
+	if s.revokeFails != nil {
+		if err := s.revokeFails(family); err != nil {
+			return err
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("oauth: begin a revocation: %w", err)
@@ -153,10 +223,15 @@ func (s *storage) revokeFamily(ctx context.Context, family string) error {
 // error for the presented kind, and errTokenReused. The revocation runs when
 // fosite's transaction, which it rolls back, is gone.
 func (s *storage) markReused(ctx context.Context, family string, use error) error {
+	// The family waits first, so that its tokens are refused even when the
+	// write of its revocation fails.
+	s.awaitRevocation(family)
 	if st, ok := ctx.Value(txKey{}).(*txState); ok && st.depth > 0 {
 		st.families = append(st.families, family)
 	} else if err := s.revokeFamily(context.WithoutCancel(ctx), family); err != nil {
 		s.log.Error("revoke a token family after its reuse", "family", family, "err", err)
+	} else {
+		s.revocationStored(family)
 	}
 	return &reusedError{family: family, use: use}
 }
@@ -460,6 +535,9 @@ func (s *storage) GetAuthorizeCodeSession(ctx context.Context, code string, sess
 	if err != nil {
 		return nil, err
 	}
+	if s.revoked(r.requestID) {
+		return nil, fosite.ErrNotFound
+	}
 	if !r.active {
 		return req, s.markReused(ctx, r.requestID, fosite.ErrInvalidatedAuthorizeCode)
 	}
@@ -500,8 +578,14 @@ func (s *storage) CreateAccessTokenSession(ctx context.Context, signature string
 
 // GetAccessTokenSession returns the request of an access token.
 func (s *storage) GetAccessTokenSession(ctx context.Context, signature string, session fosite.Session) (fosite.Requester, error) {
-	req, _, err := s.get(ctx, kindAccess, signature, session)
-	return req, err
+	req, r, err := s.get(ctx, kindAccess, signature, session)
+	if err != nil {
+		return nil, err
+	}
+	if s.revoked(r.requestID) {
+		return nil, fosite.ErrNotFound
+	}
+	return req, nil
 }
 
 // DeleteAccessTokenSession forgets an access token.
@@ -523,6 +607,9 @@ func (s *storage) GetRefreshTokenSession(ctx context.Context, signature string, 
 	req, r, err := s.get(ctx, kindRefresh, signature, session)
 	if err != nil {
 		return nil, err
+	}
+	if s.revoked(r.requestID) {
+		return nil, fosite.ErrNotFound
 	}
 	if !r.active {
 		return req, fosite.ErrInactiveToken

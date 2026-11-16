@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -1752,46 +1753,45 @@ func TestOAuthRevokeAccessRevokesFamily(t *testing.T) {
 	tokenError(t, after, afterTok, "invalid_grant")
 }
 
-// TestOAuthSweepKeepsReplayEvidence checks that the sweep keeps an inactive
+// TestOAuthSweepKeepsReplayEvidence checks that the sweep keeps a consumed
 // refresh token while its family holds an unexpired one: presenting it again
 // revokes the family.
 func TestOAuthSweepKeepsReplayEvidence(t *testing.T) {
 	h := newOAuthHarness(t)
 	client, first := h.signin("pi-pocket", "mcp")
 	_, second := h.refresh(client.ClientID, first.RefreshToken)
-	// The harness's clock is 8 hours after the real one: put the first
-	// refresh row inside that gap, and the second beyond it.
-	h.clock.advance(8 * time.Hour)
-	realNow := time.Now().UTC()
-	for _, c := range []struct {
-		expires time.Time
-		oldest  bool
-	}{
-		{expires: realNow.Add(2 * time.Hour), oldest: true},
-		{expires: realNow.Add(30 * time.Hour)},
-	} {
-		q := `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND signature = ` +
-			`(SELECT signature FROM oauth_sessions WHERE kind = 'refresh' ORDER BY expires_at LIMIT 1)`
-		if !c.oldest {
-			q = `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND signature = ` +
-				`(SELECT signature FROM oauth_sessions WHERE kind = 'refresh' ORDER BY expires_at DESC LIMIT 1)`
-		}
-		if _, err := h.db.ExecContext(t.Context(), q, c.expires.UTC().Format(store.TimeFormat)); err != nil {
-			t.Fatal(err)
-		}
+	// The family's 2 refresh rows: the one the refresh consumed, and the one
+	// it issued. Their expiries are the harness clock's, which is the clock
+	// the sweep reads.
+	now := h.clock.now().UTC()
+	oldExpiry, newExpiry := now.Add(time.Hour), now.Add(3*time.Hour)
+	oldRow := `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND active = 0`
+	if _, err := h.db.ExecContext(t.Context(), oldRow, oldExpiry.Format(store.TimeFormat)); err != nil {
+		t.Fatal(err)
+	}
+	newRow := `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND active = 1`
+	if _, err := h.db.ExecContext(t.Context(), newRow, newExpiry.Format(store.TimeFormat)); err != nil {
+		t.Fatal(err)
+	}
+	// The sweep runs 2 hours in: the consumed row has expired, the live one
+	// has not.
+	h.clock.advance(2 * time.Hour)
+	sweepAt := h.clock.now().UTC()
+	if !oldExpiry.Before(sweepAt) || !sweepAt.Before(newExpiry) {
+		t.Fatalf("the sweep at %s does not fall between %s and %s", sweepAt, oldExpiry, newExpiry)
 	}
 	if err := h.oauth.Sweep(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	// The used refresh token is still there, though it expired: it is the
-	// evidence that revokes the family.
+	// The consumed row is still there, though it expired: it is the evidence
+	// that revokes the family.
 	var rows int
 	if err := h.db.QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM oauth_sessions WHERE kind = 'refresh' AND active = 0`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 1 {
-		t.Fatalf("%d inactive refresh rows after the sweep, want 1", rows)
+		t.Fatalf("%d consumed refresh rows after the sweep, want 1", rows)
 	}
 	// Presenting it again is a reuse, and the family goes.
 	replayed, replayedTok := h.refresh(client.ClientID, first.RefreshToken)
@@ -2166,5 +2166,178 @@ func TestOAuthAccessTwoSelectors(t *testing.T) {
 	if err != nil || len(granted) != 1 || granted[0].Cap != "marks:read" ||
 		granted[0].Sel["folder"] != "/Reading/Inbox" || granted[0].Sel["tag"] != "/a" {
 		t.Errorf("the grant = %+v, %v", granted, err)
+	}
+}
+
+// TestOAuthGrantHookAfterCommit checks that the grant hook runs after the
+// approval commits: a reader in the hook sees the grant.
+func TestOAuthGrantHookAfterCommit(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		seen    []oauth.Item
+		hookErr error
+	)
+	var h *oauthHarness
+	h = newOAuthHarnessWith(t, func(o *oauth.Options) {
+		o.OnGrant = func(principal, app string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			items, err := h.oauth.Grant(ctx, principal, app)
+			mu.Lock()
+			defer mu.Unlock()
+			seen, hookErr = items, err
+		}
+	})
+	client, _ := h.signin("pi-pocket", "mcp")
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks",
+		[]oauth.Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, csrf, hash := h.consentPage(req.ID)
+	if a := h.approve(req.ID, csrf, hash, url.Values{"item": {"0"}, "path.0.folder": {"/Reading"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the approval: %d %q", a.status, a.body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hookErr != nil {
+		t.Fatalf("Grant in the hook: %v", hookErr)
+	}
+	if len(seen) != 1 || seen[0].Cap != "marks:read" || seen[0].Sel["folder"] != "/Reading" {
+		t.Errorf("the hook saw the grant %+v", seen)
+	}
+}
+
+// TestOAuthRevokePrincipalIsAtomic checks that a failure inside the cascade
+// rolls every part of it back.
+func TestOAuthRevokePrincipalIsAtomic(t *testing.T) {
+	fail := false
+	h := newOAuthHarnessWith(t, func(o *oauth.Options) {
+		o.BeforePrincipalRevoked = func() error {
+			if fail {
+				return errors.New("the write of the principal's revocation failed")
+			}
+			return nil
+		}
+	})
+	client, tok := h.signin("pi-pocket", "mcp")
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", marksItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, csrf, hash := h.consentPage(req.ID)
+	if a := h.approve(req.ID, csrf, hash, url.Values{"item": {"0", "1"},
+		"path.0.folder": {"/Reading"}, "path.1.folder": {"/Reading/Inbox"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the access approval: %d %q", a.status, a.body)
+	}
+	page, pageCSRF, ts := h.grantsPage()
+	if page.status != http.StatusOK {
+		t.Fatalf("the grants page: %d %q", page.status, page.body)
+	}
+	fail = true
+	a := h.revoke("principal", "chani", pageCSRF, ts)
+	if a.status != http.StatusInternalServerError {
+		t.Fatalf("a failed revocation: %d %q", a.status, a.body)
+	}
+	// Every part of the cascade rolled back.
+	if _, err := h.oauth.Check(t.Context(), tok.AccessToken, "mcp"); err != nil {
+		t.Errorf("the client's token after a failed revocation: %v", err)
+	}
+	var revoked sql.NullString
+	if err := h.db.QueryRowContext(t.Context(), `SELECT revoked_at FROM oauth_clients WHERE id = ?`, client.ClientID).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Valid {
+		t.Errorf("the client is revoked at %s, though the cascade failed", revoked.String)
+	}
+	if err := h.db.QueryRowContext(t.Context(), `SELECT revoked_at FROM principals WHERE name = 'chani'`).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Valid {
+		t.Errorf("the principal is revoked at %s, though the cascade failed", revoked.String)
+	}
+	if granted, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(granted) != 2 {
+		t.Errorf("the grant after a failed revocation = %+v, %v", granted, err)
+	}
+	if len(h.revoked) != 0 {
+		t.Errorf("OnRevoke was called with %+v, though the cascade failed", h.revoked)
+	}
+}
+
+// TestOAuthRequestRevokedDuringCreation checks that no approvable request
+// survives for a client that is revoked while its request is made: the
+// revocation waits for the request's transaction, then removes its request.
+func TestOAuthRequestRevokedDuringCreation(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		seamRan  bool
+		revoked  = make(chan struct{})
+		clientID string
+	)
+	ctx := context.Background()
+	var h *oauthHarness
+	h = newOAuthHarnessWith(t, func(o *oauth.Options) {
+		o.BeforeRequestInsert = func() {
+			mu.Lock()
+			first := !seamRan
+			seamRan = true
+			mu.Unlock()
+			if !first {
+				return
+			}
+			// Another goroutine revokes the client. It cannot write while
+			// this request's transaction holds the lock, so the wait ends
+			// when that transaction does.
+			go func() {
+				defer close(revoked)
+				_ = h.oauth.RevokeClient(ctx, clientID)
+			}()
+			select {
+			case <-revoked:
+				// The revocation went through inside the seam: no lock was
+				// held, which is the ordering this test guards.
+			case <-time.After(500 * time.Millisecond):
+				// The transaction holds the lock, as it must.
+			}
+		}
+	})
+	c, _ := h.signin("pi-pocket", "mcp")
+	clientID = c.ClientID
+	req, err := h.oauth.RequestAccess(ctx, clientID, "marks", marksItems())
+	select {
+	case <-revoked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revocation never finished")
+	}
+	// Whatever the request answered, its request does not wait for a
+	// decision: the revocation removed it, or the creation failed.
+	if err == nil {
+		var waiting int
+		if err := h.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM consent_requests WHERE id = ? AND decided_at IS NULL`, req.ID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting != 0 {
+			t.Errorf("the request %s waits for a decision for a revoked client", req.ID)
+		}
+	}
+	var pending int
+	if err := h.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM consent_requests WHERE client_id = ? AND decided_at IS NULL`,
+		clientID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		if err != nil {
+			t.Errorf("%d requests wait for a decision for a revoked client (%v)", pending, err)
+		} else {
+			t.Errorf("%d requests wait for a decision for a revoked client", pending)
+		}
+	}
+	var revokedAt sql.NullString
+	if err := h.db.QueryRowContext(ctx, `SELECT revoked_at FROM oauth_clients WHERE id = ?`, clientID).Scan(&revokedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !revokedAt.Valid {
+		t.Error("the client is not revoked")
 	}
 }

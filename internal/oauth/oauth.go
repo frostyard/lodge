@@ -142,6 +142,19 @@ type Options struct {
 	// and the transaction that decides it. internal/gateway's tests use it to
 	// hold 2 approvals at once; lodge leaves it nil.
 	BeforeDecision func()
+	// RevokeFails, when it returns an error, makes the write of a token
+	// family's revocation fail. internal/oauth's tests use it; lodge leaves
+	// it nil.
+	RevokeFails func(family string) error
+	// BeforeRequestInsert, when it is set, is called in the transaction of
+	// RequestAccess, after the client is checked and before the request is
+	// written. internal/gateway's tests use it; lodge leaves it nil.
+	BeforeRequestInsert func()
+	// BeforePrincipalRevoked, when it returns an error, stops a principal's
+	// revocation after its clients are revoked and before its own row is
+	// marked: the whole cascade rolls back. internal/gateway's tests use it;
+	// lodge leaves it nil.
+	BeforePrincipalRevoked func() error
 }
 
 // Server is lodge's OAuth authorization server and its pages.
@@ -153,8 +166,11 @@ type Server struct {
 	log      *slog.Logger
 	onGrant  func(principal, app string)
 	onRevoke func(principal string, clients []string)
-	// beforeDecision is Options.BeforeDecision: a test's seam, nil in lodge.
-	beforeDecision func()
+	// beforeDecision, beforeRequestInsert and beforePrincipalRevoked are
+	// their Options: a test's seams, nil in lodge.
+	beforeDecision         func()
+	beforeRequestInsert    func()
+	beforePrincipalRevoked func() error
 
 	provider fosite.OAuth2Provider
 	strategy *strategy
@@ -173,7 +189,8 @@ func New(ctx context.Context, o Options) (*Server, error) {
 		return nil, errors.New("oauth: no issuer")
 	}
 	s := &Server{db: o.DB, apps: o.Apps, issuer: o.Issuer, log: o.Log, onGrant: o.OnGrant, onRevoke: o.OnRevoke,
-		beforeDecision: o.BeforeDecision}
+		beforeDecision: o.BeforeDecision, beforeRequestInsert: o.BeforeRequestInsert,
+		beforePrincipalRevoked: o.BeforePrincipalRevoked}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
@@ -188,7 +205,8 @@ func New(ctx context.Context, o Options) (*Server, error) {
 	if s.pagesKey, err = s.key(ctx, "pages"); err != nil {
 		return nil, err
 	}
-	s.store = &storage{db: o.DB, now: s.now, log: s.log}
+	s.store = &storage{db: o.DB, now: s.now, log: s.log, revokeFails: o.RevokeFails,
+		waiting: map[string]struct{}{}}
 	cfg := &fosite.Config{
 		AccessTokenLifespan:            AccessTokenLifespan,
 		RefreshTokenLifespan:           RefreshTokenLifespan,
@@ -288,8 +306,12 @@ func (s *Server) Run(ctx context.Context) {
 
 // Sweep deletes what expired: the sessions, the unbound clients older than
 // 24 hours, and the requests that were decided or expired 24 hours ago
-// (docs/specs/oauth.md, State). Run calls it every hour.
-func (s *Server) Sweep(ctx context.Context) error { return s.sweep(ctx) }
+// (docs/specs/oauth.md, State). It also writes again the revocation of every
+// family whose write failed. Run calls it every hour.
+func (s *Server) Sweep(ctx context.Context) error {
+	s.store.retryRevocations(ctx)
+	return s.sweep(ctx)
+}
 
 // sweep does the work Sweep names. An inactive code or refresh token is kept
 // while its family holds an active token that has not expired: it is the

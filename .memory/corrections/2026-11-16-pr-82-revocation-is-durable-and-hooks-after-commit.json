@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "The revocation of a token family whose token was reused must survive a failed write: its tokens are refused until the revocation is stored, and the write is retried. A hook runs only after the transaction it belongs to commits.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) re-review 1 of head 5a38d84, findings R1.1 and R1.2",
+  "promoted_to": "internal/oauth/oauth_test.go TestRevocationIsDurable; internal/gateway/oauth_test.go TestOAuthGrantHookAfterCommit, TestOAuthRevokePrincipalIsAtomic and TestOAuthRequestRevokedDuringCreation"
+}

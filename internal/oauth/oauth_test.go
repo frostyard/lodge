@@ -35,6 +35,12 @@ func (f fakeApps) Get(id string) (apps.App, bool) {
 // testServer is a Server over a temporary database, with app marks.
 func testServer(t *testing.T) (*Server, *clock) {
 	t.Helper()
+	return testServerWith(t, nil)
+}
+
+// testServerWith is testServer, after opts changed the server's options.
+func testServerWith(t *testing.T, opts func(*Options)) (*Server, *clock) {
+	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "lodge.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +50,12 @@ func testServer(t *testing.T) (*Server, *clock) {
 	marks := apps.App{ID: "marks", Manifest: apps.Manifest{ID: "marks", Name: "Marks"},
 		Hearth: &apps.Hearth{Capabilities: []string{"marks:read", "marks:write"}, Selectors: []string{"folder"}}}
 	plain := apps.App{ID: "plain", Manifest: apps.Manifest{ID: "plain", Name: "Plain"}}
-	s, err := New(t.Context(), Options{DB: db, Apps: fakeApps{"marks": marks, "plain": plain},
-		Issuer: func() string { return "https://lodge.example" }, Now: c.now})
+	options := Options{DB: db, Apps: fakeApps{"marks": marks, "plain": plain},
+		Issuer: func() string { return "https://lodge.example" }, Now: c.now}
+	if opts != nil {
+		opts(&options)
+	}
+	s, err := New(t.Context(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,20 +592,7 @@ type result struct {
 // newFlow builds a Server, and registers a client on it.
 func newFlow(t *testing.T) *flow {
 	t.Helper()
-	s, _ := testServer(t)
-	f := &flow{t: t, s: s}
-	r := httptest.NewRequest(http.MethodPost, "/oauth/register",
-		strings.NewReader(`{"client_name":"pi-pocket","redirect_uris":["https://client.example/cb"]}`))
-	r.Header.Set("Content-Type", "application/json")
-	a := f.serve(r, RouteRegister, "", "")
-	var out struct {
-		ClientID string `json:"client_id"`
-	}
-	if err := jsonUnmarshal([]byte(a.body), &out); err != nil || a.status != http.StatusCreated {
-		t.Fatalf("register: %d %q", a.status, a.body)
-	}
-	f.clientID = out.ClientID
-	return f
+	return newFlowWith(t, nil)
 }
 
 // serve runs one of the Server's handlers over r.
@@ -1476,4 +1473,117 @@ func setExpiryRaw(t *testing.T, s *Server, kind, signature, tokenType string, at
 		string(b), stamp(at), kind, signature); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRevocationIsDurable checks that a family whose revocation write fails
+// is still refused, and that the hourly tick writes the revocation again.
+func TestRevocationIsDurable(t *testing.T) {
+	ctx := t.Context()
+	fails := 1
+	var mu sync.Mutex
+	f := newFlowWith(t, func(o *Options) {
+		o.RevokeFails = func(string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if fails > 0 {
+				fails--
+				return errors.New("the write of the revocation failed")
+			}
+			return nil
+		}
+	})
+	_, tok := f.signinFlow("chani", "mcp")
+	renewed := f.token(url.Values{"grant_type": {"refresh_token"}, "client_id": {f.clientID},
+		"refresh_token": {tok.RefreshToken}})
+	if renewed.status != http.StatusOK {
+		t.Fatalf("the refresh: %d %q", renewed.status, renewed.body)
+	}
+	var second tokenJSON
+	if err := jsonUnmarshal([]byte(renewed.body), &second); err != nil {
+		t.Fatal(err)
+	}
+	// The family of the pair, and the signature of the refresh token that
+	// the refresh consumed.
+	oldSignature := f.s.strategy.RefreshTokenSignature(ctx, tok.RefreshToken)
+	var family string
+	if err := f.s.db.QueryRowContext(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
+		kindRefresh, oldSignature).Scan(&family); err != nil {
+		t.Fatal(err)
+	}
+	// A second use of the consumed token, in fosite's transaction, which it
+	// rolls back: the revocation is written after that, and fails.
+	tx, err := f.s.store.BeginTX(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.store.RotateRefreshToken(tx, family, oldSignature); !errors.Is(err, errTokenReused) {
+		t.Fatalf("the second rotation = %v, want a reuse", err)
+	}
+	if err := f.s.store.Rollback(tx); err != nil {
+		t.Fatal(err)
+	}
+	// The write failed, and the family waits: its tokens are refused at once.
+	if waiting := f.s.store.waitingFamilies(); len(waiting) != 1 || waiting[0] != family {
+		t.Fatalf("the waiting families = %v", waiting)
+	}
+	if _, err := f.s.Check(ctx, second.AccessToken, "mcp"); err == nil {
+		t.Error("the winner's access token works while its revocation is not stored")
+	}
+	again := f.token(url.Values{"grant_type": {"refresh_token"}, "client_id": {f.clientID},
+		"refresh_token": {second.RefreshToken}})
+	var refused tokenJSON
+	if err := jsonUnmarshal([]byte(again.body), &refused); err != nil {
+		t.Fatal(err)
+	}
+	if again.status != http.StatusBadRequest || refused.Error != "invalid_grant" {
+		t.Errorf("the winner's refresh token while its revocation is not stored: %d %q", again.status, again.body)
+	}
+	// The database still holds it: the revocation was not written.
+	if active := activeRefreshRows(t, f.s, family); active == 0 {
+		t.Fatal("the family is already revoked in the database")
+	}
+	// The hourly tick writes the revocation again, and then the set is empty.
+	if err := f.s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if waiting := f.s.store.waitingFamilies(); len(waiting) != 0 {
+		t.Errorf("the waiting families after the retry = %v", waiting)
+	}
+	if active := activeRefreshRows(t, f.s, family); active != 0 {
+		t.Errorf("%d active refresh rows after the retry, want 0", active)
+	}
+	if _, err := f.s.Check(ctx, second.AccessToken, "mcp"); err == nil {
+		t.Error("the winner's access token works after the family was revoked")
+	}
+}
+
+// activeRefreshRows is how many active refresh tokens a family holds.
+func activeRefreshRows(t *testing.T, s *Server, family string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM oauth_sessions WHERE kind = ? AND request_id = ? AND active = 1`,
+		kindRefresh, family).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// newFlowWith is newFlow, after opts changed the server's options.
+func newFlowWith(t *testing.T, opts func(*Options)) *flow {
+	t.Helper()
+	s, _ := testServerWith(t, opts)
+	f := &flow{t: t, s: s}
+	r := httptest.NewRequest(http.MethodPost, "/oauth/register",
+		strings.NewReader(`{"client_name":"pi-pocket","redirect_uris":["https://client.example/cb"]}`))
+	r.Header.Set("Content-Type", "application/json")
+	a := f.serve(r, RouteRegister, "", "")
+	var out struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := jsonUnmarshal([]byte(a.body), &out); err != nil || a.status != http.StatusCreated {
+		t.Fatalf("register: %d %q", a.status, a.body)
+	}
+	f.clientID = out.ClientID
+	return f
 }

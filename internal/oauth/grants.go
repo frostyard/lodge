@@ -213,9 +213,6 @@ func (s *Server) addGrant(ctx context.Context, q querier, principal, app string,
 		principal, app, string(encoded), stamp(s.now())); err != nil {
 		return fmt.Errorf("oauth: write a grant: %w", err)
 	}
-	if s.onGrant != nil {
-		s.onGrant(principal, app)
-	}
 	return nil
 }
 
@@ -340,6 +337,11 @@ func (s *Server) RevokePrincipal(ctx context.Context, name string) error {
 				return err
 			}
 			ids = append(ids, c.ID)
+		}
+		if s.beforePrincipalRevoked != nil {
+			if err := s.beforePrincipalRevoked(); err != nil {
+				return err
+			}
 		}
 		// A revoked principal holds no grant: deleting them keeps the next
 		// approval of the name empty, as it must be.

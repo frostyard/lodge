@@ -318,6 +318,10 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			return
 		}
 		s.log.Info("access approved", "request", req.ID, "client", req.Client, "principal", req.Principal, "app", req.App, "items", len(items), "admin", admin)
+		// The hook runs after the commit, so that a reader sees the grant.
+		if s.onGrant != nil {
+			s.onGrant(req.Principal, req.App)
+		}
 		w.Header().Set("Location", "/oauth/grants")
 		w.WriteHeader(http.StatusSeeOther)
 	default:
