@@ -458,3 +458,87 @@ func TestAFailedRefilterAfterARevokeLeavesNoConsumer(t *testing.T) {
 		return names, nil
 	})
 }
+
+// Activate's cleanup runs under the lock that its refilter holds: a request
+// that deletes the subscription and puts another 1 in its place waits for it,
+// and its replacement survives.
+func TestActivateCleansUpUnderOneLock(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	t.Cleanup(release)
+	failure := errors.New("the store did not answer")
+	done := make(chan error, 1)
+	go func() {
+		done <- h.b.Activate(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+			close(entered)
+			<-proceed
+			return nil, failure
+		})
+	}()
+	<-entered
+
+	// Another request replaces the subscription: its delete and its new
+	// subscription both wait for the lock that the activation holds.
+	replaced := make(chan error, 1)
+	deleted := make(chan error, 1)
+	go func() {
+		err := h.b.Unsubscribe(t.Context(), "chani", "s1")
+		deleted <- err
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			replaced <- err
+			return
+		}
+		_, serr := h.b.SubscribeWith(t.Context(), Spec{Client: "chani", Sub: "s1", App: "notes", Topic: "notes"},
+			func(context.Context) ([]string, error) { return []string{"notes.>"}, nil })
+		replaced <- serr
+	}()
+	release()
+
+	if err := <-done; !errors.Is(err, failure) {
+		t.Fatalf("Activate answered %v, want the callback's error", err)
+	}
+	noErr(t, <-replaced)
+	// The activation's cleanup went first: the other request's delete found
+	// the subscription gone, which is what 1 lock means here.
+	if err := <-deleted; !errors.Is(err, ErrNotFound) {
+		t.Errorf("another request's delete answered %v, want the subscription gone by the cleanup", err)
+	}
+	// The replacement is s1 on notes, and the activation's own subscription
+	// is gone.
+	subs := h.b.ClientSubscriptions("chani")
+	if len(subs) != 1 || subs[0].Sub != "s1" || subs[0].App != "notes" {
+		t.Fatalf("the client's subscriptions are %+v, want s1 on notes", subs)
+	}
+	if names := h.names(t, "app_notes"); len(names) != 1 || names[0] != "chani-s1" {
+		t.Errorf("app_notes holds the consumers %q, want chani-s1", names)
+	}
+	if names := h.names(t, "app_marks"); len(names) != 0 {
+		t.Errorf("app_marks holds the consumers %q, want none", names)
+	}
+}
+
+// An activation whose budget ran out still removes its subscription: the
+// cleanup has a budget of its own, so the client is not revoked for it.
+func TestActivateCleansUpAfterItsBudget(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a"}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := h.b.Activate(ctx, "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return []string{"marks.a"}, nil
+	})
+	if err == nil {
+		t.Fatal("an activation with a cancelled context answered no error")
+	}
+	if errors.Is(err, ErrCleanup) {
+		t.Errorf("the cleanup failed: %v", err)
+	}
+	if subs := h.b.ClientSubscriptions("chani"); len(subs) != 0 {
+		t.Errorf("the client keeps the subscriptions %+v", subs)
+	}
+}

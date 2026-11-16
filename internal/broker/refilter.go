@@ -31,6 +31,54 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 	}
 	unlock := b.lifecycle(client)
 	defer unlock()
+	return b.refilterLocked(ctx, client, sub, filters)
+}
+
+// ErrCleanup is a subscription that a failed activation could not remove.
+var ErrCleanup = errors.New("the subscription is not removed")
+
+// Activate installs a new subscription's filters, and removes the subscription
+// when that fails, in 1 step under the client's lifecycle lock: a request that
+// deletes the subscription and puts another 1 in its place between the 2 would
+// otherwise lose its replacement to this call's cleanup.
+//
+// It removes nothing when the subscription is gone (ErrNotFound), when a
+// revoke of the client is under way (ErrConflict, and the revoke deletes it),
+// or when a revoke overtook the refilter (the consumer is deleted already). A
+// cleanup that fails answers its error with ErrCleanup.
+func (b *Broker) Activate(ctx context.Context, client, sub string,
+	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
+	if err := validateName("client", client); err != nil {
+		return err
+	}
+	if err := validateName("sub", sub); err != nil {
+		return err
+	}
+	unlock := b.lifecycle(client)
+	defer unlock()
+	err := b.refilterLocked(ctx, client, sub, filters)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrConflict), errors.Is(err, errRefilterRevoked):
+		// The subscription is gone, a revoke deletes it, or a revoke took the
+		// consumer this call wrote: there is nothing to remove.
+		return err
+	}
+	// The activation may have failed because its budget ran out: the
+	// cleanup has a budget of its own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+	defer cancel()
+	if uerr := b.unsubscribeLocked(cctx, client, sub); uerr != nil && !errors.Is(uerr, ErrNotFound) {
+		return fmt.Errorf("%w: %w: %w", err, ErrCleanup, uerr)
+	}
+	return err
+}
+
+// refilterLocked is Refilter under the client's lifecycle lock, which the
+// caller holds.
+func (b *Broker) refilterLocked(ctx context.Context, client, sub string,
+	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
 	b.mu.Lock()
 	epoch := b.epochs[client]
 	revoking := b.inflight[client] > 0

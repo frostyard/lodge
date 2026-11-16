@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/frostyard/lodge/internal/apps"
 
 	"github.com/frostyard/lodge/internal/broker"
 	"github.com/frostyard/lodge/internal/events"
@@ -860,4 +864,93 @@ func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
 		t.Fatalf("the pull on the subscription the client kept answered %d messages, want 1", len(msgs))
 	}
 
+}
+
+// countingBroker is the harness's broker, with the calls that 1 activation
+// makes: a test reads them to see whether the service activates and cleans up
+// in 1 step.
+type countingBroker struct {
+	*broker.Broker
+	mu           sync.Mutex
+	activates    int
+	unsubscribes int
+}
+
+func (c *countingBroker) Activate(ctx context.Context, client, sub string,
+	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
+	c.mu.Lock()
+	c.activates++
+	c.mu.Unlock()
+	return c.Broker.Activate(ctx, client, sub, filters)
+}
+
+func (c *countingBroker) Unsubscribe(ctx context.Context, client, sub string) error {
+	c.mu.Lock()
+	c.unsubscribes++
+	c.mu.Unlock()
+	return c.Broker.Unsubscribe(ctx, client, sub)
+}
+
+// calls are the activation's counts.
+func (c *countingBroker) calls() (activates, unsubscribes int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.activates, c.unsubscribes
+}
+
+// TestAFailedActivationKeepsAReplacement checks that a subscription is
+// activated and cleaned up in 1 broker call: a cleanup of the service's own
+// could reach a subscription that another request put in its place, and its
+// replacement would go with it.
+func TestAFailedActivationKeepsAReplacement(t *testing.T) {
+	h := newHarness(t)
+	// The app the replacement belongs to.
+	h.apps.enabled["notes"] = true
+	h.apps.hearth["notes"] = &apps.Hearth{Capabilities: []string{"notes:read"}, Selectors: []string{"group"},
+		Events: []apps.Event{{Type: "org.frostyard.notes.note.created", Message: "notes.v1.NoteCreated",
+			Topic: "notes.note.created.group", Selector: "group", ReadPermission: "notes:read"}}}
+	if err := h.b.SyncApps(t.Context(), []string{marksApp, "notes"}); err != nil {
+		t.Fatal(err)
+	}
+	counter := &countingBroker{Broker: h.b}
+	h.svc = events.New(events.Options{Broker: counter, OAuth: h.auth, Apps: h.apps,
+		Log: slog.New(slog.DiscardHandler)})
+
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	h.auth.grant("chani", "notes", []oauth.Item{{Cap: "notes:read"}})
+	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	baseActs, baseUnsubs := counter.calls()
+	// The subscription is made again, and this time its activation cannot
+	// read the grant.
+	var armed sync.Once
+	events.SetBeforeActivate(h.svc, func() {
+		armed.Do(func() { h.auth.failGrants(1, errors.New("the store did not answer")) })
+	})
+	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err == nil {
+		t.Fatal("an activation that could not read the grant answered no error")
+	}
+	activates, unsubscribes := counter.calls()
+	if activates-baseActs != 1 || unsubscribes-baseUnsubs != 0 {
+		t.Fatalf("the activation made %d activate and %d unsubscribe calls, want 1 and 0",
+			activates-baseActs, unsubscribes-baseUnsubs)
+	}
+
+	// A replacement of the subscription is 1 of its own, and it stays.
+	client, _, ok := h.svc.Tokens(t.Context(), token)
+	if !ok {
+		t.Fatal("the service refuses the token")
+	}
+	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "notes.note.created"); err != nil {
+		t.Fatalf("Subscribe the replacement: %v", err)
+	}
+	subs := h.b.ClientSubscriptions(client)
+	if len(subs) != 1 || subs[0].Sub != "s1" || subs[0].App != "notes" {
+		t.Fatalf("the client's subscriptions are %+v, want s1 on notes", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_notes", client+"-s1"); err != nil {
+		t.Errorf("the replacement's consumer: %v", err)
+	}
 }

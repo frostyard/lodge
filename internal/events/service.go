@@ -50,6 +50,9 @@ type Broker interface {
 	// Refilter replaces the filters of client's subscription sub, with the
 	// ones the callback answers.
 	Refilter(ctx context.Context, client, sub string, filters func(ctx context.Context, app, topic string) ([]string, error)) error
+	// Activate installs a new subscription's filters, and removes the
+	// subscription when that fails, in 1 step.
+	Activate(ctx context.Context, client, sub string, filters func(ctx context.Context, app, topic string) ([]string, error)) error
 	// Revoke forgets a client: its connections and its consumers.
 	Revoke(ctx context.Context, client string) error
 	// Subscriptions are every subscription of every client.
@@ -207,22 +210,20 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	// The subscription is registered, so this read is the last word on its
 	// filters: a grant change that runs after it refilters the consumer
 	// through the same lifecycle lock.
-	if err := s.o.Broker.Refilter(ctx, client, sub, s.refilter(access.Principal)); err != nil {
+	// 1 step: the filters go in, and the subscription goes when they cannot,
+	// so that a request which replaces it meanwhile cannot lose its
+	// replacement to this call.
+	if err := s.o.Broker.Activate(ctx, client, sub, s.refilter(access.Principal)); err != nil {
+		if errors.Is(err, broker.ErrCleanup) {
+			// The subscription is still there, and it delivers nothing it
+			// may: its client goes, so that nothing else on it does either.
+			s.log.Warn("remove a subscription that could not be activated", "client", client, "sub", sub, "err", err)
+			s.revoke(client)
+		}
 		if errors.Is(err, broker.ErrNotFound) {
 			// The subscription went while it was activated, so there is
 			// nothing left to clean up, and the client keeps its others.
 			return Subscription{}, fmt.Errorf("%w: subscription %q was removed while it was activated", ErrNotFound, sub)
-		}
-		// A subscription whose grant cannot be read now goes: its
-		// consumer, and then its client when even that fails. A subscription that is already gone leaves the
-		// client's others alone.
-		uerr := s.unsubscribe(ctx, client, sub)
-		switch {
-		case uerr == nil, errors.Is(uerr, broker.ErrNotFound):
-		default:
-			s.log.Warn("unsubscribe a subscription that could not be activated", "client", client, "sub", sub,
-				"err", uerr)
-			s.revoke(client)
 		}
 		if errors.Is(err, broker.ErrTooManyFilters) {
 			return Subscription{}, fmt.Errorf("%w: the grant is too wide for 1 subscription, and a subscription takes at most %d filters; narrow the topic: %w",
@@ -232,14 +233,6 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	}
 	out.Filters = s.consumerFilters(ctx, out)
 	return out, nil
-}
-
-// unsubscribe deletes 1 subscription within its own budget, so that a failure
-// of the call that follows it does not take its time.
-func (s *Service) unsubscribe(ctx context.Context, client, sub string) error {
-	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
-	defer cancel()
-	return s.o.Broker.Unsubscribe(uctx, client, sub)
 }
 
 // consumerFilters answers the filters that a subscription's consumer has: the

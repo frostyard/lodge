@@ -653,6 +653,12 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	}
 	unlock := b.lifecycle(client)
 	defer unlock()
+	return b.unsubscribeLocked(ctx, client, sub)
+}
+
+// unsubscribeLocked is Unsubscribe under the client's lifecycle lock, which
+// the caller holds.
+func (b *Broker) unsubscribeLocked(ctx context.Context, client, sub string) error {
 	b.mu.Lock()
 	epoch := b.epochs[client]
 	c := b.clients[client]
