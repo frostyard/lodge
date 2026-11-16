@@ -61,6 +61,10 @@ type Config struct {
 	// BodyTimeout bounds each read of a device request's body, so a peer
 	// that stalls a body cannot hold a connection to an app [30 s].
 	BodyTimeout time.Duration
+	// Transport is the pool of connections to the apps [NewAppTransport]:
+	// lodge shares 1 with its MCP gateway, so that the limit is 1 app's
+	// connections, not 2 pools' (ADR-0024).
+	Transport *http.Transport
 	// Broker is the event broker's door, which /nats serves. A nil Broker
 	// is a broker that is off.
 	Broker Broker
@@ -87,13 +91,9 @@ func New(cfg Config) *Gateway {
 	if cfg.BodyTimeout == 0 {
 		cfg.BodyTimeout = 30 * time.Second
 	}
-	tr := &http.Transport{
-		DialContext:         cfg.Apps.DialContext,
-		MaxIdleConnsPerHost: 8,
-		// Requests past this many open connections to one app wait for one.
-		MaxConnsPerHost:    MaxConnsPerApp,
-		IdleConnTimeout:    90 * time.Second,
-		DisableCompression: true,
+	tr := cfg.Transport
+	if tr == nil {
+		tr = NewAppTransport(cfg.Apps)
 	}
 	g := &Gateway{
 		cfg:       cfg,
@@ -105,6 +105,20 @@ func New(cfg Config) *Gateway {
 	}
 	g.SetNames(cfg.Names)
 	return g
+}
+
+// NewAppTransport is the pool of HTTP connections to the apps' sockets: 1 for
+// lodge's routes and its MCP gateway, so that MaxConnsPerApp is 1 app's
+// connections in all (ADR-0024).
+func NewAppTransport(apps *apps.Registry) *http.Transport {
+	return &http.Transport{
+		DialContext:         apps.DialContext,
+		MaxIdleConnsPerHost: 8,
+		// Requests past this many open connections to one app wait for one.
+		MaxConnsPerHost:    MaxConnsPerApp,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true,
+	}
 }
 
 // SetNames sets the nodes' names. lodge makes its gateway before the nodes

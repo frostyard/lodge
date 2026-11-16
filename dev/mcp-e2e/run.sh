@@ -6,7 +6,8 @@
 # change on the open session, and calls:
 #
 # - pi-mcp.mjs: pi-mcp, the MCP client of Pi Pocket's mcp module;
-# - inspector.mjs: MCP Inspector's connection CLI, mcpdo.
+# - inspector.mjs: MCP Inspector's connection CLI, mcpdo, with tap.mjs in
+#   its daemon to read the notifications its MCP client receives.
 #
 # Both are pinned in package.json and pnpm-lock.yaml.
 #
@@ -54,7 +55,7 @@ cd "$here"
 pnpm install --frozen-lockfile --silent
 status=0
 LODGE_ORIGIN=$origin node pi-mcp.mjs || status=1
-LODGE_ORIGIN=$origin LODGE_LOG=$log node inspector.mjs || status=1
+LODGE_ORIGIN=$origin node inspector.mjs || status=1
 if [ $status -ne 0 ]; then
 	echo "run.sh: failed; lodge's log:" >&2
 	cat "$log" >&2

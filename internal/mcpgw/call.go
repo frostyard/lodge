@@ -14,7 +14,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/oauth"
 )
 
@@ -46,10 +45,10 @@ func (g *Gateway) requestAccess(ctx context.Context, req *mcp.CallToolRequest) (
 	if !ok {
 		return toolError("lodge cannot name the caller of this session"), nil
 	}
+	caller = callCaller(caller, req)
+	ctx, done, _ := g.callContext(ctx, caller)
+	defer done()
 	client := caller.Client
-	if req.Extra != nil && req.Extra.TokenInfo != nil && req.Extra.TokenInfo.UserID != "" {
-		client = req.Extra.TokenInfo.UserID
-	}
 	var in struct {
 		App   string `json:"app"`
 		Items []struct {
@@ -85,25 +84,56 @@ func (g *Gateway) requestAccess(ctx context.Context, req *mcp.CallToolRequest) (
 // call on the app's socket (docs/specs/lodge-http.md, The MCP gateway).
 func (g *Gateway) call(ctx context.Context, d definition, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	caller, _ := CallerFrom(ctx)
+	caller = callCaller(caller, req)
+	// The SDK runs a handler on the session's context, not on the HTTP
+	// request's, so the call takes its own: 1 that a revocation of its client,
+	// or its token's expiry, ends at once (ADR-0024, Revoking).
+	ctx, done, _ := g.callContext(ctx, caller)
+	defer done()
 	res, outcome := g.callOnce(ctx, caller, d, req)
 	g.log.Info("mcp tool call", "principal", caller.Principal, "client", caller.Client, "tool", d.tool.Name, "outcome", outcome)
 	return res, nil
 }
 
+// callCaller is the caller of 1 tool call: the token the request itself carried,
+// which the SDK gives every message, or the session's caller when it has none. A
+// session outlives the token that opened it, so the request's token is the one
+// whose expiry and client bound the call.
+func callCaller(session Caller, req *mcp.CallToolRequest) Caller {
+	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
+		return session
+	}
+	ti := req.Extra.TokenInfo
+	c := session
+	if ti.UserID != "" {
+		c.Client = ti.UserID
+	}
+	if !ti.Expiration.IsZero() {
+		c.Expires = ti.Expiration
+	}
+	if p, ok := ti.Extra["principal"].(string); ok && p != "" {
+		c.Principal = p
+	}
+	return c
+}
+
 // callOnce is g.call's work, with the outcome that its log line names.
 func (g *Gateway) callOnce(ctx context.Context, caller Caller, d definition, req *mcp.CallToolRequest) (*mcp.CallToolResult, string) {
-	// 1. The app is installed and enabled, with the operation.
+	// 1. The app is installed and enabled, with the operation its tool names
+	// now: a reload may have renamed the RPC or given it another permission,
+	// which the handler that captured the old operation must not send.
 	a, ok := g.opts.Apps.Get(d.app)
 	switch {
 	case !ok:
 		return toolError("app " + d.app + " is not installed"), "the app is gone"
 	case !a.Enabled():
 		return toolError("app " + d.app + " is disabled: " + a.Reason), "the app is disabled"
-	case a.Hearth == nil || !slices.ContainsFunc(a.Hearth.Operations, func(op apps.Operation) bool {
-		return op.Name == d.op.Name
-	}):
-		return toolError("app " + d.app + " has no operation " + d.op.Name), "the operation is gone"
 	}
+	op, ok := operationOf(a, d.op.Tool)
+	if !ok {
+		return toolError("app " + d.app + " has no tool " + d.op.Tool), "the tool is gone"
+	}
+	d.op = op
 	// 2. The grant is read again: a narrowed grant refuses the next call.
 	items, err := g.opts.OAuth.Grant(ctx, caller.Principal, d.app)
 	if err != nil {
@@ -150,6 +180,9 @@ func (g *Gateway) send(ctx context.Context, d definition, caller Caller, grant s
 	hreq.Header.Set("Lodge-Grant", grant)
 	resp, err := g.client.Do(hreq)
 	if err != nil {
+		if ctx.Err() != nil {
+			return toolError("the call ended before app " + d.app + " answered"), "the call ended"
+		}
 		return toolError("app " + d.app + " cannot be reached"), "the app cannot be reached"
 	}
 	defer func() { _ = resp.Body.Close() }()

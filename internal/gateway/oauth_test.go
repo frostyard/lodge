@@ -57,6 +57,9 @@ type oauthHarness struct {
 	notes *fakeApp
 	// seamClient is the client a test's seam works on.
 	seamClient string
+	// transport is the pool of connections to the apps, which the gateway and
+	// the MCP gateway share.
+	transport *http.Transport
 	// mcp is lodge's MCP gateway, which mcpHook holds for the OAuth hooks: a
 	// test may make it again, with other options.
 	mcp     *mcpgw.Gateway
@@ -141,8 +144,12 @@ func newOAuthHarnessWith(t *testing.T, opts func(*oauth.Options)) *oauthHarness 
 		t.Fatal(err)
 	}
 	h.tokens = tokens.New(db, h.clock.now)
+	// 1 pool of connections to the apps, for lodge's routes and its MCP
+	// gateway (ADR-0024).
+	h.transport = NewAppTransport(h.apps)
 	h.g = New(Config{Names: TailnetNames(lodgeHost, contentHost), Root: root, Apps: h.apps, Allow: h.allow,
-		Tokens: h.tokens, Sessions: sessions.NewRegistry(), OAuth: h.oauth, Now: h.clock.now})
+		Tokens: h.tokens, Sessions: sessions.NewRegistry(), OAuth: h.oauth, Now: h.clock.now,
+		Transport: h.transport})
 	h.newMCPGateway(nil)
 	h.lodge = start(t, h.g.Lodge(h.who))
 	return h

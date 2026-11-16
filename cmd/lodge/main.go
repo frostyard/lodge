@@ -276,10 +276,13 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	// The gateway exists before the nodes join, for the agent socket, which
 	// names no node; the nodes' listeners start, and its names are set,
 	// once they have joined.
-	mcpGateway.Store(mcpgw.New(mcpgw.Options{Apps: reg, OAuth: oauthSrv, Dial: reg.DialContext,
+	// 1 pool of connections to the apps, for lodge's routes and its MCP
+	// gateway, so that the limit is 1 app's connections in all (ADR-0024).
+	appsTransport := gateway.NewAppTransport(reg)
+	mcpGateway.Store(mcpgw.New(mcpgw.Options{Apps: reg, OAuth: oauthSrv, Transport: appsTransport,
 		Log: log.With("part", "mcpgw"), Version: version}))
 	gcfg := gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss,
-		OAuth: oauthSrv, MCP: mcpGateway.Load(), Log: log}
+		OAuth: oauthSrv, MCP: mcpGateway.Load(), Transport: appsTransport, Log: log}
 	if br != nil {
 		gcfg.Broker = br
 	}

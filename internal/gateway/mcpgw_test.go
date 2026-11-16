@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,13 +26,14 @@ import (
 	"github.com/frostyard/lodge/internal/mcpgw"
 	"github.com/frostyard/lodge/internal/oauth"
 	"github.com/frostyard/lodge/internal/peer"
+	"github.com/frostyard/lodge/internal/store"
 )
 
 // newMCPGateway makes the harness's MCP gateway again, after opts changed its
 // own, and puts it on the gateway that serves /gateway/mcp.
 func (h *oauthHarness) newMCPGateway(opts func(*mcpgw.Options)) *mcpgw.Gateway {
 	h.t.Helper()
-	o := mcpgw.Options{Apps: h.apps, OAuth: h.oauth, Dial: h.apps.DialContext,
+	o := mcpgw.Options{Apps: h.apps, OAuth: h.oauth, Transport: h.transport,
 		Log: slog.New(slog.DiscardHandler), Version: "test"}
 	if opts != nil {
 		opts(&o)
@@ -1051,36 +1053,7 @@ func TestAppConnectUIOnly(t *testing.T) {
 // to agent alone.
 func agentOnly(t *testing.T, op string) []byte {
 	t.Helper()
-	var m struct {
-		Operations []map[string]any `json:"operations"`
-	}
-	if err := json.Unmarshal(notelite.Manifest, &m); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, o := range m.Operations {
-		if o["name"] == op {
-			o["expose"] = []string{"agent"}
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("hearth's manifest has no operation %q", op)
-	}
-	var all map[string]any
-	if err := json.Unmarshal(notelite.Manifest, &all); err != nil {
-		t.Fatal(err)
-	}
-	out := make([]any, 0, len(m.Operations))
-	for _, o := range m.Operations {
-		out = append(out, o)
-	}
-	all["operations"] = out
-	b, err := json.Marshal(all)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return editOperation(t, op, func(o map[string]any) { o["expose"] = []string{"agent"} })
 }
 
 // TestMCPGatewayIdleSessionCloses checks that a session with no request for
@@ -1214,4 +1187,331 @@ func TestMCPGatewayUngrantedToolByName(t *testing.T) {
 	if principal, _ := h.hearth.LastCaller(); principal != "chani" {
 		t.Errorf("the app saw %q, want chani", principal)
 	}
+}
+
+// holdHearth makes the app hold each RPC, and returns the channels that say
+// when an RPC waits and when its request's context ended first.
+func (h *oauthHarness) holdHearth() (hold chan struct{}, started, ended <-chan struct{}) {
+	h.t.Helper()
+	hold = make(chan struct{})
+	started, ended = h.hearth.Hold(hold)
+	h.t.Cleanup(func() { close(hold) })
+	return hold, started, ended
+}
+
+// callAsync makes 1 tool call in the background, and returns the channel its
+// result comes on.
+func callAsync(s *mcp.ClientSession, name string, args map[string]any) <-chan *mcp.CallToolResult {
+	done := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			done <- &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}
+			return
+		}
+		done <- res
+	}()
+	return done
+}
+
+// awaitResult waits for a call's result, and fails the test when it does not
+// come.
+func awaitResult(t *testing.T, what string, done <-chan *mcp.CallToolResult) *mcp.CallToolResult {
+	t.Helper()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s did not return", what)
+		return nil
+	}
+}
+
+// awaitSignal waits for 1 signal, and fails the test when it does not come.
+func awaitSignal(t *testing.T, what string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s did not happen", what)
+	}
+}
+
+// TestMCPGatewayRevokeEndsACall checks that revoking a client ends its running
+// tool call at once: the app's request context ends, and the call returns
+// (ADR-0024, Revoking). The SDK runs a handler on the session's context, so
+// lodge's own call context is what the revocation reaches.
+func TestMCPGatewayRevokeEndsACall(t *testing.T) {
+	h := newOAuthHarness(t)
+	h.serveHearth(nil)
+	client, tok := h.signin("pi-a", "mcp")
+	h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
+	s := h.connectMCP(tok.AccessToken, nil)
+	_, started, ended := h.holdHearth()
+	done := callAsync(s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+	awaitSignal(t, "the app's RPC", started)
+	if err := h.oauth.RevokeClient(t.Context(), client.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	awaitSignal(t, "the app's request context's end", ended)
+	res := awaitResult(t, "the call of a revoked client", done)
+	if !res.IsError {
+		t.Errorf("the call of a revoked client = %+v, want a tool error", res)
+	}
+}
+
+// expireAccessIn moves the stored access tokens' expiry to d from now, as a
+// token that is about to expire: lodge ends a call when its token does, and a
+// test cannot wait an hour (ADR-0024).
+func expireAccessIn(t *testing.T, h *oauthHarness, d time.Duration) {
+	t.Helper()
+	ctx := t.Context()
+	at := time.Now().Add(d).UTC()
+	rows, err := h.db.QueryContext(ctx, `SELECT signature, session FROM oauth_sessions WHERE kind = 'access'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ signature, session string }
+	var found []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.signature, &r.session); err != nil {
+			t.Fatal(err)
+		}
+		found = append(found, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	_ = rows.Close()
+	if len(found) == 0 {
+		t.Fatal("no access token's session is stored")
+	}
+	for _, r := range found {
+		var stored map[string]any
+		if err := json.Unmarshal([]byte(r.session), &stored); err != nil {
+			t.Fatal(err)
+		}
+		expiries, _ := stored["expires_at"].(map[string]any)
+		if expiries == nil {
+			expiries = map[string]any{}
+			stored["expires_at"] = expiries
+		}
+		// fosite names the access token's type "access_token" in the session it
+		// stores.
+		expiries["access_token"] = at
+		b, err := json.Marshal(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.db.ExecContext(ctx, `UPDATE oauth_sessions SET session = ?, expires_at = ? WHERE kind = 'access' AND signature = ?`,
+			string(b), at.Format(store.TimeFormat), r.signature); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestMCPGatewayExpiryEndsACall checks that a call ends when its token expires
+// (ADR-0024, Sessions: a request ends when its token expires).
+func TestMCPGatewayExpiryEndsACall(t *testing.T) {
+	h := newOAuthHarness(t)
+	h.serveHearth(nil)
+	client, tok := h.signin("pi-a", "mcp")
+	h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
+	s := h.connectMCP(tok.AccessToken, nil)
+	_, started, ended := h.holdHearth()
+	// The token is live for less than a second more: the call that starts now
+	// ends when it does.
+	expireAccessIn(t, h, 800*time.Millisecond)
+	done := callAsync(s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+	awaitSignal(t, "the app's RPC", started)
+	awaitSignal(t, "the app's request context's end at the token's expiry", ended)
+	res := awaitResult(t, "the call of an expiring token", done)
+	if !res.IsError {
+		t.Errorf("the call of an expiring token = %+v, want a tool error", res)
+	}
+}
+
+// TestAppTransportIsShared checks that lodge's routes and its MCP gateway take
+// their connections to an app from 1 pool, so that MaxConnsPerApp bounds 1
+// app's connections in all (ADR-0024; docs/specs/lodge-http.md, Connections).
+func TestAppTransportIsShared(t *testing.T) {
+	h := newOAuthHarness(t)
+	h.serveHearth(nil)
+	client, tok := h.signin("pi-a", "mcp")
+	h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
+	// 1 pool of 2 connections to the app, for the route and the gateway, before
+	// a session is opened on it.
+	tr := NewAppTransport(h.apps)
+	tr.MaxConnsPerHost = 2
+	h.g.transport = tr
+	h.newMCPGateway(func(o *mcpgw.Options) { o.Transport = tr })
+	s := h.connectMCP(tok.AccessToken, nil)
+	hold := make(chan struct{})
+	started, _ := h.hearth.Hold(hold)
+	// 1 call from a frame, and 1 from an agent: the app's 2 connections.
+	frame := make(chan struct{}, 1)
+	go func() {
+		// The app holds it, so the answer does not matter: its request is what
+		// takes a connection.
+		_, _ = h.lodgeRequest(http.MethodPost, connectPath, `{"folder":"/Work"}`, frameHeaders())
+		frame <- struct{}{}
+	}()
+	awaitSignal(t, "the frame's call at the app", started)
+	held := callAsync(s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+	awaitSignal(t, "the agent's call at the app", started)
+	// The third waits for a connection: with 1 pool, no app sees it while 2
+	// connections are open. The bound is on an event that must not happen.
+	third := callAsync(s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+	select {
+	case <-started:
+		t.Fatal("the third call reached the app while 2 connections were open, past MaxConnsPerHost")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// 1 request ends, and the third goes on.
+	close(hold)
+	awaitSignal(t, "the third call at the app", started)
+	awaitResult(t, "the frame's call", frameResult(frame))
+	awaitResult(t, "the agent's first call", held)
+	awaitResult(t, "the third call", third)
+}
+
+// frameResult is the answer of a frame's call in a channel of results.
+func frameResult(done <-chan struct{}) <-chan *mcp.CallToolResult {
+	out := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		<-done
+		out <- &mcp.CallToolResult{}
+	}()
+	return out
+}
+
+// toolChangeLog counts the gateway's "mcp tools changed" lines: a sync that
+// registered a tool again says so.
+type toolChangeLog struct {
+	mu    sync.Mutex
+	lines int
+}
+
+func (l *toolChangeLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *toolChangeLog) Handle(_ context.Context, r slog.Record) error {
+	if r.Message != "mcp tools changed" {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines++
+	return nil
+}
+
+func (l *toolChangeLog) WithAttrs([]slog.Attr) slog.Handler { return l }
+
+func (l *toolChangeLog) WithGroup(string) slog.Handler { return l }
+
+// changes are the lines that say the tools changed.
+func (l *toolChangeLog) changes() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lines
+}
+
+// TestMCPGatewayToolFollowsItsOperation checks that a reload which changes a
+// tool's operation reaches the call: the handler is registered again, and the
+// call sends the app's current operation, not the one it captured (ADR-0024, A
+// grant change reaches live sessions).
+func TestMCPGatewayToolFollowsItsOperation(t *testing.T) {
+	t.Run("a renamed RPC", func(t *testing.T) {
+		h := newOAuthHarness(t)
+		h.serveHearth(nil)
+		client, tok := h.signin("pi-a", "mcp")
+		h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
+		logs := &toolChangeLog{}
+		h.newMCPGateway(func(o *mcpgw.Options) { o.Log = slog.New(logs); o.Transport = h.transport })
+		s := h.connectMCP(tok.AccessToken, nil)
+		if got := tools(t, s); got["notelite_list_notes"] == nil {
+			t.Fatalf("the session's tools are %v", toolNames(got))
+		}
+		before := logs.changes()
+		// The manifest renames the RPC that the tool names, and the apps reload.
+		// The tool's own bytes are unchanged.
+		h.serveHearth(editOperation(t, "example.notes.v1.NoteService.ListNotes", func(op map[string]any) {
+			op["name"] = "example.notes.v1.NoteService.ListNotes2"
+		}))
+		if logs.changes() == before {
+			t.Error("the sync after the reload registered no tool again, so the handler kept the old operation")
+		}
+		if got := tools(t, s); got["notelite_list_notes"] == nil {
+			t.Fatalf("the session's tools after the reload are %v", toolNames(got))
+		}
+		res := callTool(t, s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+		// The app serves no such RPC: its answer, and the path it saw, say which
+		// RPC lodge sent.
+		if !res.IsError {
+			t.Errorf("a call of a renamed RPC = %+v", res)
+		}
+		if got, want := h.hearth.LastPath(), "/connect/example.notes.v1.NoteService/ListNotes2"; got != want {
+			t.Errorf("the call reached %q, want %q", got, want)
+		}
+	})
+	t.Run("a changed permission", func(t *testing.T) {
+		h := newOAuthHarness(t)
+		h.serveHearth(nil)
+		client, tok := h.signin("pi-a", "mcp")
+		// The grant holds both capabilities, so the tool stays listed through a
+		// reload that gives its RPC another permission.
+		h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}, {Cap: "notelite:write"}})
+		s := h.connectMCP(tok.AccessToken, nil)
+		if got := tools(t, s); got["notelite_list_notes"] == nil {
+			t.Fatalf("the session's tools are %v", toolNames(got))
+		}
+		h.serveHearth(editOperation(t, "example.notes.v1.NoteService.ListNotes", func(op map[string]any) {
+			op["permission"] = "notelite:write"
+		}))
+		if got := tools(t, s); got["notelite_list_notes"] == nil {
+			t.Fatalf("the session's tools after the reload are %v", toolNames(got))
+		}
+		// The handler checks the operation's permission now, not the one it
+		// captured: a grant narrowed to read, with no sync, is refused.
+		narrowTo(t, h, "chani", "notelite", []oauth.Item{{Cap: "notelite:read"}})
+		res := callTool(t, s, "notelite_list_notes", map[string]any{"folder": "/Work"})
+		if !res.IsError {
+			t.Fatalf("a call of a tool whose RPC needs another permission = %+v", res)
+		}
+		want := "insufficient_scope: principal chani holds no notelite:write for app notelite: call request_access to ask for it"
+		if got := resultText(t, res); got != want {
+			t.Errorf("the refusal = %q, want %q", got, want)
+		}
+		if principal, _ := h.hearth.LastCaller(); principal != "" {
+			t.Errorf("the app saw a call outside the grant, from %q", principal)
+		}
+	})
+}
+
+// editOperation is hearth's manifest of the example app, with 1 operation
+// changed by edit.
+func editOperation(t *testing.T, name string, edit func(op map[string]any)) []byte {
+	t.Helper()
+	var all map[string]any
+	if err := json.Unmarshal(notelite.Manifest, &all); err != nil {
+		t.Fatal(err)
+	}
+	operations, _ := all["operations"].([]any)
+	found := false
+	for _, o := range operations {
+		op, ok := o.(map[string]any)
+		if !ok || op["name"] != name {
+			continue
+		}
+		edit(op)
+		found = true
+	}
+	if !found {
+		t.Fatalf("hearth's manifest has no operation %q", name)
+	}
+	b, err := json.Marshal(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

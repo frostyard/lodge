@@ -27,7 +27,9 @@ const requestAccessSchema = `{"type":"object","properties":{"app":{"type":"strin
 // sends.
 type definition struct {
 	tool *mcp.Tool
-	// hash changes when a byte of the tool's definition changes.
+	// hash changes when a byte of the tool's definition changes, or when the
+	// app or the operation behind it does, so that a reload's new operation
+	// reaches a handler that captured the old one.
 	hash string
 	// requestAccess marks lodge's own tool.
 	requestAccess bool
@@ -40,6 +42,10 @@ type definition struct {
 // whose definition is the same is left alone, so the session gets no
 // notification for it (docs/specs/lodge-http.md, The MCP gateway).
 func (s *server) sync(ctx context.Context) error {
+	// 1 sync at a time: a snapshot that was computed before another's would
+	// otherwise be applied after it, and put the older tools back.
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	want, err := s.gw.tools(ctx, s.principal)
 	if err != nil {
 		return err
@@ -87,8 +93,9 @@ func (s *server) sync(ctx context.Context) error {
 func (g *Gateway) tools(ctx context.Context, principal string) (map[string]definition, error) {
 	hearth := g.hearthApps()
 	out := make(map[string]definition, len(hearth))
-	own := requestAccessTool(hearth)
-	out[requestAccessName] = definition{tool: own, hash: toolHash(own), requestAccess: true}
+	own := definition{tool: requestAccessTool(hearth), requestAccess: true}
+	own.hash = definitionHash(own)
+	out[requestAccessName] = own
 	for _, a := range hearth {
 		items, err := g.opts.OAuth.Grant(ctx, principal, a.ID)
 		if err != nil {
@@ -111,7 +118,9 @@ func (g *Gateway) tools(ctx context.Context, principal string) (map[string]defin
 			if len(t.OutputSchema) > 0 {
 				tool.OutputSchema = jsontext.Value(t.OutputSchema)
 			}
-			out[tool.Name] = definition{tool: tool, hash: toolHash(tool), app: a.ID, op: op}
+			d := definition{tool: tool, app: a.ID, op: op}
+			d.hash = definitionHash(d)
+			out[tool.Name] = d
 		}
 	}
 	return out, nil
@@ -139,10 +148,18 @@ func catalogTool(tools []apps.Tool, name string) (apps.Tool, bool) {
 	return apps.Tool{}, false
 }
 
-// toolHash is the tool's definition, as canonical JSON: it changes when the
-// tool does.
-func toolHash(t *mcp.Tool) string {
-	b, err := canonicalJSON(t)
+// definitionHash is what a re-registration depends on, as canonical JSON: the
+// tool as the session lists it, and the app and the operation that its handler
+// sends a call to. A reload that renames a tool's RPC, or gives it another
+// permission, changes it even when the tool's own bytes do not.
+func definitionHash(d definition) string {
+	b, err := canonicalJSON(struct {
+		Tool       *mcp.Tool `json:"tool"`
+		App        string    `json:"app"`
+		Name       string    `json:"name"`
+		Permission string    `json:"permission"`
+		Effect     string    `json:"effect"`
+	}{d.tool, d.app, d.op.Name, d.op.Permission, d.op.Effect})
 	if err != nil {
 		return ""
 	}
@@ -226,18 +243,26 @@ func (g *Gateway) unlisted(name string, registered func(string) bool) (definitio
 		return definition{}, false
 	}
 	for _, a := range g.opts.Apps.List() {
-		if a.Hearth == nil {
-			continue
-		}
 		tool, ok := strings.CutPrefix(name, a.ID+"_")
 		if !ok {
 			continue
 		}
-		for _, op := range a.Hearth.Operations {
-			if op.Agent() && op.Tool == tool {
-				return definition{tool: &mcp.Tool{Name: name}, app: a.ID, op: op}, true
-			}
+		if op, ok := operationOf(a, tool); ok {
+			return definition{tool: &mcp.Tool{Name: name}, app: a.ID, op: op}, true
 		}
 	}
 	return definition{}, false
+}
+
+// operationOf is the app's agent operation whose tool is name.
+func operationOf(a apps.App, name string) (apps.Operation, bool) {
+	if a.Hearth == nil || name == "" {
+		return apps.Operation{}, false
+	}
+	for _, op := range a.Hearth.Operations {
+		if op.Agent() && op.Tool == name {
+			return op, true
+		}
+	}
+	return apps.Operation{}, false
 }

@@ -4,12 +4,14 @@
 // commands, request_access, the owner's approval, the new tools on the same
 // session, and a call.
 //
-// mcpdo prints no notification but a log line, so this script reads
-// notifications/tools/list_changed on lodge's side: lodge logs each tools
-// change of a principal with the number of open sessions it notified
-// (LODGE_LOG, the development build's log).
+// mcpdo prints no notification, so tap.mjs instruments its daemon's
+// transport (NODE_OPTIONS=--import): it records each JSON-RPC message that
+// Inspector's MCP client sends or receives on /gateway/mcp, with its MCP
+// session. The test reads notifications/tools/list_changed there, on the
+// session that Inspector keeps open, and checks that the session stays the
+// same.
 //
-//   LODGE_ORIGIN=http://127.0.0.1:8480 LODGE_LOG=lodge.log node inspector.mjs
+//   LODGE_ORIGIN=http://127.0.0.1:8480 node inspector.mjs
 //
 // dev/mcp-e2e/run.sh starts the development build and runs this script.
 
@@ -26,7 +28,6 @@ const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const mcpdoBin = join(here, "node_modules", ".bin", "mcpdo");
 const origin = process.env.LODGE_ORIGIN ?? "http://127.0.0.1:8480";
-const lodgeLog = process.env.LODGE_LOG;
 const serverUrl = `${origin}/gateway/mcp`;
 const principal = process.env.E2E_PRINCIPAL ?? "inspector-agent";
 const folder = "/work";
@@ -40,8 +41,12 @@ function step(text) {
 const home = await mkdtemp(join(tmpdir(), "lodge-mcp-e2e-"));
 const catalog = join(home, "mcp.json");
 await writeFile(catalog, JSON.stringify({ mcpServers: { lodge: { type: "http", url: serverUrl } } }));
+const tap = join(home, "tap.jsonl");
+await writeFile(tap, "");
 const env = {
 	...process.env,
+	NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${join(here, "tap.mjs")}`.trim(),
+	LODGE_E2E_TAP: tap,
 	HOME: home,
 	MCP_CATALOG_PATH: catalog,
 	MCP_ALLOW_DEFAULT_CONNECTION: "0",
@@ -57,17 +62,41 @@ async function mcpdo(...args) {
 	}
 }
 
-// changes counts lodge's log lines that say principal's tools changed with
-// at least 1 open session notified.
-async function changes() {
-	if (!lodgeLog) {
-		return -1;
-	}
-	const text = await readFile(lodgeLog, "utf8");
+// tapped are the messages that Inspector's MCP client sent and received.
+async function tapped() {
+	const text = await readFile(tap, "utf8");
 	return text
 		.split("\n")
-		.filter((line) => line.includes("mcp tools changed") && line.includes(`principal=${principal}`))
-		.filter((line) => Number(/sessions=(\d+)/.exec(line)?.[1] ?? 0) > 0).length;
+		.filter(Boolean)
+		.map((line) => JSON.parse(line));
+}
+
+// lastSession is the session of the last tools/list that Inspector sent.
+async function lastSession() {
+	const sent = (await tapped()).filter((e) => e.direction === "sent" && e.method === "tools/list");
+	assert.ok(sent.length > 0, "the tap saw no tools/list: is it loaded into mcpdo's daemon?");
+	return sent.at(-1).session;
+}
+
+// listChanged counts the notifications/tools/list_changed that Inspector
+// received on session.
+async function listChanged(session) {
+	return (await tapped()).filter(
+		(e) => e.direction === "received" && e.method === "notifications/tools/list_changed" && e.session === session,
+	).length;
+}
+
+// heard waits until Inspector has received more than count notifications on
+// session: it arrives on a stream, so the file is read until a deadline.
+async function heard(session, count, ms) {
+	const end = Date.now() + ms;
+	while (Date.now() < end) {
+		if ((await listChanged(session)) > count) {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.fail(`Inspector received no notifications/tools/list_changed on session ${session} within ${ms} ms`);
 }
 
 try {
@@ -86,9 +115,12 @@ try {
 	// 2. A fresh principal holds no grant: request_access only.
 	let tools = (await mcpdo("@lodge", "tools/list")).tools.map((t) => t.name).sort();
 	assert.deepEqual(tools, ["request_access"]);
+	const session = await lastSession();
+	assert.ok(session, "Inspector's tools/list carried no MCP session");
 
-	// 3. request_access, and the owner's approval.
-	const before = await changes();
+	// 3. request_access, and the owner's approval: Inspector's open session
+	// receives notifications/tools/list_changed.
+	const before = await listChanged(session);
 	const asked = await mcpdo(
 		"@lodge",
 		"tools/call",
@@ -100,13 +132,12 @@ try {
 	const { url } = result.structuredContent;
 	assert.match(url, /\/oauth\/consent\/[^/]+$/);
 	await approve(origin, url, { item: ["0", "1"], "path.1.folder": folder });
-	if (before >= 0) {
-		assert.ok((await changes()) > before, "lodge notified no open session of the tools change");
-		step("lodge sent notifications/tools/list_changed to the open session");
-	}
+	await heard(session, before, 10_000);
+	step(`Inspector received notifications/tools/list_changed on session ${session}`);
 
-	// 4. The same connection lists the new tools, and a call works.
+	// 4. The same session lists the new tools, and a call works.
 	tools = (await mcpdo("@lodge", "tools/list")).tools.map((t) => t.name).sort();
+	assert.equal(await lastSession(), session, "Inspector's session changed");
 	assert.deepEqual(tools, [
 		"notelite_create_note",
 		"notelite_delete_note",

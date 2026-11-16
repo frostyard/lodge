@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"encoding/json/v2"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -58,9 +57,10 @@ type Options struct {
 	Apps Apps
 	// OAuth is lodge's OAuth server: the grants, and the access requests.
 	OAuth OAuth
-	// Dial opens a connection to an app's socket [net.Dialer.DialContext]. It
-	// is apps.Registry.DialContext in lodge, which checks the socket's owner.
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Transport is the pool that calls to the apps take their connections
+	// from: lodge's own, so that 1 limit covers its routes and its gateway
+	// (ADR-0024).
+	Transport http.RoundTripper
 	// Log is the log [discard].
 	Log *slog.Logger
 	// SessionTimeout is how long a session with no request closes
@@ -109,6 +109,10 @@ type Gateway struct {
 	// cancels are the requests in flight for each client, so that a
 	// revocation ends them at once.
 	cancels map[string]map[*context.CancelFunc]struct{}
+	// revoked are the clients that lodge revoked: their requests end at once,
+	// and a request that starts after the revocation sees it here. A client's
+	// ID is never used again, so the set never needs pruning.
+	revoked map[string]bool
 }
 
 // New returns a gateway over o.
@@ -125,14 +129,9 @@ func New(o Options) *Gateway {
 	if o.Version == "" {
 		o.Version = "0"
 	}
-	if o.Dial == nil {
-		d := &net.Dialer{Timeout: 10 * time.Second}
-		o.Dial = d.DialContext
-	}
-	g := &Gateway{opts: o, log: o.Log, servers: map[string]*server{}, cancels: map[string]map[*context.CancelFunc]struct{}{}}
-	g.client = &http.Client{Transport: &http.Transport{
-		DialContext: o.Dial, MaxIdleConnsPerHost: 8, IdleConnTimeout: 30 * time.Second, DisableCompression: true,
-	}}
+	g := &Gateway{opts: o, log: o.Log, servers: map[string]*server{},
+		cancels: map[string]map[*context.CancelFunc]struct{}{}, revoked: map[string]bool{}}
+	g.client = &http.Client{Transport: o.Transport}
 	h := mcp.NewStreamableHTTPHandler(g.getServer, &mcp.StreamableHTTPOptions{
 		SessionTimeout: o.SessionTimeout,
 		// lodge checks Host itself, on the lodge node (docs/specs/lodge-http.md,
@@ -152,19 +151,40 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the request has no caller", http.StatusUnauthorized)
 		return
 	}
-	// A request ends when its token expires, so a stream on GET ends then too.
+	// A request ends when its token expires, so a stream on GET ends then too,
+	// and a revocation ends it at once.
+	ctx, done, cancelled := g.callContext(r.Context(), c)
+	defer done()
+	if cancelled {
+		// The client was revoked between lodge's check and this request.
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	g.stream.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// callContext is the context of 1 request or 1 tool call of c: it ends with
+// ctx, when the caller's token expires, or when its client is revoked. The
+// second answer, cancelled, is true when the client was revoked already, which
+// ends the context before it is used.
+func (g *Gateway) callContext(ctx context.Context, c Caller) (context.Context, func(), bool) {
 	var (
-		ctx    context.Context
-		cancel context.CancelFunc
+		callCtx context.Context
+		cancel  context.CancelFunc
 	)
 	if c.Expires.IsZero() {
-		ctx, cancel = context.WithCancel(r.Context())
+		callCtx, cancel = context.WithCancel(ctx)
 	} else {
-		ctx, cancel = context.WithDeadline(r.Context(), c.Expires)
+		callCtx, cancel = context.WithDeadline(ctx, c.Expires)
 	}
-	defer cancel()
-	defer g.register(c.Client, &cancel)()
-	g.stream.ServeHTTP(w, r.WithContext(ctx))
+	done, revoked := g.register(c.Client, &cancel)
+	if revoked {
+		cancel()
+	}
+	return callCtx, func() {
+		done()
+		cancel()
+	}, revoked
 }
 
 // verify answers the SDK's bearer check. lodge has checked the token already,
@@ -200,7 +220,10 @@ type server struct {
 	// ready is closed once the server's first sync is done.
 	ready chan struct{}
 
-	mu sync.Mutex
+	// syncMu holds 1 sync at a time, from its snapshot to its tools, so that
+	// an older snapshot is never applied after a newer one.
+	syncMu sync.Mutex
+	mu     sync.Mutex
 	// tools maps a tool's name to a hash of its definition: a tool whose
 	// definition is unchanged is not registered again, so no session gets a
 	// notification for it.
@@ -303,6 +326,7 @@ func (g *Gateway) Revoked(principal string, clients []string) {
 			ends = append(ends, cancel)
 		}
 		delete(g.cancels, c)
+		g.revoked[c] = true
 	}
 	g.mu.Unlock()
 	for _, cancel := range ends {
@@ -339,9 +363,14 @@ func (g *Gateway) background() (context.Context, context.CancelFunc) {
 }
 
 // register records a request's cancel under its client, and returns the
-// function that forgets it.
-func (g *Gateway) register(client string, cancel *context.CancelFunc) func() {
+// function that forgets it. A client that lodge revoked already ends the
+// request before it starts: revoked is true, and nothing is recorded.
+func (g *Gateway) register(client string, cancel *context.CancelFunc) (done func(), revoked bool) {
 	g.mu.Lock()
+	if g.revoked[client] {
+		g.mu.Unlock()
+		return func() {}, true
+	}
 	if g.cancels[client] == nil {
 		g.cancels[client] = map[*context.CancelFunc]struct{}{}
 	}
@@ -354,7 +383,7 @@ func (g *Gateway) register(client string, cancel *context.CancelFunc) func() {
 		if len(g.cancels[client]) == 0 {
 			delete(g.cancels, client)
 		}
-	}
+	}, false
 }
 
 // GrantHeader is a grant's header value: the items' JSON, in base64url without

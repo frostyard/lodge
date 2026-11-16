@@ -114,9 +114,14 @@ type App struct {
 
 	db *sql.DB
 	mu sync.Mutex
-	// kind, principal and grant are Lodge-Caller, Lodge-Principal and
-	// Lodge-Grant of the last request that hearth's adapter admitted.
-	kind, principal, grant string
+	// kind, principal, grant and path are Lodge-Caller, Lodge-Principal,
+	// Lodge-Grant and the path of the last request that hearth's adapter
+	// admitted.
+	kind, principal, grant, path string
+	// hold makes each RPC wait, and the channels report it: started when an
+	// RPC is waiting, ended when its request's context ended first.
+	hold           <-chan struct{}
+	started, ended chan struct{}
 }
 
 // LastCaller is the principal and the grant that the app last saw, as lodge
@@ -133,6 +138,50 @@ func (a *App) LastKind() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.kind
+}
+
+// LastPath is the path of the app's last request, such as
+// /connect/example.notes.v1.NoteService/ListNotes.
+func (a *App) LastPath() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.path
+}
+
+// Hold makes each RPC wait until hold is closed, or until its request's
+// context ends, and returns 2 channels: started reports each RPC that waits,
+// and ended reports each RPC whose context ended first. It is for a test that
+// revokes or expires a call in flight.
+func (a *App) Hold(hold <-chan struct{}) (started, ended <-chan struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hold, a.started, a.ended = hold, make(chan struct{}, 4), make(chan struct{}, 4)
+	return a.started, a.ended
+}
+
+// wait is 1 RPC's wait, when a test holds the app: it returns an error when the
+// request's context ended first.
+func (a *App) wait(ctx context.Context) error {
+	a.mu.Lock()
+	hold, started, ended := a.hold, a.started, a.ended
+	a.mu.Unlock()
+	if hold == nil {
+		return nil
+	}
+	select {
+	case started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-hold:
+		return nil
+	case <-ctx.Done():
+		select {
+		case ended <- struct{}{}:
+		default:
+		}
+		return ctx.Err()
+	}
 }
 
 // Close stops the app's server and closes its database.
@@ -157,13 +206,13 @@ func Serve(ctx context.Context, l net.Listener, lodgeUID int, dbPath string) (*A
 	api := (&notelite.Service{DB: db, Notify: func() {}}).API()
 	mux := http.NewServeMux()
 	mux.Handle("/"+service+"/CreateNote", unary[notesv1.CreateNoteRequest, notesv1.CreateNoteResponse](
-		"/"+service+"/CreateNote", api.CreateNote))
+		app, "/"+service+"/CreateNote", api.CreateNote))
 	mux.Handle("/"+service+"/DeleteNote", unary[notesv1.DeleteNoteRequest, notesv1.DeleteNoteResponse](
-		"/"+service+"/DeleteNote", api.DeleteNote))
+		app, "/"+service+"/DeleteNote", api.DeleteNote))
 	mux.Handle("/"+service+"/GetNote", unary[notesv1.GetNoteRequest, notesv1.GetNoteResponse](
-		"/"+service+"/GetNote", api.GetNote))
+		app, "/"+service+"/GetNote", api.GetNote))
 	mux.Handle("/"+service+"/ListNotes", unary[notesv1.ListNotesRequest, notesv1.ListNotesResponse](
-		"/"+service+"/ListNotes", api.ListNotes))
+		app, "/"+service+"/ListNotes", api.ListNotes))
 	root := http.NewServeMux()
 	root.HandleFunc("/health", health)
 	// The adapter trusts Lodge-Principal and Lodge-Grant on this socket only,
@@ -192,6 +241,7 @@ func (a *App) record(next http.Handler) http.Handler {
 			a.mu.Lock()
 			a.kind = r.Header.Get("Lodge-Caller")
 			a.principal, a.grant = r.Header.Get(hearthlodge.PrincipalHeader), r.Header.Get(hearthlodge.GrantHeader)
+			a.path = r.URL.Path
 			a.mu.Unlock()
 		}
 		next.ServeHTTP(w, r)
@@ -199,9 +249,14 @@ func (a *App) record(next http.Handler) http.Handler {
 }
 
 // unary serves 1 RPC with the Connect unary protocol, path procedure, and maps
-// the app's error to a Connect error.
-func unary[Req, Res any](procedure string, call func(context.Context, *Req) (*Res, error)) http.Handler {
+// the app's error to a Connect error. It is where a test's hold stops an RPC,
+// after Connect has read the body, so that its context ends when lodge ends the
+// call.
+func unary[Req, Res any](a *App, procedure string, call func(context.Context, *Req) (*Res, error)) http.Handler {
 	return connect.NewUnaryHandler(procedure, func(ctx context.Context, req *connect.Request[Req]) (*connect.Response[Res], error) {
+		if err := a.wait(ctx); err != nil {
+			return nil, connect.NewError(connect.CodeCanceled, err)
+		}
 		res, err := call(ctx, req.Msg)
 		if err != nil {
 			return nil, connectFailure(err)

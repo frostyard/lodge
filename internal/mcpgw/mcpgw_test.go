@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/oauth"
@@ -151,5 +152,153 @@ func TestSyncLogsToolsChanged(t *testing.T) {
 	slices.Sort(names)
 	if want := []string{"notelite_get_note", "request_access"}; !slices.Equal(names, want) {
 		t.Errorf("the tools = %v, want %v", names, want)
+	}
+}
+
+// TestCallContextOfARevokedClient checks the race between lodge's token check
+// and the registration of a request or a call: a client lodge revoked before
+// the registration gets a context that is cancelled already, and a revocation
+// during a call ends it (ADR-0024, Revoking).
+func TestCallContextOfARevokedClient(t *testing.T) {
+	g := New(Options{Apps: fakeApps{}, OAuth: &fakeOAuth{}, Log: slog.New(&capture{})})
+	g.Revoked("chani", []string{"lgc_a"})
+	ctx, done, revoked := g.callContext(context.Background(), Caller{Principal: "chani", Client: "lgc_a",
+		Expires: time.Now().Add(time.Hour)})
+	defer done()
+	if !revoked {
+		t.Error("the context of a revoked client is not reported as revoked")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Error("the context of a revoked client is not cancelled")
+	}
+	// A live client's context ends when lodge revokes it in flight.
+	live, done2, revoked2 := g.callContext(context.Background(), Caller{Principal: "chani", Client: "lgc_b",
+		Expires: time.Now().Add(time.Hour)})
+	defer done2()
+	if revoked2 {
+		t.Error("a live client's context is reported as revoked")
+	}
+	select {
+	case <-live.Done():
+		t.Error("a live client's context is cancelled")
+	default:
+	}
+	g.Revoked("chani", []string{"lgc_b"})
+	select {
+	case <-live.Done():
+	default:
+		t.Error("the context of a client revoked in flight is not cancelled")
+	}
+	// And its deadline is its token's.
+	short, done3, _ := g.callContext(context.Background(), Caller{Principal: "chani", Client: "lgc_c",
+		Expires: time.Now().Add(50 * time.Millisecond)})
+	defer done3()
+	if deadline, ok := short.Deadline(); !ok || time.Until(deadline) > time.Minute {
+		t.Errorf("the context's deadline = %v, %v; want its token's", deadline, ok)
+	}
+}
+
+// blockingOAuth is a fakeOAuth whose Grant reports each read, and holds the
+// first one until the test releases it: 1 sync, with its snapshot in hand.
+type blockingOAuth struct {
+	mu      sync.Mutex
+	grants  map[string][]oauth.Item
+	first   bool
+	reads   chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingOAuth) setGrant(principal, app string, items []oauth.Item) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[key(principal, app)] = items
+}
+
+func (f *blockingOAuth) Grant(_ context.Context, principal, app string) ([]oauth.Item, error) {
+	f.mu.Lock()
+	first := !f.first
+	f.first = true
+	items := slices.Clone(f.grants[key(principal, app)])
+	f.mu.Unlock()
+	select {
+	case f.reads <- struct{}{}:
+	default:
+	}
+	if first {
+		<-f.release
+	}
+	return items, nil
+}
+
+func (f *blockingOAuth) RequestAccess(context.Context, string, string, []oauth.Item) (oauth.Request, error) {
+	return oauth.Request{}, nil
+}
+
+func (f *blockingOAuth) Live(context.Context, string) (bool, error) { return true, nil }
+
+// TestSyncNewestWins checks that 1 sync at a time keeps the newest grant's
+// tools: a sync whose snapshot is older must not apply it after a newer one
+// has (ADR-0024, A grant change reaches live sessions).
+func TestSyncNewestWins(t *testing.T) {
+	o := &blockingOAuth{
+		grants:  map[string][]oauth.Item{key("chani", "notelite"): {{Cap: "notelite:read"}}},
+		reads:   make(chan struct{}, 8),
+		release: make(chan struct{}),
+	}
+	g := New(Options{Apps: fakeApps{[]apps.App{notesApp()}}, OAuth: o, Log: slog.New(&capture{})})
+	// The first sync reads the old grant, and holds it.
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		g.serverFor(context.Background(), "chani")
+	}()
+	select {
+	case <-o.reads:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first sync read no grant")
+	}
+	g.mu.Lock()
+	s := g.servers["chani"]
+	g.mu.Unlock()
+	if s == nil {
+		t.Fatal("the first sync made no server")
+	}
+	// The grant widens, and a second sync starts.
+	o.setGrant("chani", "notelite", []oauth.Item{{Cap: "notelite:read"}, {Cap: "notelite:write"}})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		_ = s.sync(context.Background())
+	}()
+	// With 1 sync at a time the second waits for the first: the bound is on an
+	// event that must not happen, not a sleep that synchronizes them.
+	select {
+	case <-o.reads:
+		t.Log("the second sync read its grant while the first holds the server: no sync lock")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(o.release)
+	select {
+	case <-firstDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first sync did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the second sync did not finish")
+	}
+	// The newest grant's tools are the ones that stay.
+	s.mu.Lock()
+	names := make([]string, 0, len(s.tools))
+	for name := range s.tools {
+		names = append(names, name)
+	}
+	s.mu.Unlock()
+	slices.Sort(names)
+	if want := []string{"notelite_create_note", "notelite_get_note", "request_access"}; !slices.Equal(names, want) {
+		t.Errorf("the tools after both syncs = %v, want %v", names, want)
 	}
 }
