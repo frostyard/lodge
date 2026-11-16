@@ -153,6 +153,7 @@ func TestNatsPullKeepsTheStreamSubject(t *testing.T) {
 	// 1. No event yet: the pull expires, and its status reply comes on the
 	// inbox's own subject.
 	const next = "$JS.API.CONSUMER.MSG.NEXT.app_marks.chani-s1"
+	// A short expiry, so the empty pull ends soon.
 	req := `{"batch":1,"expires":300000000}`
 	w.send(fmt.Sprintf("PUB %s %s %d\r\n%s\r\n", next, mux+"r1", len(req), req))
 	st := w.next()
@@ -178,6 +179,8 @@ func TestNatsPullKeepsTheStreamSubject(t *testing.T) {
 
 	// 3. The pull gets it on the mux's subscription, with the stream's
 	// subject, not the inbox of the request.
+	// A long expiry, so a slow delivery cannot turn into a 408.
+	req = `{"batch":1,"expires":5000000000}`
 	w.send(fmt.Sprintf("PUB %s %s %d\r\n%s\r\n", next, mux+"r2", len(req), req))
 	m := w.next()
 	if m.sid != "1" || m.payload != `{"id":"e1"}` {
