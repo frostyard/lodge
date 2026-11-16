@@ -1,10 +1,10 @@
 # Configure lodge
 
 lodge keeps 2 kinds of settings. The configuration file holds the agents on
-lodge's host and the inference layer; it holds no secrets. The allow-lists,
-the MCP tokens and the provider credentials live in lodge's state directory,
-`/var/lib/lodge/`, and change only through `lodgectl`. `lodgectl` runs as
-root: `sudo lodgectl …`.
+lodge's host, the event broker and the inference layer; it holds no secrets.
+The allow-lists, the MCP tokens and the provider credentials live in lodge's
+state directory, `/var/lib/lodge/`, and change only through `lodgectl`.
+`lodgectl` runs as root: `sudo lodgectl …`.
 
 ## The configuration file
 
@@ -18,6 +18,7 @@ sudo cp /usr/share/lodge/config.example.json /etc/lodge/config.json
 ```json
 {
   "agents": [],
+  "broker": { "enabled": false },
   "inference": {
     "providers": {
       "home": { "type": "openai", "baseURL": "http://MODEL_HOST/v1", "slots": 4, "home": true }
@@ -34,6 +35,11 @@ sudo cp /usr/share/lodge/config.example.json /etc/lodge/config.json
 - **`agents`** lists up to 16 system user names of agents on lodge's host,
   such as Porter's user. `root` and `lodge` are refused. Each agent's user
   also joins the group `lodge-agents`.
+- **`broker`** starts the event broker, which carries each app's events and
+  lets a client read them. It is off by default, and a change takes effect
+  at the next start of lodge, not on a reload. Its messages are kept in
+  `/var/lib/lodge/jetstream/`, and its store grows to 7 days or 1 GiB for
+  each app.
 - **`inference.providers`** names each model provider. `type` is `openai`
   (any OpenAI-compatible server), `codex` or `copilot`. `slots` is the
   number of requests the provider runs at once. `home: true` marks a
@@ -49,12 +55,16 @@ lodge reads the file at start. After a change, reload it:
 sudo lodgectl reload
 ```
 
-lodge refuses a configuration that breaks a rule, keeps serving everything
-else, and `lodgectl status` shows the reason. The full rules are in the
-inference spec's
-[Configuration](https://github.com/frostyard/lodge/blob/main/docs/specs/inference.md#configuration)
-and the HTTP spec's
-[agent socket](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#the-agent-socket).
+lodge refuses a configuration that breaks a rule and keeps serving everything
+else; `lodgectl status` shows the reason for the agents and the inference
+layer. A `broker` member that breaks a rule, or a broker that cannot start,
+shows in lodge's log instead, and the broker stays off. The full rules are in
+the inference spec's
+[Configuration](https://github.com/frostyard/lodge/blob/main/docs/specs/inference.md#configuration),
+the HTTP spec's
+[agent socket](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#the-agent-socket)
+and its
+[broker](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#the-broker).
 
 ## The allow-lists
 

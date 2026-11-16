@@ -40,6 +40,7 @@ func TestValidateRefusesEachConstraint(t *testing.T) {
 		"id digit first": func(m *Manifest) { m.ID = "1notes" },
 		"id reserved":    func(m *Manifest) { m.ID = "lodge" },
 		"id app":         func(m *Manifest) { m.ID = "app" },
+		"id nats":        func(m *Manifest) { m.ID = "nats" },
 		"no name":        func(m *Manifest) { m.Name = "" },
 		"blank name":     func(m *Manifest) { m.Name = "  " },
 		"long name":      func(m *Manifest) { m.Name = strings.Repeat("n", 33) },

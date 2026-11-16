@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A revoke that cannot delete a consumer keeps it in a set the authentication check never reads, so its next revoke, or a subscription for that client, deletes it, and a restart restores it from the consumer's metadata. Never drop the client's index entry and its refs together on a failed deletion.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 0909354, finding 3",
+  "promoted_to": "internal/broker: TestRevokeKeepsItsCleanup"
+}

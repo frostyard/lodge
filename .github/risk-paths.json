@@ -78,9 +78,14 @@
       "why": "auth: the tailnet nodes and WhoIs, the caller identity, the allow-lists of logins and nodes, and browser sessions"
     },
     {
-      "glob": "internal/gateway/{gateway,checks,kinds,headers,proxy,ws,files}.go",
+      "glob": "internal/gateway/{gateway,checks,kinds,headers,proxy,ws,files,broker}.go",
       "level": "L1",
       "why": "auth: each route kind's checks, the Lodge-* headers, the proxy to app sockets, and the web files and content node's sandbox"
+    },
+    {
+      "glob": "internal/broker/**",
+      "level": "L1",
+      "why": "auth: the event broker: nats.sock's peer-uid admission, the CONNECT rewrite, the accounts and the subject permissions"
     },
     {
       "glob": "internal/{agents,control}/**",

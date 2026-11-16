@@ -1,5 +1,6 @@
 {
   "agents": [],
+  "broker": { "enabled": false },
   "inference": {
     "providers": {
       "home": { "type": "openai", "baseURL": "http://MODEL_HOST/v1", "slots": 4, "home": true }

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A revoke must end a /nats WebSocket with CloseNow, not the graceful close handshake, which an uncooperative peer can stretch for 5 s and which would hold the handler; and a revoke's connections close together, not 1 after another.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 529b7c3, finding 4",
+  "promoted_to": "internal/gateway: TestNatsClosesAtOnce"
+}

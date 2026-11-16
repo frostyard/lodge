@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A subscription stays on 1 app: 1 client and subscription name keep 1 durable consumer, and subscribing the same name to another app is refused with an error that asks for an unsubscribe first, so no consumer is left with nobody to read it.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 0909354, finding 4",
+  "promoted_to": "internal/broker: TestSubscribeStaysOnOneApp"
+}

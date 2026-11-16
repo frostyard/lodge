@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A revoke takes no per-client lock and waits for nothing: it counts the client's epoch, removes the client, closes it and deletes its consumers within 1 s. A subscription that a revoke overtakes compares the epoch after it makes its consumer, deletes that consumer, and fails, so a slow subscription can neither delay a revoke nor leave a consumer nobody deletes.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 7a99884, finding 1",
+  "promoted_to": "internal/broker: TestRevokeDoesNotWaitForASubscribe"
+}
