@@ -432,3 +432,12 @@ anchors valid) and add the back-links on the targets. Use relative paths.
   `docs/design/overview.md`. Search for the app's display name (such as
   `Read`) as well as its repository and daemon names (`frostread`,
   `readd`).
+- A runbook (`docs/runbook-*.md`, indexed under Runbooks) is steps that a
+  person runs on the live system. Its steps never touch the reader's own
+  data: a local check runs in a new temporary directory with its own state
+  and socket, and its cleanup stops only the processes it started, by the
+  PID it kept, and removes only what the run made. It names the starting
+  state that each expected result needs, how to check it in a browser, and
+  how to reach it; each thing that it removes or ends to reach that state
+  (a grant item, a subscription) is written down first and restored after
+  the run.

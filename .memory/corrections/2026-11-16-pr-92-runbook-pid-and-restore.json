@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "docs/runbook-pilot.md",
+  "correction": "The pilot runbook stopped its standalone daemon with `kill %1`, which can stop another job of the reader's shell, and it ended the agent's existing event subscriptions to reach its starting state without writing them down or restoring them. The daemon now stops by the PID kept from `$!`, and each subscription's topic and mode are written down before the unsubscribe and followed again after the run.",
+  "evidence": "frostyard/lodge#92 cross-review re-review 1 at 0825ae6 (openai/gpt-6.1-sol): blocking findings 1 (cleanup by job number) and 2 (subscriptions removed without a restoration record)",
+  "promoted_to": "AGENTS.md, Documentation rules, Housekeeping: the runbook rule (PID cleanup, write down and restore)"
+}

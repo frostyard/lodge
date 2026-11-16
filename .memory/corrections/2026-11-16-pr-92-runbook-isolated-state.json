@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "docs/runbook-pilot.md",
+  "correction": "A runbook's standalone check used the app's default state directory and then removed it, which could delete the reader's own bookmarks; and its expected results assumed a starting state (no grant item, a bridge not signed in) that the runbook did not check. A runbook now runs a local check in a temporary directory with its own state and socket, removes only that directory, and names, checks and restores the starting state of its results.",
+  "evidence": "frostyard/lodge#92 cross-review at 86acd34 (openai/gpt-6.1-sol): blocking findings 1 (L6 cleanup removes default state) and 2 (no starting-state checks); findings 3 (grant removal by capability) and 4 (a filtered go test) fixed in the same commit",
+  "promoted_to": "AGENTS.md, Documentation rules, Housekeeping: the runbook rule"
+}

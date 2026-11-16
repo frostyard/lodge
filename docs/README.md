@@ -62,7 +62,15 @@ frostyard/core's
 
 ### Plans
 
-- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant's design, the companion and the agent socket, OAuth and consent
+- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant's design, the companion and the agent socket, OAuth and consent, the MCP gateway, grant-driven events, the pilot run
+
+### Runbooks
+
+A runbook is the steps of a check that a person runs on the live system,
+with the expected result of each step. Host operations (install, update,
+roll back) are in [packaging/README.md](../packaging/README.md).
+
+- [The pilot of apps on hearth](runbook-pilot.md) — the 7 exit criteria of the pilot (frostmarks on hearth, behind lodge), each as numbered steps with the expected result, and the record of the run
 
 ## Conventions
 
