@@ -20,7 +20,8 @@ gateway), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpo
 (inference), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md)
 (the companion), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
 (the agent socket), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md)
-(the badge, Proposed). Where it fits: [design/overview.md](../design/overview.md).
+(the badge, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)
+(the broker, Proposed). Where it fits: [design/overview.md](../design/overview.md).
 
 **Status:** contract major **1**, written on 2026-10-18. The app side binds
 when the kit lands (the [roadmap's](../plans/0001-roadmap.md) Phase 1), and
@@ -30,6 +31,9 @@ lodge's side when lodge v1 does (Phase 2). Two additions date from
 what `companion: true` does, and [the agent socket](#the-agent-socket).
 On 2026-11-02, `/health`'s optional `badge` was added, additively
 ([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md),
+Proposed). On 2026-11-15, [Events](#events) was added, additively: the
+app socket, the broker's stream and its limits
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md),
 Proposed).
 
 ## Interface
@@ -42,7 +46,8 @@ Proposed).
                              ├─ /mcp/<id>          agents, with scoped tokens
                              ├─ /device/<id>/…     routes the app authenticates itself
                              ├─ inference.sock     local only: OpenAI-compatible, for app daemons
-                             └─ agent.sock         local only: /mcp/<id> for agents on this host
+                             ├─ agent.sock         local only: /mcp/<id> for agents on this host
+                             └─ nats.sock          local only: the app's events, as its own user
  tsnet node "lodge-content" ─▶ /<id>/…            untrusted bytes, sandboxed
                              │ HTTP/1.1 over Unix sockets; the peer must be lodge
        maild (user frostmail) · notesd (user frostnotes) · porterd (user frostporter)
@@ -60,6 +65,7 @@ Proposed).
 | app socket | `/run/lodge/apps/<id>.sock` | the app's user, group `lodge`, 0660 |
 | inference socket | `/run/lodge/inference.sock` | `lodge`, group `lodge-apps`, 0660 |
 | agent socket | `/run/lodge/agent.sock` | `lodge`, group `lodge-agents`, 0660 |
+| broker socket | `/run/lodge/nats.sock` | `lodge`, group `lodge-apps`, 0660 |
 | control socket | `/run/lodge/control.sock` | `lodge`, 0600 |
 | the shell's bundle | `/usr/share/lodge/shell/` | root; directories 0755, files 0644 |
 | the daemons' binaries | `/usr/bin/` | root, 0755 |
@@ -105,7 +111,7 @@ Proposed).
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `contract` | int | yes | the contract major this app speaks: `1` |
-| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `lodge` or `mcp`; the URL segment |
+| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `lodge`, `mcp` or `nats`; the URL segment |
 | `name` | string | yes | 1 to 32 characters; shown in the rail and the switcher |
 | `icon` | string | yes | a relative path to an SVG file inside `web/` |
 | `version` | string | yes | the app's version, 1 to 64 visible ASCII characters |
@@ -339,6 +345,31 @@ any other agent.
   the token as its bearer, for `lodgeapp.AgentURL(id)`. The agent needs no
   Tailscale.
 
+### Events
+
+lodge embeds an event broker
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md),
+[lodge-http.md](lodge-http.md#the-broker)). Off by default, and when on:
+
+- **Where.** `/run/lodge/nats.sock`, owner `lodge`, group `lodge-apps`,
+  0660, or `DIR/run/lodge/nats.sock` under `LODGE_ROOT`. It is a NATS
+  connection, not HTTP: an app speaks NATS's protocol on it, with
+  `github.com/nats-io/nats.go`.
+- **Who.** The socket admits a connection only when its peer uid is an
+  enabled app's manifest `user` (`SO_PEERCRED`), and closes any other
+  before reading from it. The app needs no token, and no header names it.
+- **What it may publish.** `<id>.>`, and nothing else. JetStream stores
+  each publish in the app's stream, `app_<id>`, for 7 days or 1 GiB, and
+  acknowledges it with a `PubAck`, so an app may send a message ID and
+  have a duplicate within 2 minutes stored once. A publish to another
+  app's subject is a permission violation.
+- **What it may subscribe to.** `_INBOX.>` only: an app's replies are its
+  own, in its own account. An app reads another app's events only through
+  that app's MCP, as it reads its data.
+- **What it never sees.** Another app's messages, a client's pull
+  requests, and the JetStream API. Each app has its own account, so a
+  reply subject cannot carry a message into another app's stream.
+
 ### Inference
 
 lodge serves an OpenAI-compatible API on `/run/lodge/inference.sock`, to
@@ -459,7 +490,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 ## References
 
-- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [lodge-http.md](lodge-http.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
 - Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)

@@ -27,6 +27,7 @@ import (
 	"github.com/frostyard/lodge/internal/agents"
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/broker"
 	"github.com/frostyard/lodge/internal/control"
 	"github.com/frostyard/lodge/internal/gateway"
 	"github.com/frostyard/lodge/internal/inference"
@@ -189,6 +190,26 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		Log: log.With("part", "agents")})
 	ag.Load(agents.LoadConfig(configPath))
 
+	// The event broker (docs/specs/lodge-http.md, The broker; ADR-0022).
+	// It is start-only: a change of broker.enabled takes effect at the next
+	// start, not on a reload. A broken broker member, or a broker that cannot start, leaves the
+	// broker off and logs why; the rest of lodge keeps serving.
+	var br *broker.Broker
+	brokerStore := filepath.Join(stateDir, "jetstream")
+	bcfg, err := broker.LoadConfig(configPath)
+	if err != nil {
+		log.Error("the broker's configuration is refused; the broker is off", "err", err)
+	}
+	if bcfg.Enabled {
+		br, err = startBroker(ctx, brokerStore, reg, broker.Options{StoreDir: stateDir, Apps: reg, DevUID: devUID,
+			Log: log.With("part", "broker")})
+		if err != nil {
+			log.Error("the broker did not start; it is off", "err", err)
+		} else {
+			defer br.Close()
+		}
+	}
+
 	reload := func() error {
 		if err := reg.Load(); err != nil {
 			return err
@@ -196,6 +217,11 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		reg.Poll(ctx)
 		inf.Load(inference.LoadConfig(configPath))
 		ag.Load(agents.LoadConfig(configPath))
+		if br != nil {
+			if err := br.SyncApps(ctx, brokerApps(reg)); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -215,7 +241,11 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	// The gateway exists before the nodes join, for the agent socket, which
 	// names no node; the nodes' listeners start, and its names are set,
 	// once they have joined.
-	g := gateway.New(gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log})
+	gcfg := gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log}
+	if br != nil {
+		gcfg.Broker = br
+	}
+	g := gateway.New(gcfg)
 	var mcpBase atomic.Value
 	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
@@ -303,6 +333,26 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 			}
 		})
 		log.Info("inference socket ready", "path", o.layout("/run/lodge/inference.sock"))
+	}
+
+	// The broker's socket is in group lodge-apps, which lodge is in; under
+	// --root, it stays the developer's. The broker keeps the 2 doors apart:
+	// this socket for apps, and /nats for clients.
+	if br != nil {
+		bgroup := "lodge-apps"
+		if o.root != "" {
+			bgroup = ""
+		}
+		if brLn, err := broker.Listen(o.layout("/run/lodge/nats.sock"), bgroup); err != nil {
+			log.Error("no broker socket", "err", err)
+		} else {
+			wg.Go(func() {
+				if err := br.ServeApps(ctx, brLn); err != nil {
+					errs <- fmt.Errorf("broker socket: %w", err)
+				}
+			})
+			log.Info("broker ready", "socket", o.layout("/run/lodge/nats.sock"), "store", brokerStore)
+		}
 	}
 
 	// The agent socket is in group lodge-agents, which lodge is in; under
@@ -423,6 +473,35 @@ func upNodes(ctx context.Context, nodes ...*tailnet.Node) error {
 	}
 	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// startBroker makes the broker's store, starts the broker, and gives it the
+// enabled apps. JetStream keeps its own jetstream/ directory under
+// o.StoreDir, which is the store.
+func startBroker(ctx context.Context, store string, reg *apps.Registry, o broker.Options) (*broker.Broker, error) {
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		return nil, fmt.Errorf("the broker's store: %w", err)
+	}
+	br := broker.New(o)
+	if err := br.Start(ctx); err != nil {
+		return nil, err
+	}
+	if err := br.SyncApps(ctx, brokerApps(reg)); err != nil {
+		br.Close()
+		return nil, err
+	}
+	return br, nil
+}
+
+// brokerApps is the id of each enabled app: each has one stream.
+func brokerApps(reg *apps.Registry) []string {
+	var ids []string
+	for _, a := range reg.List() {
+		if a.Enabled() {
+			ids = append(ids, a.ID)
+		}
+	}
+	return ids
 }
 
 // addrOf is a listener's address, or "" for none.

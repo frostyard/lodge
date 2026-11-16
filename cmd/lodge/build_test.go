@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +23,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -185,6 +190,7 @@ func TestListenMustBeLoopback(t *testing.T) {
 
 type running struct {
 	root, lodge, content string
+	pid                  int
 }
 
 var listening = regexp.MustCompile(`msg=listening listener="plain (lodge|content)" addr=(\S+)`)
@@ -206,6 +212,7 @@ func startLodge(t *testing.T, bin string, setup func(root string), args ...strin
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	r.pid = cmd.Process.Pid
 	var logs bytes.Buffer
 	var mu sync.Mutex
 	ready := make(chan struct{})
@@ -294,6 +301,10 @@ func TestDevelopmentBuildEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The broker is off unless the configuration enables it: no socket.
+	if _, err := os.Stat(filepath.Join(l.root, "run/lodge/nats.sock")); err == nil {
+		t.Error("the development build made the broker's socket with no broker.enabled")
+	}
 	if code, _, body := get(l.lodge, "/fake/a/b", nil); code != http.StatusOK || !strings.Contains(body, "shell") {
 		t.Errorf("the shell page: %d %q", code, body)
 	}
@@ -629,5 +640,151 @@ func TestDevelopmentBuildAgentSocket(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("the agent's token on the tailnet route: %d", resp.StatusCode)
+	}
+}
+
+// unixDialer dials a Unix socket, in place of a TCP address.
+type unixDialer string
+
+func (d unixDialer) Dial(_, _ string) (net.Conn, error) { return net.Dial("unix", string(d)) }
+
+// listenPorts are the TCP ports the process listens on, from /proc: each
+// socket in LISTEN state, kept only when the process holds that socket.
+func listenPorts(t *testing.T, pid int) []string {
+	t.Helper()
+	inodes := map[string]string{}
+	for _, name := range []string{"tcp", "tcp6"} {
+		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/net/%s", pid, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for line := range strings.SplitSeq(strings.TrimSpace(string(b)), "\n") {
+			f := strings.Fields(line)
+			if len(f) < 10 || f[3] != "0A" {
+				continue
+			}
+			addr := f[1]
+			hexPort := addr[strings.LastIndex(addr, ":")+1:]
+			port, err := strconv.ParseUint(hexPort, 16, 16)
+			if err != nil {
+				t.Fatalf("read a listening address %q: %v", addr, err)
+			}
+			inodes[f[9]] = strconv.FormatUint(port, 10)
+		}
+	}
+	fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports := map[string]bool{}
+	for _, fd := range fds {
+		link, err := os.Readlink(filepath.Join(fmt.Sprintf("/proc/%d/fd", pid), fd.Name()))
+		if err != nil || !strings.HasPrefix(link, "socket:[") {
+			continue
+		}
+		inode := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+		if port, ok := inodes[inode]; ok {
+			ports[port] = true
+		}
+	}
+	out := make([]string, 0, len(ports))
+	for p := range ports {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// The development build with the broker on: no listener but its 2 plain
+// ones, a socket for apps, and /nats for clients (ADR-0022;
+// docs/specs/lodge-http.md, The broker).
+func TestDevelopmentBuildBroker(t *testing.T) {
+	_, e2e := binaries(t)
+	l := startLodge(t, e2e, func(root string) {
+		apptest.Install(t, root, "fake", map[string]any{"name": "Fake", "key": "f"}, nil)
+		path := filepath.Join(root, "etc/lodge/config.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"broker": {"enabled": true}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}, "--listen", "127.0.0.1:0", "--content-listen", "127.0.0.1:0")
+
+	// (a) The broker adds no listener: the process listens on the 2 plain
+	// listeners of the development build, and nothing else.
+	var want []string
+	for _, addr := range []string{l.lodge, l.content} {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, port)
+	}
+	slices.Sort(want)
+	if got := listenPorts(t, l.pid); !slices.Equal(got, want) {
+		t.Errorf("lodge listens on the TCP ports %v, want %v", got, want)
+	}
+
+	// (b) The store, the socket, and an app that publishes with a JetStream
+	// PubAck.
+	if info, err := os.Stat(filepath.Join(l.root, "var/lib/lodge/jetstream")); err != nil || !info.IsDir() {
+		t.Fatalf("JetStream's store is not there: %v", err)
+	}
+	sock := filepath.Join(l.root, "run/lodge/nats.sock")
+	info, err := os.Stat(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o660 {
+		t.Errorf("the broker's socket has mode %o, want 660", got)
+	}
+	nc, err := nats.Connect("nats://broker", nats.SetCustomDialer(unixDialer(sock)), nats.SkipHostLookup(),
+		nats.UserInfo("fake", ""), nats.NoReconnect(), nats.Timeout(10*time.Second), nats.MaxReconnects(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ack, err := js.Publish(pctx, "fake.x", []byte("e1"))
+	if err != nil {
+		t.Fatalf("the developer could not publish: %v", err)
+	}
+	if ack.Stream != "app_fake" {
+		t.Errorf("the PubAck names stream %q, want app_fake", ack.Stream)
+	}
+
+	// (c) /nats: the INFO line, then a CONNECT that lodge refuses, since
+	// lodge issues no event token yet.
+	wctx, wcancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer wcancel()
+	ws, _, err := websocket.Dial(wctx, "ws://"+l.lodge+"/nats", &websocket.DialOptions{
+		CompressionMode: websocket.CompressionDisabled})
+	if err != nil {
+		t.Fatalf("the broker's WebSocket did not upgrade: %v", err)
+	}
+	defer ws.CloseNow()
+	ws.SetReadLimit(64 << 10)
+	_, got, err := ws.Read(wctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "INFO ") {
+		t.Fatalf("the first line was %q, want INFO", got)
+	}
+	if err := ws.Write(wctx, websocket.MessageBinary, []byte("CONNECT {\"auth_token\":\"x\"}\r\nPING\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err = ws.Read(wctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "-ERR 'Authorization Violation'" {
+		t.Errorf("the broker answered %q, want an authorization violation", got)
 	}
 }

@@ -22,7 +22,7 @@ const Contract = 1
 
 // Reserved are the ids no app may take: they are lodge's own first path
 // segments.
-var reserved = []string{"app", "device", "lodge", "mcp"}
+var reserved = []string{"app", "device", "lodge", "mcp", "nats"}
 
 var (
 	idPattern   = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
@@ -65,7 +65,7 @@ type Manifest struct {
 }
 
 // ValidID reports whether id may name an app: ^[a-z][a-z0-9]{0,15}$, and
-// not app, device, lodge or mcp.
+// not app, device, lodge, mcp or nats.
 func ValidID(id string) bool {
 	return idPattern.MatchString(id) && !slices.Contains(reserved, id)
 }
@@ -92,7 +92,7 @@ func (m Manifest) Validate() error {
 		bad("contract %d is not a contract major", m.Contract)
 	}
 	if !ValidID(m.ID) {
-		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, lodge or mcp", m.ID)
+		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, lodge, mcp or nats", m.ID)
 	}
 	if n := utf8.RuneCountInString(m.Name); n < 1 || n > 32 || strings.TrimSpace(m.Name) == "" {
 		bad("name must be 1 to 32 characters")
