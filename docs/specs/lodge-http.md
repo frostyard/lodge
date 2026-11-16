@@ -831,8 +831,9 @@ order:
 | `DELETE /gateway/events/<sub>` | none | 204: the subscription and its consumer are gone |
 
 `S` is `{"name", "app", "topic", "stream", "consumer", "filters"}`: the
-stream and the consumer to pull from on `/nats`, and the filters lodge
-gave the consumer, its resync subject included.
+stream and the consumer to pull from on `/nats`, and the filters the
+consumer holds, its resync subject included. `GET` reads them from the
+consumer itself.
 
 - **`<sub>`** matches `^[a-z0-9_]{1,32}$`, else 400.
 - **The topic is a prefix:** 1 to 32 tokens joined by `.`, each `*` or
@@ -866,13 +867,20 @@ gave the consumer, its resync subject included.
   app's is 409, and so is one during a revoke of the client. An unknown
   `<sub>` on `DELETE` is 404. A broker that fails is 503.
 - **lodge reads the grant inside the client's lock,** so a subscription
-  and a grant change of the same client run 1 after the other.
+  and a grant change of the same client run 1 after the other. A grant
+  change counts a generation for its principal and app before it looks
+  for subscriptions; a subscription that read the grant before that count
+  moved computes its filters again once it is registered, so it cannot
+  keep a grant the change narrowed.
 - **A grant change refilters.** When a principal's grant for an app
   changes, lodge computes each of its clients' subscriptions on that app
   again and updates the consumer in place. The events not yet delivered
   are filtered again; a grant that gives nothing leaves the consumer only
   its resync subject. An event that was delivered and not acknowledged may
-  come again.
+  come again. **A refilter that fails fails closed:** when lodge cannot
+  read the grant or update the consumer, it revokes that client in the
+  broker, which closes its connections and deletes its consumers; the
+  client subscribes again.
 - **A revoke ends delivery.** Revoking a client or a principal revokes
   each of its clients in the broker: connections first, then consumers,
   [as above](#the-broker).
@@ -891,7 +899,8 @@ gave the consumer, its resync subject included.
 
   The consumer reads on from the stream's first message; the event tells
   it to read the state again through the app's API. lodge publishes no
-  second one while one is pending. JetStream moves a consumer's position
+  second one while one is pending: the check and the publish of a
+  consumer run 1 at a time. JetStream moves a consumer's position
   only when it serves a pull, so lodge checks when a client connects,
   before its `CONNECT` line reaches the server, and every consumer each
   minute.

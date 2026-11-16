@@ -241,3 +241,24 @@ func TestEventsErrors(t *testing.T) {
 	a, _ = h.lodgeRequest(http.MethodDelete, eventsPath+"/gone", "", auth)
 	expect(t, a, http.StatusNotFound, "")
 }
+
+// A DELETE of a name that breaks its form is 400, and not 503: the service
+// refuses the name as invalid before it reaches the broker.
+func TestEventsDeleteName(t *testing.T) {
+	h := newOAuthHarness(t)
+	f := newFakeEvents()
+	h.g.cfg.Events = f
+	auth := map[string]string{"Authorization": "Bearer " + eventsToken(t, h, "events")}
+
+	f.fail(events.ErrInvalid)
+	a, _ := h.lodgeRequest(http.MethodDelete, eventsPath+"/s-1", "", auth)
+	expect(t, a, http.StatusBadRequest, "")
+	if a.header.Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control is %q, want no-store", a.header.Get("Cache-Control"))
+	}
+
+	// A name that is well formed, and not there, is 404.
+	f.fail(nil)
+	a, _ = h.lodgeRequest(http.MethodDelete, eventsPath+"/gone", "", auth)
+	expect(t, a, http.StatusNotFound, "")
+}

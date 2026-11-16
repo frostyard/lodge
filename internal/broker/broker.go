@@ -221,6 +221,11 @@ type Broker struct {
 	streamMaxAge     time.Duration
 	streamDuplicates time.Duration
 
+	// resyncMu makes each consumer's resync check and its publish 1 step, so
+	// that 2 checks cannot both find no resync event pending and publish 2.
+	// It is never held with b.mu.
+	resyncMu sync.Mutex
+
 	// peerUID reads a connection's peer uid (SO_PEERCRED); a test
 	// replaces it.
 	peerUID func(net.Conn) int

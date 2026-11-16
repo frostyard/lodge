@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker",
+  "correction": "A resync is a check for a pending resync event and then a publish, so 2 checks of the same consumer that run together (2 connections, or a connection and the sweep) both find none pending and publish 2. The check and its publish are 1 step under 1 mutex per broker, which is never held with b.mu.",
+  "evidence": "frostyard/lodge#91 cross-review at 1e6f745 (openai/gpt-6.1-sol): blocking finding 3, concurrent resync checks can publish 2 pending resync events",
+  "promoted_to": "internal/broker/client_test.go TestResyncPublishesOneEventForConcurrentChecks"
+}

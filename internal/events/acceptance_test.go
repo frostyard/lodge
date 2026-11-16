@@ -1,6 +1,7 @@
 package events_test
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"slices"
@@ -462,5 +463,189 @@ func TestTooManyFilters(t *testing.T) {
 	}
 	if got := len(sub.Filters); got != 33 {
 		t.Errorf("the subscription has %d filters, want 33", got)
+	}
+}
+
+// TestSubscribeSeesAGrantChange checks the window a subscription opens: a
+// grant change that runs while the subscription reads the grant, and finishes
+// before its consumer is registered, still reaches that consumer.
+func TestSubscribeSeesAGrantChange(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	read, release := h.auth.blockNextGrant()
+	var (
+		sub events.Subscription
+		err error
+	)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sub, err = h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	}()
+	// The subscription has the root grant, and has registered nothing yet.
+	<-read
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	h.svc.GrantChanged("chani", marksApp)
+	close(release)
+	<-done
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// The consumer takes the grant as it is now, not as it was.
+	state, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(state.Filters, "marks.bookmark.created.folder.f3") ||
+		slices.Contains(state.Filters, "marks.bookmark.created.folder.>") {
+		t.Fatalf("the consumer's filters are %q, want f3's alone", state.Filters)
+	}
+	h.publish(t, "marks.bookmark.created.folder.f1")
+	h.publish(t, "marks.bookmark.created.folder.f3")
+	nc := h.subscribed(t, token)
+	msgs := pull(t, nc, "app_marks", sub.Consumer, 10, 500*time.Millisecond)
+	if len(msgs) != 1 {
+		t.Fatalf("the pull answered %d messages, want f3's alone", len(msgs))
+	}
+	if !strings.HasSuffix(msgs[0].Subject, ".folder.f3") {
+		t.Errorf("the pull answered %q, want an f3 event", msgs[0].Subject)
+	}
+}
+
+// TestAFailedRefilterRevokesItsClient checks that a refilter which cannot read
+// the grant ends the client's delivery instead of leaving the wider grant it
+// had.
+func TestAFailedRefilterRevokesItsClient(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	closed := make(chan struct{})
+	nc, err := h.connect(t, token)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	nc.SetClosedHandler(func(*nats.Conn) { close(closed) })
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The grant narrows, and reading it fails: the client is revoked, so the
+	// events outside the grant cannot reach it.
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	h.auth.failGrants(1, errors.New("the store did not answer"))
+	h.svc.GrantChanged("chani", marksApp)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client's connection is still open after its refilter failed")
+	}
+	wait(t, func() (bool, error) {
+		if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err == nil {
+			return false, errNotYet
+		}
+		return true, nil
+	})
+
+	// The old token is still an OAuth token, so a new connection opens, but
+	// the broker keeps no subscription for the client: nothing outside the
+	// grant can be delivered.
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 0 {
+		t.Errorf("the broker keeps the subscriptions %+v", subs)
+	}
+	nc2 := h.subscribed(t, token)
+	if err := nc2.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	h.publish(t, "marks.bookmark.created.folder.f1")
+	if subs := h.svc.List(h.access(t, token)); len(subs) != 0 {
+		t.Errorf("the client lists the subscriptions %+v, want none", subs)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 0 {
+		t.Errorf("the client's new connection holds the subscriptions %+v", subs)
+	}
+}
+
+// TestAStoppedSweepRevokesNoClient checks that a sweep whose context lodge
+// cancels, as it does when it stops, takes its failed refilters for what they
+// are: they say nothing about a grant, so no client is revoked.
+func TestAStoppedSweepRevokesNoClient(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := h.svc.Sweep(ctx); err == nil {
+		t.Error("a cancelled sweep answered no error")
+	}
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 1 {
+		t.Errorf("after a cancelled sweep the client holds %d subscriptions, want 1", len(subs))
+	}
+}
+
+// TestListAnswersTheConsumersFilters checks that a list names the filters the
+// consumer has, and not the ones a grant would give: after a refilter that
+// fails closed, the consumer keeps its resync subject alone.
+func TestListAnswersTheConsumersFilters(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f0")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// The grant widens past what 1 consumer takes: the refilter fails closed.
+	items := make([]oauth.Item, 0, 16)
+	for i := range 16 {
+		items = append(items, marksRead("/f"+strconv.Itoa(i)))
+	}
+	h.auth.grant("chani", marksApp, items)
+	h.svc.GrantChanged("chani", marksApp)
+	want := []string{"lodge.marks.resync." + sub.Consumer}
+	state, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(state.Filters, want) {
+		t.Fatalf("the consumer's filters are %q, want %q", state.Filters, want)
+	}
+	got := h.svc.List(h.access(t, token))
+	if len(got) != 1 {
+		t.Fatalf("the list holds %d subscriptions, want 1", len(got))
+	}
+	if !slices.Equal(got[0].Filters, want) {
+		t.Errorf("the list answers the filters %q, want %q", got[0].Filters, want)
+	}
+}
+
+// TestUnsubscribeRefusesABadName checks that a subscription name which breaks
+// its form is an invalid request, and not a failure of the broker.
+func TestUnsubscribeRefusesABadName(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	for _, name := range []string{"s-1", "", "S1", "s 1"} {
+		if err := h.svc.Unsubscribe(t.Context(), h.access(t, token), name); !errors.Is(err, events.ErrInvalid) {
+			t.Errorf("Unsubscribe(%q) answered %v, want ErrInvalid", name, err)
+		}
+	}
+	// A name that is well formed, and not there, is not found.
+	if err := h.svc.Unsubscribe(t.Context(), h.access(t, token), "gone"); !errors.Is(err, events.ErrNotFound) {
+		t.Errorf("Unsubscribe of a subscription that is not there answered %v, want ErrNotFound", err)
 	}
 }

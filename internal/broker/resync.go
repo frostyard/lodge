@@ -47,15 +47,16 @@ func (b *Broker) Resync(ctx context.Context, client string) error {
 	}
 	var errs []error
 	for _, ref := range refs {
-		msgs, err := b.resyncNeeded(ctx, ref)
+		// The check and its publish are 1 step: 2 checks of the same
+		// consumer, from 2 connections or a connection and the sweep, would
+		// otherwise both see no resync event pending, and publish 2.
+		b.resyncMu.Lock()
+		needed, err := b.resyncNeeded(ctx, ref)
+		if err == nil && needed {
+			err = b.publishResync(ctx, ref)
+		}
+		b.resyncMu.Unlock()
 		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !msgs {
-			continue
-		}
-		if err := b.publishResync(ctx, ref); err != nil {
 			errs = append(errs, err)
 		}
 	}

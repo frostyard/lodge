@@ -15,6 +15,10 @@ import (
 // do not change. An empty answer leaves the consumer with its resync subject
 // alone, so its delivery stops and the subscription stays.
 //
+// A callback that fails, or that answers filters this broker cannot install,
+// stops the consumer's delivery the same way before the error goes back: a
+// failed refilter never leaves the events that a grant no longer reads.
+//
 // It runs inside the client's lifecycle lock, and a revoke of the client
 // wins: it answers an error, and the consumer this call updated goes.
 func (b *Broker) Refilter(ctx context.Context, client, sub string,
@@ -58,13 +62,20 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 	if err != nil {
 		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
+	// fail stops the consumer's delivery and answers the refilter's error: a
+	// refilter that cannot install the grant's filters must never leave the
+	// events that the grant no longer reads.
+	fail := func(err error) error {
+		b.stopDelivery(ctx, info.Config, app, ref)
+		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+	}
 	fs, err := filters(ctx, app, topic)
 	if err != nil {
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return fail(err)
 	}
 	if len(fs) > 0 {
 		if err := validateFilters(app, fs); err != nil {
-			return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+			return fail(err)
 		}
 	}
 	// The new filters are the callback's, and the consumer's own resync
@@ -103,6 +114,26 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 		return fmt.Errorf("refilter %s/%s: the client was revoked during the refilter", client, sub)
 	}
 	return tooMany
+}
+
+// stopDelivery sets a consumer's filters to its resync subject alone, so that
+// a refilter which failed leaves no delivery of events that its client's grant
+// no longer reads. It logs a failure: the caller's error is about the
+// refilter.
+func (b *Broker) stopDelivery(ctx context.Context, cfg jetstream.ConsumerConfig, app string, ref consumerRef) {
+	only := []string{ResyncSubject(app, ref.consumer)}
+	if sameFilters(consumerFilters(cfg), only) {
+		return
+	}
+	// The caller's budget may be spent: this write has its own, and it must
+	// not be cancelled with the call that failed.
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+	defer cancel()
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = only
+	if _, err := b.js.CreateOrUpdateConsumer(sctx, ref.stream, cfg); err != nil {
+		b.log.Warn("stop a subscription's delivery after a failed refilter", "consumer", ref.consumer, "err", err)
+	}
 }
 
 // refilterConfig is the consumer config of a refilter: cfg's own members,

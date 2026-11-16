@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,4 +376,67 @@ func TestResyncOnce(t *testing.T) {
 	}
 	// A client with no subscription has nothing to resync.
 	noErr(t, b.Resync(t.Context(), "other"))
+}
+
+// Concurrent resync checks of 1 consumer publish exactly 1 event: the check
+// and its publish are 1 step.
+func TestResyncPublishesOneEventForConcurrentChecks(t *testing.T) {
+	h := newHarness(t, func(o *Options) {
+		o.StreamMaxAge = 200 * time.Millisecond
+		o.StreamDuplicates = 100 * time.Millisecond
+	})
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	for range 3 {
+		published(t, h.b.js, "marks.x", "e")
+	}
+	// The 3 messages go with the stream's max age, and the consumer read
+	// none of them.
+	wait(t, func() (uint64, error) {
+		st, err := h.b.js.Stream(t.Context(), "app_marks")
+		if err != nil {
+			return 0, err
+		}
+		info, err := st.Info(t.Context())
+		if err != nil {
+			return 0, err
+		}
+		if info.State.FirstSeq <= 3 {
+			return 0, errNotYet
+		}
+		return info.State.FirstSeq, nil
+	})
+
+	// 16 checks of the same client start together.
+	const checks = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, checks)
+	for range checks {
+		wg.Go(func() {
+			<-start
+			errs <- h.b.Resync(t.Context(), "chani")
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Resync: %v", err)
+		}
+	}
+
+	// The stream holds the resync event once, on the consumer's own subject.
+	st, err := h.b.js.Stream(t.Context(), "app_marks")
+	noErr(t, err)
+	info, err := st.Info(t.Context())
+	noErr(t, err)
+	if info.State.Msgs != 1 {
+		t.Errorf("the stream holds %d messages, want the 1 resync event", info.State.Msgs)
+	}
+	last, err := st.GetLastMsgForSubject(t.Context(), ResyncSubject("marks", "chani-s1"))
+	noErr(t, err)
+	if last.Sequence == 0 || last.Sequence != info.State.LastSeq {
+		t.Errorf("the stream's last message is %d, and the resync event is at %d", info.State.LastSeq, last.Sequence)
+	}
 }

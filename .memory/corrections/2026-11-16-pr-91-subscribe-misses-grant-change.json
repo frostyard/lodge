@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A subscription's filters are the grant's at 1 moment, and a grant change enumerates only the subscriptions that are already registered: a subscribe that read the old grant, and registered after the hook's enumeration, kept a consumer wider than the grant. The service keeps a generation for each (principal, app), a change increments it before it enumerates, and a subscribe that sees a newer generation refilters its consumer from the grant as it is now, or revokes its client.",
+  "evidence": "frostyard/lodge#91 cross-review at 1e6f745 (openai/gpt-6.1-sol): blocking finding 1, a new subscription can miss a concurrent grant narrowing",
+  "promoted_to": "internal/events/acceptance_test.go TestSubscribeSeesAGrantChange"
+}

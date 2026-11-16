@@ -388,3 +388,27 @@ func TestRefilterConfigClearsAFilterSubject(t *testing.T) {
 		t.Errorf("consumerFilters answers %q, want 2 filters", got)
 	}
 }
+
+// A refilter whose callback fails stops the consumer's delivery before the
+// error goes back: the filters it had may be wider than the grant.
+func TestRefilterStopsDeliveryWhenTheGrantFails(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a", "marks.b"}))
+	nc, _ := h.client(t, "chani", "tok-chani")
+	noErr(t, nc.Flush())
+	failure := errors.New("the store did not answer")
+	err := h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+		return nil, failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("a refilter whose callback failed answered %v, want the callback's error", err)
+	}
+	want := []string{"lodge.marks.resync.chani-s1"}
+	if got := consumerFilters(h.consumer(t, "app_marks", "chani-s1").Config); !sameFilters(got, want) {
+		t.Errorf("the consumer's filters are %q, want %q", got, want)
+	}
+	// The client's connection stays open: its permissions did not change.
+	if !nc.IsConnected() {
+		t.Error("a refilter whose callback failed closed the client's connection")
+	}
+}

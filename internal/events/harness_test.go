@@ -283,6 +283,14 @@ type fakeOAuth struct {
 	tokens  map[string]string
 	clients map[string]oauth.Client
 	grants  map[string][]oauth.Item
+	// armed is 1 grant read that stops after it has taken the grant, until
+	// its release is closed: 1 test narrows the grant in that window.
+	armed   bool
+	read    chan struct{}
+	release chan struct{}
+	// failing and grantErr make the next grant reads fail.
+	failing  int
+	grantErr error
 }
 
 func newFakeOAuth() *fakeOAuth {
@@ -357,12 +365,42 @@ func (f *fakeOAuth) Check(_ context.Context, token, scope string) (oauth.Access,
 
 func (f *fakeOAuth) Grant(_ context.Context, principal, app string) ([]oauth.Item, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	items, ok := f.grants[principal+"\x00"+app]
-	if !ok {
-		return []oauth.Item{}, nil
+	if f.failing > 0 {
+		f.failing--
+		err := f.grantErr
+		f.mu.Unlock()
+		return nil, err
 	}
-	return slices.Clone(items), nil
+	items := slices.Clone(f.grants[principal+"\x00"+app])
+	if items == nil {
+		items = []oauth.Item{}
+	}
+	armed, read, release := f.armed, f.read, f.release
+	f.armed = false
+	f.mu.Unlock()
+	// The grant is read: the read below waits until the test narrowed it.
+	if armed {
+		close(read)
+		<-release
+	}
+	return items, nil
+}
+
+// blockNextGrant makes the next grant read signal read after it took the
+// grant, and wait for the answer's release.
+func (f *fakeOAuth) blockNextGrant() (read, release chan struct{}) {
+	read, release = make(chan struct{}), make(chan struct{})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.armed, f.read, f.release = true, read, release
+	return read, release
+}
+
+// failGrants makes the next n grant reads fail with err.
+func (f *fakeOAuth) failGrants(n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failing, f.grantErr = n, err
 }
 
 func (f *fakeOAuth) Client(_ context.Context, id string) (oauth.Client, error) {

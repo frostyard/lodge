@@ -172,8 +172,11 @@
   path, as hearth's `events.ReadFilters` does; then each is narrowed to
   the requested prefix, and a prefix that another covers is dropped. A
   request that the grant gives nothing under is refused. lodge reads the
-  grant inside the client's lock, so a grant change and a subscription
-  of the same client cannot cross.
+  grant inside the client's lock, and a grant change counts a generation
+  of its principal and app before it looks for subscriptions: a
+  subscription that read the grant before the count moved computes its
+  filters again once it is registered. So a grant change and a
+  subscription cannot cross.
 - **A grant change refilters in place.** When an approval or a removal
   changes a principal's grant for an app, lodge computes the filters of
   each of that principal's subscriptions on the app again and updates the
@@ -181,6 +184,10 @@
   narrowed grant stops them; a grant that gives nothing leaves only the
   resync subject. The client's permissions name its consumer, not its
   filters, so its connections stay open.
+  - **A refilter that fails fails closed.** When lodge cannot read the
+    grant or update the consumer, it revokes the client in the broker:
+    its connections close and its consumers go, and it subscribes again.
+    A consumer never keeps filters wider than the grant it was last told.
   - An event delivered before the change and not acknowledged may come
     again: JetStream redelivers by sequence, not by filter. It was
     readable when it was delivered.
@@ -198,7 +205,8 @@
   app's ID, a UUIDv7 `id`, which is also its `Nats-Msg-Id`, and no data.
   The consumer reads on from the stream's first event, and the resync
   tells it to read the state again through the app's API. lodge sends no
-  second one while the first is pending.
+  second one while the first is pending: a consumer's check and publish
+  run 1 at a time.
   - JetStream moves a consumer's position only when it serves a pull, and
     after that pull the gap cannot be seen. So lodge checks a client's
     consumers when it connects, before its `CONNECT` line reaches the

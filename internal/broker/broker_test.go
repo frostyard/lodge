@@ -54,16 +54,19 @@ type harness struct {
 }
 
 // newHarness starts a broker whose app stream is marks', and whose second
-// app is notes.
-func newHarness(t *testing.T) *harness {
+// app is notes. opts may change the broker's options.
+func newHarness(t *testing.T, opts ...func(*Options)) *harness {
 	t.Helper()
 	h := &harness{t: t, dir: t.TempDir(), tokens: map[string]string{}}
 	h.apps = &fakeApps{
 		byUID:   map[int]string{os.Getuid(): "marks", notesUID: "notes"},
 		enabled: map[string]bool{"marks": true, "notes": true},
 	}
-	b := New(Options{StoreDir: h.dir, Apps: h.apps, DevUID: -1,
-		Tokens: h.token, Log: slog.New(slog.DiscardHandler)})
+	o := Options{StoreDir: h.dir, Apps: h.apps, DevUID: -1, Tokens: h.token, Log: slog.New(slog.DiscardHandler)}
+	for _, f := range opts {
+		f(&o)
+	}
+	b := New(o)
 	if err := b.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}

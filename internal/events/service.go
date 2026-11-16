@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/frostyard/lodge/internal/apps"
@@ -56,6 +57,8 @@ type Broker interface {
 	Subscriptions() []broker.Subscription
 	// ClientSubscriptions are client's subscriptions.
 	ClientSubscriptions(client string) []broker.Subscription
+	// ConsumerState answers what 1 consumer takes, and how far it has got.
+	ConsumerState(ctx context.Context, stream, consumer string) (broker.ConsumerState, error)
 	// Resync publishes a resync event for each of client's consumers that
 	// missed messages.
 	Resync(ctx context.Context, client string) error
@@ -98,6 +101,15 @@ type Options struct {
 type Service struct {
 	o   Options
 	log *slog.Logger
+
+	// mu guards gens.
+	mu sync.Mutex
+	// gens count the changes of each (principal, app) grant. A change
+	// increments it before it reads the subscriptions, so that a subscription
+	// that read the grant before the change sees it and refilters its
+	// consumer: a change that runs while a subscription is made enumerates
+	// the subscriptions before that 1 is registered.
+	gens map[string]uint64
 }
 
 // Subscription is 1 event subscription of a client.
@@ -122,7 +134,21 @@ func New(o Options) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{o: o, log: log}
+	return &Service{o: o, log: log, gens: map[string]uint64{}}
+}
+
+// generation is the current generation of principal's grant for app.
+func (s *Service) generation(principal, app string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gens[principal+"\x00"+app]
+}
+
+// nextGeneration records a change of principal's grant for app.
+func (s *Service) nextGeneration(principal, app string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gens[principal+"\x00"+app]++
 }
 
 // now is the service's clock.
@@ -168,8 +194,13 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	if !ok {
 		return Subscription{}, fmt.Errorf("%q is not an OAuth client's id: %w", access.Client, ErrNotFound)
 	}
-	filters, err := s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic},
+	// gen is the grant's generation when the filters were read below.
+	var gen uint64
+	_, err = s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic},
 		func(ctx context.Context) ([]string, error) {
+			// The generation is read before the grant: a change that runs
+			// while this subscription is made is seen after it.
+			gen = s.generation(access.Principal, app)
 			filters, err := s.readFilters(ctx, access.Principal, app, topic)
 			if err != nil {
 				return nil, err
@@ -188,12 +219,41 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 		}
 		return Subscription{}, err
 	}
-	return Subscription{Name: sub, App: app, Topic: topic, Stream: "app_" + app,
-		Consumer: client + "-" + sub, Filters: filters}, nil
+	out := Subscription{Name: sub, App: app, Topic: topic, Stream: "app_" + app, Consumer: client + "-" + sub}
+	// A grant change that ran while this subscription was made read the
+	// subscriptions before this one was registered, so it did not refilter
+	// it: the consumer is refiltered here, from the grant as it is now.
+	if s.generation(access.Principal, app) != gen {
+		if err := s.o.Broker.Refilter(ctx, client, sub, s.refilter(access.Principal)); err != nil {
+			s.revoke(client)
+			return Subscription{}, fmt.Errorf("subscribe %s to %s: the grant changed while the subscription was made, so its client is revoked: %w",
+				sub, app, err)
+		}
+	}
+	out.Filters = s.consumerFilters(ctx, out)
+	return out, nil
+}
+
+// consumerFilters answers the filters that a subscription's consumer has: the
+// ones that JetStream applies, and not the ones that a grant would give now.
+func (s *Service) consumerFilters(ctx context.Context, sub Subscription) []string {
+	out := []string{}
+	state, err := s.o.Broker.ConsumerState(ctx, sub.Stream, sub.Consumer)
+	if err != nil {
+		s.log.Warn("read a subscription's consumer", "sub", sub.Name, "err", err)
+		return out
+	}
+	if len(state.Filters) > 0 {
+		return state.Filters
+	}
+	return out
 }
 
 // Unsubscribe deletes the client's subscription sub.
 func (s *Service) Unsubscribe(ctx context.Context, access oauth.Access, sub string) error {
+	if !subNameRE.MatchString(sub) {
+		return fmt.Errorf("subscription %q must match %s: %w", sub, subNameRE, ErrInvalid)
+	}
 	client, ok := ClientName(access.Client)
 	if !ok {
 		return fmt.Errorf("%q is not an OAuth client's id: %w", access.Client, ErrNotFound)
@@ -207,8 +267,8 @@ func (s *Service) Unsubscribe(ctx context.Context, access oauth.Access, sub stri
 	return nil
 }
 
-// List answers the client's subscriptions, each with the filters that its
-// grant gives now.
+// List answers the client's subscriptions, each with the filters its consumer
+// has: what JetStream applies, and not what a grant would give now.
 func (s *Service) List(access oauth.Access) []Subscription {
 	out := []Subscription{}
 	client, ok := ClientName(access.Client)
@@ -218,40 +278,66 @@ func (s *Service) List(access oauth.Access) []Subscription {
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 	for _, sub := range s.o.Broker.ClientSubscriptions(client) {
-		out = append(out, s.subscription(ctx, access.Principal, sub))
+		one := Subscription{Name: sub.Sub, App: sub.App, Topic: sub.Topic, Stream: sub.Stream, Consumer: sub.Consumer}
+		one.Filters = s.consumerFilters(ctx, one)
+		out = append(out, one)
 	}
-	return out
-}
-
-// subscription is 1 broker subscription, with the filters of the principal's
-// grant.
-func (s *Service) subscription(ctx context.Context, principal string, sub broker.Subscription) Subscription {
-	out := Subscription{Name: sub.Sub, App: sub.App, Topic: sub.Topic, Stream: sub.Stream, Consumer: sub.Consumer}
-	filters, err := s.readFilters(ctx, principal, sub.App, sub.Topic)
-	if err != nil {
-		s.log.Warn("read a subscription's filters", "client", sub.Client, "sub", sub.Sub, "err", err)
-		filters = nil
-	}
-	out.Filters = append(filters, broker.ResyncSubject(sub.App, sub.Consumer))
 	return out
 }
 
 // GrantChanged refilters each of the app's subscriptions whose client
 // belongs to principal: a grant that now reads nothing there leaves the
-// consumer with its resync subject alone, and the subscription stays.
+// consumer with its resync subject alone, and the subscription stays. A
+// refilter that fails revokes the client, so that its delivery cannot outlive
+// its grant.
 func (s *Service) GrantChanged(principal, app string) {
-	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
-	defer cancel()
+	// The generation goes first: a subscription that read the grant before
+	// this change, and registers after it, sees the new generation and
+	// refilters itself.
+	s.nextGeneration(principal, app)
 	for _, sub := range s.o.Broker.Subscriptions() {
 		if sub.App != app {
 			continue
 		}
-		if !s.belongsTo(ctx, sub.Client, principal) {
-			continue
+		// Each subscription has its own budget: 1 that hangs does not take
+		// the others' time.
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		err := error(nil)
+		if s.belongsTo(ctx, sub.Client, principal) {
+			err = s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(principal))
 		}
-		if err := s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(principal)); err != nil {
-			s.log.Warn("refilter a subscription after a grant change", "client", sub.Client, "sub", sub.Sub, "err", err)
+		cancel()
+		if err != nil {
+			s.failClosed(sub.Client, sub.Sub, err)
 		}
+	}
+}
+
+// failClosed answers a failed refilter. A subscription that is gone, a client
+// whose revoke is under way and a grant too wide for its consumer have
+// already stopped its delivery; any other error would leave delivery of
+// events that the grant no longer reads, so the client is revoked. It reports
+// whether it revoked the client.
+func (s *Service) failClosed(client, sub string, err error) bool {
+	for _, safe := range []error{broker.ErrNotFound, broker.ErrConflict, broker.ErrTooManyFilters} {
+		if errors.Is(err, safe) {
+			s.log.Warn("refilter a subscription after a grant change", "client", client, "sub", sub, "err", err)
+			return false
+		}
+	}
+	s.log.Warn("refilter a subscription after a grant change failed; revoking its client",
+		"client", client, "sub", sub, "err", err)
+	s.revoke(client)
+	return true
+}
+
+// revoke revokes 1 broker client within its own budget, so that a hook or a
+// sweep never waits on a store that does not answer.
+func (s *Service) revoke(client string) {
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	if err := s.o.Broker.Revoke(ctx, client); err != nil {
+		s.log.Warn("revoke a broker client", "client", client, "err", err)
 	}
 }
 
@@ -324,6 +410,9 @@ func (s *Service) Sweep(ctx context.Context) error {
 	subs := s.o.Broker.Subscriptions()
 	revoked := map[string]bool{}
 	for _, sub := range subs {
+		if revoked[sub.Client] {
+			continue
+		}
 		id, ok := ClientID(sub.Client)
 		if !ok {
 			continue
@@ -331,9 +420,6 @@ func (s *Service) Sweep(ctx context.Context) error {
 		c, err := s.o.OAuth.Client(ctx, id)
 		switch {
 		case errors.Is(err, oauth.ErrNotFound), err == nil && (!c.Bound() || !hasScope(c.Scope, oauth.ScopeEvents)):
-			if revoked[sub.Client] {
-				continue
-			}
 			revoked[sub.Client] = true
 			if err := s.o.Broker.Revoke(ctx, sub.Client); err != nil {
 				errs = append(errs, fmt.Errorf("revoke %s: %w", sub.Client, err))
@@ -343,9 +429,16 @@ func (s *Service) Sweep(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("read the client of %s: %w", sub.Client, err))
 			continue
 		}
-		if err := s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(c.Principal)); err != nil &&
-			!errors.Is(err, broker.ErrNotFound) {
-			errs = append(errs, fmt.Errorf("refilter %s/%s: %w", sub.Client, sub.Sub, err))
+		if err := s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(c.Principal)); err != nil {
+			// A sweep that lodge stops ends here: its cancelled refilters
+			// say nothing about a grant, and must revoke no client.
+			if ctx.Err() != nil {
+				errs = append(errs, ctx.Err())
+				break
+			}
+			if s.failClosed(sub.Client, sub.Sub, err) {
+				revoked[sub.Client] = true
+			}
 		}
 	}
 	s.log.Debug("event sweep", "subscriptions", len(subs), "revoked", len(revoked), "took", s.now().Sub(start))

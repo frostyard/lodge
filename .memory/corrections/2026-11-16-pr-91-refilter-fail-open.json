@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A refilter that fails leaves the consumer with the filters it had, which a narrowed grant may no longer allow: delivery then outlives the grant. lodge fails closed on both sides: Broker.Refilter sets the consumer to its resync subject alone when its callback fails or answers filters it cannot install, and the service revokes the broker client when a refilter hook or the sweep gets any error other than a subscription that is gone, a revoke under way or a grant too wide for its consumer (each of those already stopped delivery).",
+  "evidence": "frostyard/lodge#91 cross-review at 1e6f745 (openai/gpt-6.1-sol): blocking finding 2, a failed refilter leaves unauthorized delivery active",
+  "promoted_to": "internal/events/acceptance_test.go TestAFailedRefilterRevokesItsClient; internal/broker/subscribe_test.go TestRefilterStopsDeliveryWhenTheGrantFails, TestRefilterPastTheLimitStopsDelivery"
+}
