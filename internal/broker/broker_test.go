@@ -95,6 +95,51 @@ func (h *harness) issue(token, client string) {
 	h.tokens[token] = client
 }
 
+// revokeToken forgets a token, as the token store does when it revokes one.
+func (h *harness) revokeToken(token string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.tokens, token)
+}
+
+// connectClient opens one end of a pipe and hands the other to ServeClient,
+// and answers the connection or its error.
+func (h *harness) connectClient(t *testing.T, name, token string) (*nats.Conn, error) {
+	t.Helper()
+	inside, outside := net.Pipe()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	t.Cleanup(func() { outside.Close() })
+	go h.b.ServeClient(ctx, outside)
+	return nats.Connect("nats://broker", nats.SetCustomDialer(&pipeDialer{c: inside}), nats.SkipHostLookup(),
+		nats.Token(token), nats.CustomInboxPrefix("_INBOX."+name), nats.NoReconnect(), nats.Timeout(10*time.Second),
+		nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+}
+
+// slowDeletes makes each consumer deletion wait d, as a server that does not
+// answer does, and answers what restores the real store.
+func (h *harness) slowDeletes(d time.Duration) (restore func()) {
+	h.b.mu.Lock()
+	real := h.b.js
+	h.b.js = slowJS{JetStream: real, delay: d}
+	h.b.mu.Unlock()
+	return func() {
+		h.b.mu.Lock()
+		h.b.js = real
+		h.b.mu.Unlock()
+	}
+}
+
+// restart closes the harness's broker, and starts a new one over its store.
+func (h *harness) restart(t *testing.T) {
+	t.Helper()
+	h.b.Close()
+	b := New(Options{StoreDir: h.dir, Apps: h.apps, DevUID: -1, Tokens: h.token, Log: slog.New(slog.DiscardHandler)})
+	noErr(t, b.Start(t.Context()))
+	t.Cleanup(b.Close)
+	h.b = b
+}
+
 // errs collects a connection's asynchronous errors.
 type errs struct {
 	mu   sync.Mutex

@@ -557,10 +557,13 @@ listener of its own.
   `-ERR 'Authorization Violation'` after the server's `INFO` line.
 - **1 protocol line, never a message.** On either door lodge reads the
   connection's first line, which must be `CONNECT` and 1 JSON object (at
-  most 8 KiB). It removes `auth_token`, `user`, `pass`, `jwt`, `nkey` and
-  `sig`, and writes the line again with a one-time secret of 32 random
-  bytes as `auth_token`. The server admits only the identity lodge
-  decided from that secret, once, and the secret is gone.
+  most 8 KiB). A line whose options are no object, `null` included, is
+  refused on both doors, with no identity decided: lodge writes the
+  one-time secret into those options. It removes `auth_token`, `user`,
+  `pass`, `jwt`, `nkey` and `sig`, and writes the line again with a
+  one-time secret of 32 random bytes as `auth_token`. The server admits
+  only the identity lodge decided from that secret, once, and the secret
+  is gone.
 - **An account per app and per client,** so that a reply subject cannot
   reach another app's stream:
   - app `<id>`: its subject `<id>.>`, a stream `app_<id>` that holds 7
@@ -575,9 +578,21 @@ listener of its own.
   with filters inside one app's `<id>.>`: an empty token, a space, or `>`
   before the last token is refused. It acknowledges explicitly, takes new
   messages, and a pull expires after at most 60 s and takes at most 256.
+  **A subscription stays on 1 app:** subscribing the same client and
+  subscription name to another app is refused, with an error that asks
+  for an unsubscribe first, and that unsubscribe deletes the consumer it
+  has. Subscribing it again to the same app updates its filters.
 - **A subscription change reconnects the client:** its permission names
-  its consumers. Revoking a client deletes its consumers, and closes its
-  connections at once.
+  its consumers.
+- **Revoking a client closes it first.** lodge takes the client out of
+  its index, closes its connections at once, and deletes its consumers
+  after that, concurrently and within 1 s: a consumer's deletion can wait
+  for the server's own 5 s API timeout, and a revoked client must not
+  stay connected meanwhile. A consumer that is not deleted in time is
+  kept in a set that no connection's authentication reads, and the
+  client's next revoke, or a subscription for it, tries again. The next
+  start restores it from its metadata, and a revoke there finds it, so a
+  revoked client keeps no consumer for good.
 - **Connections.** An app or a client holds at most 64 connections at
   once; past that a connection is refused. The socket's
   [limits](#connections) do not apply to it: the broker counts an

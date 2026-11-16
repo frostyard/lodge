@@ -69,6 +69,11 @@
   authentication callback uses the secret up, and registers the identity
   lodge chose. lodge never parses a published message, and the server's
   authentication reads only lodge's index.
+  - **The line's options must be 1 JSON object.** Anything else, `null`
+    included, is refused on both doors before lodge names the
+    connection: lodge writes the secret into those options, and a map
+    that is nil has none. A panic in a connection's goroutine would end
+    lodge's whole process.
 - **An account per app and per client.** The server's global account is
   the hub: lodge's own client, which makes streams and consumers, and the
   stream that holds each app's messages. Where a connection may publish
@@ -91,10 +96,21 @@
   2 minute response threshold of a service export, and takes at most 256
   messages. The consumer's metadata names its client and subscription, so
   the index comes back at lodge's next start.
+  - **A subscription stays on 1 app.** Its name is 1 consumer's, so
+    subscribing the same client and subscription name to another app is
+    refused, with an error that asks for an unsubscribe first. Subscribing
+    it again to the same app updates its filters.
 - **Permissions are fixed when a connection opens.** A subscription,
   an unsubscribe and a revoke close the client's connections, so it
-  reconnects with the new permissions. Revocation deletes the client's
-  consumers and closes its connections at once.
+  reconnects with the new permissions.
+- **A revoke closes first, then deletes.** Revoking a client takes it out
+  of lodge's index, closes its connections at once, and only then deletes
+  its consumers, concurrently and within 1 s: a consumer's deletion can
+  wait for the server's own 5 s API timeout, and a revoked client must
+  not stay connected meanwhile. A deletion that fails is kept in a set
+  the authentication never reads, and the client's next revoke, or a
+  subscription for it, tries again; the consumer's metadata also brings
+  it back at the next start, where a revoke finds it.
 - **lodge issues no event token yet.** `/nats` answers every client with
   `-ERR 'Authorization Violation'` until lodge has a token to issue: the
   door, the proxy and the accounts are the whole of it for now.
@@ -123,8 +139,9 @@
   import's response mapping, and every pull asks again anyway.
 - **No client connects until lodge issues event tokens.** The door is
   built and tested, and closed: a browser cannot reach the broker yet.
-- **Revoking a client is lodge's:** its consumers go, its connections
-  close, and nothing of its is left to read.
+- **Revoking a client is lodge's:** its connections close first, its
+  consumers go within 1 s, and nothing of its is left to read. A deletion
+  that cannot finish yet is lodge's to retry, not a consumer's to keep.
 - **An app that is disabled stops: its connections close, and no new one
   is admitted.** Its stream stays, so its own messages are there when it
   returns.

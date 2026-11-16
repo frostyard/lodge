@@ -244,8 +244,14 @@ func (b *Broker) admitConn(ctx context.Context, outside *lockedConn, br *bufio.R
 		return nil, "", nil, false
 	}
 	var opts map[string]jsontext.Value
-	if err := json.Unmarshal(line, &opts); err != nil {
-		b.log.Warn("the broker refused a connection: its CONNECT line is not an object", "err", err)
+	err = json.Unmarshal(line, &opts)
+	// A CONNECT line whose options are no JSON object is refused: null
+	// decodes into a nil map, and lodge writes the secret into that map.
+	if err == nil && opts == nil {
+		err = errNotObject
+	}
+	if err != nil {
+		b.log.Warn("the broker refused a connection: its CONNECT line is not a JSON object", "err", err)
 		b.refuse(outside, br)
 		return nil, "", nil, false
 	}
@@ -301,6 +307,9 @@ func (c *lockedConn) Write(p []byte) (int, error) {
 
 // errNoConnect is a first line that is not a CONNECT line.
 var errNoConnect = errors.New("a connection's first line is not a CONNECT line")
+
+// errNotObject is a CONNECT line whose options are not a JSON object.
+var errNotObject = errors.New("a CONNECT line's options are not a JSON object")
 
 // readConnect reads a connection's first line, and answers with its JSON
 // object.

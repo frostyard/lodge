@@ -174,6 +174,10 @@ type Broker struct {
 	apps map[string]bool
 	// clients are the known clients, and their subscriptions.
 	clients map[string]*clientState
+	// revoking are the consumers a failed revoke kept for a client, which
+	// its next revoke, or a subscription for it, deletes. Check never
+	// reads it: a revoked client is out of clients.
+	revoking map[string]map[consumerRef]bool
 	// accounts, exports and imports are what is registered, so that
 	// nothing is registered twice.
 	accounts map[string]*server.Account
@@ -200,6 +204,7 @@ func New(o Options) *Broker {
 		pending:  map[string]identity{},
 		apps:     map[string]bool{},
 		clients:  map[string]*clientState{},
+		revoking: map[string]map[consumerRef]bool{},
 		accounts: map[string]*server.Account{},
 		exports:  map[string]map[string]bool{},
 		imports:  map[string]map[string]bool{},
@@ -402,10 +407,23 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	}
 	b.mu.Lock()
 	ready := b.apps[app]
+	// A subscription stays on 1 app: its name is 1 consumer's, and a
+	// second durable would leave the first one with nobody to read it.
+	var on *consumerRef
+	if c := b.clients[client]; c != nil && c.subs[sub] != nil {
+		ref := *c.subs[sub]
+		on = &ref
+	}
 	b.mu.Unlock()
 	if !ready {
 		return fmt.Errorf("subscribe %s to %s: the app is not enabled", client, app)
 	}
+	if on != nil && on.stream != "app_"+app {
+		return fmt.Errorf("subscribe %s: subscription %q is %s's; unsubscribe it before subscribing it to %s",
+			client, sub, appOf(on.stream), app)
+	}
+	// A revoke that could not delete a consumer kept it for this client.
+	b.retryRevoke(ctx, client)
 	acc, err := b.account("client_" + client)
 	if err != nil {
 		return err
@@ -468,29 +486,127 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	return nil
 }
 
-// Revoke forgets client, deletes every consumer of its subscriptions, and
-// closes its connections. The caller revokes the client's token first: a
-// connection that is admitted meanwhile then fails the door's second token
-// check.
+// revokeTimeout bounds the deletion of a revoked client's consumers, so a
+// revoke finishes whether or not the server answers.
+const revokeTimeout = time.Second
+
+// Revoke forgets client, closes its connections at once, and deletes every
+// consumer of its subscriptions, concurrently and within revokeTimeout. The
+// caller revokes the client's token first: a connection that is admitted
+// meanwhile then fails the door's second token check.
 func (b *Broker) Revoke(ctx context.Context, client string) error {
 	if err := validateName("client", client); err != nil {
 		return err
 	}
 	b.mu.Lock()
-	c := b.clients[client]
+	refs := b.refsLocked(client)
 	delete(b.clients, client)
+	delete(b.revoking, client)
 	b.mu.Unlock()
-	var errs []error
-	if c != nil {
-		for _, ref := range c.subs {
-			if err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
-				errs = append(errs, fmt.Errorf("revoke %s: %w", client, err))
-			}
+	// The connections go first: a revoked client does not wait for a
+	// consumer's deletion.
+	b.closeConns(identity{kind: kindClient, name: client}.key())
+	if len(refs) == 0 {
+		return nil
+	}
+	kept, err := b.deleteRefs(ctx, refs)
+	b.keepRefs(client, kept)
+	return err
+}
+
+// refsLocked answers every consumer a client's revoke must delete: its
+// subscriptions', and those a failed revoke kept. b.mu must be held.
+func (b *Broker) refsLocked(client string) []consumerRef {
+	seen := map[consumerRef]bool{}
+	var refs []consumerRef
+	add := func(ref consumerRef) {
+		if !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
 		}
 	}
-	b.closeConns(identity{kind: kindClient, name: client}.key())
-	return errors.Join(errs...)
+	if c := b.clients[client]; c != nil {
+		for _, ref := range c.subs {
+			add(*ref)
+		}
+	}
+	for ref := range b.revoking[client] {
+		add(ref)
+	}
+	return refs
 }
+
+// deleteRefs deletes consumers concurrently, within revokeTimeout, and
+// answers the ones that are still there.
+func (b *Broker) deleteRefs(ctx context.Context, refs []consumerRef) ([]consumerRef, error) {
+	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
+	var (
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		kept []consumerRef
+		errs []error
+	)
+	for _, ref := range refs {
+		wg.Go(func() {
+			err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer)
+			if err == nil || errors.Is(err, jetstream.ErrConsumerNotFound) {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			kept = append(kept, ref)
+			errs = append(errs, fmt.Errorf("delete the consumer %s of %s: %w", ref.consumer, ref.stream, err))
+		})
+	}
+	wg.Wait()
+	slices.SortFunc(kept, func(a, c consumerRef) int {
+		return strings.Compare(a.stream+"\x00"+a.consumer, c.stream+"\x00"+c.consumer)
+	})
+	return kept, errors.Join(errs...)
+}
+
+// keepRefs remembers the consumers a revoke could not delete, so that its
+// next try, or a subscription for the client, finds them.
+func (b *Broker) keepRefs(client string, refs []consumerRef) {
+	if len(refs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	set := b.revoking[client]
+	if set == nil {
+		set = map[consumerRef]bool{}
+		b.revoking[client] = set
+	}
+	for _, ref := range refs {
+		set[ref] = true
+	}
+	b.mu.Unlock()
+	b.log.Warn("the broker kept a revoked client's consumer to delete later", "client", client, "refs", len(refs))
+}
+
+// retryRevoke deletes the consumers a failed revoke kept for client, and
+// keeps those it cannot delete yet.
+func (b *Broker) retryRevoke(ctx context.Context, client string) {
+	b.mu.Lock()
+	refs := make([]consumerRef, 0, len(b.revoking[client]))
+	for ref := range b.revoking[client] {
+		refs = append(refs, ref)
+	}
+	delete(b.revoking, client)
+	b.mu.Unlock()
+	if len(refs) == 0 {
+		return
+	}
+	kept, err := b.deleteRefs(ctx, refs)
+	if err != nil {
+		b.log.Warn("the broker could not delete a consumer a revoke kept", "client", client, "err", err)
+	}
+	b.keepRefs(client, kept)
+}
+
+// appOf is the app a stream belongs to: app_ID is ID's.
+func appOf(stream string) string { return strings.TrimPrefix(stream, "app_") }
 
 // Check admits one connection to the server. The CONNECT line's token is a
 // one-time secret, which names the identity a door decided; the secret is
