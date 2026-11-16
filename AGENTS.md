@@ -99,6 +99,13 @@ Everything in the map is built.
     [ADR-0023](docs/adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
   - `internal/control`: the control socket that `lodgectl` uses.
   - `internal/apptest`: fake apps on sockets, for tests.
+- `internal/broker`: the event broker lodge embeds: a NATS server with
+  JetStream in lodge's own process, off unless the configuration enables
+  it, with no listener of its own. `/run/lodge/nats.sock` admits an app by
+  its user's uid, and `/nats` on the `lodge` node takes a client; lodge
+  rewrites each `CONNECT` line with a one-time secret, and every app and
+  client is its own account
+  ([ADR-0022](docs/adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)).
 - `kit/`: the nested module `github.com/frostyard/lodge/kit` that app
   daemons import. It never imports `tailscale.com` or anything of lodge's
   outside `kit/` (checked by `internal/repocheck`), and every gate runs in

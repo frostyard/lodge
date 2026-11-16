@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A revoke counts itself in flight for the client until its deletions end, and a subscribe of that client fails at once while one is in flight, creating nothing: a subscribe that read the new epoch while the revoke was still deleting would update the same durable, write the index, and the revoke's deletion would then take it, so the index would name a consumer that does not exist.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 28d0c09, finding 1",
+  "promoted_to": "internal/broker: TestSubscribeWaitsForARevokeInProgress"
+}

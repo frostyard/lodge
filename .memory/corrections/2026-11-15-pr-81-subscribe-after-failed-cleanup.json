@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A subscription deletes the consumers a failed revoke kept for its client before it creates anything, and fails while one stays: a kept ref of the same app would delete the consumer the subscription just made, and one of another app would be left orphaned.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 529b7c3, finding 1",
+  "promoted_to": "internal/broker: TestSubscribeStopsOnAKeptCleanup"
+}

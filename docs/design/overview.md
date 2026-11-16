@@ -22,7 +22,9 @@ shell),
 [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md) (the
 companion),
 [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
-(the agent socket). The platform decision is frostyard/core's
+(the agent socket),
+[ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the
+broker). The platform decision is frostyard/core's
 [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md).
 Contracts: [specs/app-contract.md](../specs/app-contract.md),
 [specs/lodge-http.md](../specs/lodge-http.md),
@@ -81,6 +83,9 @@ tells the app in headers, and moves the bytes.
    ├─ internal/inference ◀── /run/lodge/inference.sock ◀── app daemons (peer uid → app)
    │       └─▶ the local model (MODEL_HOST), the owner's ChatGPT plan (codex)
    ├─ /mcp/<id> ◀── /run/lodge/agent.sock ◀── agents on this host (peer uid)
+   ├─ internal/broker: NATS with JetStream, in this process, no listener
+   │    ├─ /nats (WebSocket) ◀── outside clients, never a browser (a token in CONNECT)
+   │    └─ /run/lodge/nats.sock ◀── app daemons: each publishes only <id>.>
    └─ internal/control ◀── /run/lodge/control.sock ◀── lodgectl (root)
 
  notesd (user frostnotes) · maild (user frostmail) · porterd (user frostporter)
@@ -102,11 +107,12 @@ works from behind it.
 | notesd | `frostnotes` | `lodge-apps` | its vaults' state; its socket is `frostnotes:lodge` 0660 |
 | maild | `frostmail` | `lodge-apps` | mail, its accounts' credentials |
 | porterd, the assistant | `frostporter` | `lodge-apps`, `lodge-agents` | its own state (its thread), and an MCP token for each app it uses |
+| the broker, in lodge's process | `lodge` | — | `/var/lib/lodge/jetstream/`: each app's events, and each client's consumers |
 
 - lodge can open every app's socket (group `lodge`), and nothing else of
   theirs.
-- An app can open the inference socket (group `lodge-apps`), and nothing of
-  lodge's or another app's.
+- An app can open the inference socket and the broker's socket (group
+  `lodge-apps`), and nothing of lodge's or another app's.
 - An agent on lodge's host can open the agent socket (group
   `lodge-agents`), and lodge serves it only when lodge's configuration
   names its user.
@@ -302,6 +308,32 @@ served for `/`, `/<id>` and `/<id>/<route>`.
 
 One web manifest, `/lodge/manifest.webmanifest`, makes lodge a single
 home-screen app. No service worker is registered.
+
+### Events
+
+`internal/broker` is a NATS server with JetStream, in lodge's own process
+([app-contract.md](../specs/app-contract.md#events);
+[lodge-http.md](../specs/lodge-http.md#the-broker) pins lodge's side;
+[ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)). Off
+unless the `broker` member of `/etc/lodge/config.json` enables it.
+
+- It has no listener of its own: 2 doors reach it, both lodge's. An app
+  daemon connects on `/run/lodge/nats.sock`, admitted by its user's uid.
+  A client connects on `/nats`, the WebSocket route of the `lodge` node.
+- lodge reads each connection's `CONNECT` line, decides who it is, and
+  writes the line again with a one-time secret in place of every
+  credential, so the server admits only what lodge chose. lodge never
+  reads a message.
+- An account per app and per client: an app publishes only `<id>.>`, a
+  client pulls only its own durable consumers, and a reply subject stays
+  in the account that sent the request. That last point is why the
+  accounts exist: with subject permissions alone, a forged reply subject
+  stores a forged message in another app's stream.
+- Each app has one stream, `app_<id>`, keeping 7 days or 1 GiB. lodge
+  manages the streams and the consumers with its own client of the
+  server, and rebuilds its index of clients and consumers at start from
+  the consumers' metadata.
+- lodge issues no event token yet, so `/nats` refuses every client.
 
 ### Inference
 

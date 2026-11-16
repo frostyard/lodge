@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A revoke closes the client's connections first, and deletes its consumers only after that, concurrently and under a 1 s bound: a deletion can wait for the server's 5 s API timeout, and a revoked client must not stay connected meanwhile.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 0909354, finding 2",
+  "promoted_to": "internal/broker: TestRevokeClosesFirstWhenCleanupFails"
+}

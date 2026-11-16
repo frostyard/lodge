@@ -19,7 +19,9 @@ messages inside the shell are [lodge-client.md](lodge-client.md) and
 [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md)
 (content),
 [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)
-(the agent socket). Where it fits: [design/overview.md](../design/overview.md).
+(the agent socket),
+[ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the
+broker, Proposed). Where it fits: [design/overview.md](../design/overview.md).
 
 frostnotes' M4 drafted this for notesd's hub (its `docs/specs/hub-http.md`,
 local commit `0586e2b`). It is generalized here to every app, with the
@@ -30,6 +32,9 @@ fixes from M4's review.
 it lands. [The agent socket](#the-agent-socket) and the binding of tokens
 to their route were added on 2026-10-19, and built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
+[The broker](#the-broker) was added on 2026-11-15
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md),
+Proposed).
 
 ## Interface
 
@@ -44,6 +49,7 @@ to their route were added on 2026-10-19, and built in the roadmap's
 | `/run/lodge/control.sock` | — | `lodgectl` ([below](#the-control-socket-and-lodgectl)) |
 | `/run/lodge/inference.sock` | — | app daemons ([app-contract.md](app-contract.md#inference)) |
 | `/run/lodge/agent.sock` | — | `/mcp/<id>` for the agents on lodge's host that its configuration names ([below](#the-agent-socket)) |
+| `/run/lodge/nats.sock` | — | the event broker, for app daemons, whose uid the socket admits ([below](#the-broker)) |
 
 - `LODGE` is the `lodge` node's full DNS name, the first of `tsnet`'s
   `CertDomains` (`lodge.<tailnet>.ts.net`). `CONTENT` is the
@@ -118,6 +124,7 @@ On `LODGE`:
 | `/app/<id>/<path>` | `GET`, `HEAD` | browser | tailnet identity | the app's `web/` |
 | `/mcp/<id>` | `POST`, `GET`, `DELETE` | agent | `Bearer` MCP token | the app's `/mcp` |
 | `/device/<id>/<path>` | any | device | the app's own | the app's `/device/<path>` |
+| `/nats` | `GET` (WebSocket) | broker | the token in the `CONNECT` line | the event broker ([below](#the-broker)) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/gateway/mcp` | `GET`, `HEAD` | OAuth | none | lodge's OAuth metadata ([below](#oauth-routes)) |
 | `/oauth/register`, `/oauth/token`, `/oauth/revoke` | `POST` | OAuth | none, or the client's grant | lodge's OAuth server |
 | `/oauth/authorize`, `/oauth/consent/<id>`, `/oauth/grants` | `GET`, `HEAD`; `POST` on `/oauth/consent/<id>` | consent | tailnet identity, an admin's login | the consent and grants pages |
@@ -514,6 +521,112 @@ the address check.
 - **Connections.** The [limits](#connections) apply to the socket as to a
   listener, counting a peer uid as a remote address.
 
+### The broker
+
+lodge embeds an event broker, a NATS server with JetStream
+([ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md)).
+It is **off unless** the `broker` member of `/etc/lodge/config.json` is
+`{"enabled": true}`, which lodge reads at start; a change takes effect at
+the next start. A broken `broker` member, or a broker that cannot start,
+leaves it off and logs why; the rest of lodge keeps serving. Off, there is
+no socket and no store, and `/nats` answers 404. On, it has 2 doors and no
+listener of its own.
+
+- **The store.** JetStream keeps `/var/lib/lodge/jetstream/`, made 0700,
+  or `DIR/var/lib/lodge/jetstream/` under `--root`.
+- **The app socket.** `/run/lodge/nats.sock`, owner `lodge`, group
+  `lodge-apps`, 0660, or `DIR/run/lodge/nats.sock` under `--root`, where
+  the group is the developer's. A connection is admitted only when its
+  peer uid (`SO_PEERCRED`) is an enabled app's manifest `user`; any other
+  is closed before lodge reads from it, and its refusal is logged at most
+  once a minute per uid. Under `--root` lodge's own uid passes too, and
+  the app names itself in the `CONNECT` line's `user` field, which must
+  name an enabled app. An app that is no longer enabled loses its
+  connections.
+- **The client route.** `/nats`, a WebSocket on the `lodge` node, and
+  the checks in this order:
+  1. **Broker:** off answers 404.
+  2. **Host:** `LODGE` or `LODGE:443`, else 403.
+  3. **Origin:** a request with an `Origin` header is 403: browsers may
+     not call it.
+  4. **Method:** `GET`, else 405 with `Allow: GET`.
+  5. **Upgrade:** a `GET` without a WebSocket upgrade is 400.
+  6. **Peer:** [identity checks](#identity) a and b, as for an agent
+     request.
+  7. Otherwise lodge upgrades, caps a message at 64 KiB, and hands the
+     connection to the broker. The cap is the WebSocket's read limit,
+     set after the wrapper that would turn it off, so a message over it
+     ends the connection with `1009` (message too big).
+
+  The `CONNECT` line's `auth_token` names the client. **lodge issues no
+  event token yet,** so every client is refused with
+  `-ERR 'Authorization Violation'` after the server's `INFO` line.
+- **1 protocol line, never a message.** On either door lodge reads the
+  connection's first line, which must be `CONNECT` and 1 JSON object (at
+  most 8 KiB). A line whose options are no object, `null` included, is
+  refused on both doors, with no identity decided: lodge writes the
+  one-time secret into those options. It removes `auth_token`, `user`,
+  `pass`, `jwt`, `nkey` and `sig`, and writes the line again with a
+  one-time secret of 32 random bytes as `auth_token`. The server admits
+  only the identity lodge decided from that secret, once, and the secret
+  is gone.
+- **An account per app and per client,** so that a reply subject cannot
+  reach another app's stream:
+  - app `<id>`: its subject `<id>.>`, a stream `app_<id>` that holds 7
+    days and 1 GiB, and a JetStream `PubAck` to each publish;
+  - client `<name>`: only its own consumers' pull requests and acks,
+    `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` and
+    `$JS.ACK.<stream>.<consumer>.>`, with an inbox under
+    `_INBOX.<name>.>`. Any other publish or subscribe is a permission
+    violation, and a client with no consumer may publish nothing.
+- **1 durable pull consumer per client and subscription,** named
+  `<client>-<sub>`, each of those names matching `^[a-z0-9_]{1,32}$`,
+  with filters inside one app's `<id>.>`: an empty token, a space, or `>`
+  before the last token is refused. It acknowledges explicitly, takes new
+  messages, and a pull expires after at most 60 s and takes at most 256.
+  **A subscription stays on 1 app:** subscribing the same client and
+  subscription name to another app is refused, with an error that asks
+  for an unsubscribe first, and that unsubscribe deletes the consumer it
+  has. Subscribing it again to the same app updates its filters. A
+  client's subscribe and unsubscribe run 1 at a time, so the check and the
+  consumer it makes are 1 step.
+- **A subscription change reconnects the client:** its permission names
+  its consumers.
+- **Revoking a client closes it first.** lodge takes the client out of
+  its index, closes its connections at once, and deletes its consumers
+  after that, concurrently and within 1 s: a consumer's deletion can wait
+  for the server's own 5 s API timeout, and a revoked client must not
+  stay connected meanwhile. A `/nats` WebSocket ends with no close
+  handshake, so a peer that answers nothing delays neither the revoke nor
+  the other connections. A consumer that is not deleted in time is kept in
+  a set that no connection's authentication reads, and the client's next
+  revoke tries again. The next start restores it from its metadata, and a
+  revoke there finds it, so a revoked client keeps no consumer for good.
+- **A subscription waits for a kept cleanup.** A subscribe of that client
+  deletes the kept consumers first, and fails while 1 stays, so that no
+  ref outlives it to delete a consumer it makes or to orphan one on
+  another app.
+- **A revoke never waits for a subscription.** Revoking takes no
+  per-client lock: it counts an epoch for the client, removes it, closes
+  it and deletes its consumers within its 1 s budget, whatever a
+  subscription under way is doing. A subscribe that a revoke overtakes
+  sees the new epoch, deletes the consumer it made, and fails with an
+  error that says the client was revoked during the subscription; if that
+  deletion fails, it is kept for the client's next revoke. So no consumer
+  is left that nobody deletes.
+- **A subscribe waits out a revoke in progress.** While a revoke of that
+  client is still deleting, a subscribe of it fails at once with an error
+  that says the revoke is in progress, and creates nothing: the revoke's
+  own deletion would take the consumer the subscribe would make. A revoke
+  ends within 1 s, so asking again then works.
+- **Connections.** An app or a client holds at most 64 connections at
+  once; past that a connection is refused. The socket's
+  [limits](#connections) do not apply to it: the broker counts an
+  identity, not a remote address.
+- **lodge keeps no message.** It reads no message, indexes no message,
+  and logs no message. Its index is which client has which consumers, and
+  it is rebuilt from the consumers' metadata at the next start.
+
 ### OAuth routes
 
 lodge's OAuth server and its consent and grants pages
@@ -717,6 +830,9 @@ repository.
 - Only the agents lodge's configuration names connect to the
   agent socket, and a token works only on the route it was issued for.
   Each has a test that fails it.
+- Only an enabled app's user connects to the broker's socket, and a pull
+  request's reply stays in the account that sent it. Each has a test that
+  fails it.
 - No response, log line or state file holds an MCP token.
 - A release build holds no e2e identity code, proved with `go tool nm`.
 - Nothing dials Tailscale's log host. A test runs a node against the
@@ -732,7 +848,7 @@ repository.
 
 ## References
 
-- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and the consent routes), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed)
+- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and the consent routes), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed)
 - Context: [design/overview.md](../design/overview.md)
 - Related: [oauth.md](oauth.md), [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
 - Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)

@@ -57,6 +57,9 @@ type Config struct {
 	// BodyTimeout bounds each read of a device request's body, so a peer
 	// that stalls a body cannot hold a connection to an app [30 s].
 	BodyTimeout time.Duration
+	// Broker is the event broker's door, which /nats serves. A nil Broker
+	// is a broker that is off.
+	Broker Broker
 }
 
 // Gateway serves lodge's routes.
@@ -234,6 +237,8 @@ func (g *Gateway) Lodge(who peer.WhoIs) http.Handler {
 			g.mcp(w, r, who, segs[1])
 		case first == "device" && len(segs) >= 2 && apps.ValidID(segs[1]):
 			g.device(w, r, who, segs[1], rest(escaped, 2))
+		case escaped == "/nats":
+			g.nats(w, r, who)
 		case first == ".well-known", first == "oauth":
 			g.oauthRoute(w, r, who, escaped, segs)
 		case apps.ValidID(first):
