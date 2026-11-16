@@ -53,12 +53,20 @@ Check each item. A missing item is not a failed line: fix it first.
 2. The owner's login is a lodge admin.
    Expected: `https://LODGE/oauth/grants` opens and lists the principals.
    A refusal names the step (`lodgectl allow admin LOGIN`).
-3. Chani's gateway entry is on and signed in.
-   Expected: Pi Pocket > Menu > MCP shows `chani-lodge` on and signed in,
-   and `https://LODGE/oauth/grants` lists principal `chani` with client
-   `Chani`, scope `mcp`.
-4. The events bridge is on.
+3. Chani's gateway entry is on and signed in, and Chani holds no grant.
+   Expected: Pi Pocket > Menu > MCP shows `chani-lodge` on and signed in.
+   `https://LODGE/oauth/grants` lists principal `chani` with client
+   `Chani`, scope `mcp`, and no grant item on any app. An approval adds
+   items to a grant and never replaces it, so an item from an earlier run
+   changes the results of L1. Write down each item that `chani` holds,
+   to ask for it again in [After the run](#after-the-run), and select
+   **Remove** on each.
+4. The events bridge is on, and Chani follows no topic.
    Expected: Pi Pocket > Menu > Extensions shows `events-bridge.ts` on.
+   Chani's `events_list` shows no subscription. If it shows one, tell
+   Chani to end it with `events_unsubscribe`. If the grants page lists a
+   client `chani` with scope `events` under principal `chani`, the bridge
+   is signed in already: L2 then shows no sign-in card (see L2, step 2).
 5. The bookmarklet of frostmarks is in the browser.
    Expected: on any page, it opens `https://LODGE/marks/save?...` in a new
    window. The bookmarklet is in frostmarks' web UI, under
@@ -121,6 +129,8 @@ bookmark.
    Expected: the consent page shows client `chani`, principal `chani` and
    the scope `events` only. After the paste, Chani's call succeeds, and
    `events_list` shows 1 subscription on `marks.bookmark`, mode `now`.
+   When the bridge is signed in already (before the run, item 4), no card
+   shows: the call succeeds at once, with the same `events_list`.
 3. Open any web page, and save it with the bookmarklet into folder
    `/pilot`.
    Expected: the save page shows the page's URL and title, and saves the
@@ -160,9 +170,8 @@ Done when: a grant that reads 1 folder receives only that folder's events
    [internal/events/acceptance_test.go](../internal/events/acceptance_test.go):
    of 100 events in 10 folders, a grant on 1 folder receives exactly that
    folder's 10. `TestNarrowing` and `TestRevoke` are beside it.
-2. Optional, in a checkout of lodge's `main`:
-   `go test ./internal/events -run 'TestOneFolderOfMany|TestNarrowing|TestRevoke' -count=1 -v`.
-   Expected: each test passes.
+2. Optional, in a checkout of lodge's `main`: run the gate, `make check`.
+   Expected: it passes. Its tests run unfiltered, these 3 included.
 3. The live check: save 1 page with the bookmarklet into folder `/other`.
    Wait 3 minutes.
    Expected: the session `Chani events` gets no new message, and Chani's
@@ -176,10 +185,17 @@ subscription together.
 
 This line revokes the principal `chani`. A principal revoke revokes both
 of its clients at once: the gateway entry `Chani` (scope `mcp`) and the
-bridge's `chani` (scope `events`), and it deletes the principal's grants.
-(**Remove** on 1 grant item narrows the grant instead: the tools go, and
-the consumer keeps only its resync subject, but the bridge's subscription
-stays open.) [After the run](#after-the-run) restores Chani's access.
+bridge's `chani` (scope `events`), and it deletes every grant of the
+principal, on every app. [After the run](#after-the-run) restores Chani's
+access.
+
+**Remove** on grant items narrows the grant instead, and is not this
+line's check. Each item works by its capability: removing `marks:write`
+removes the write tools and leaves the read tools and the events; removing
+`marks:read` removes the read tools and the consumer's filters, and leaves
+the write tools. Removing every item removes all `marks_<tool>` tools and
+leaves the consumer only its resync subject, but the bridge's subscription
+stays open.
 
 1. Open `https://LODGE/oauth/grants`. At principal `chani`, select
    **Revoke**.
@@ -207,10 +223,15 @@ The client is MCP Inspector's connection CLI, `mcpdo`, at version
 computer of the tailnet where the owner's browser runs: its sign-in comes
 back to a loopback address on that computer.
 
-1. In a terminal, start the sign-in:
+1. In a terminal, make a catalog of this run's own, and start the
+   sign-in:
 
    ```sh
-   npx -y -p @modelcontextprotocol/inspector@2.15.0 mcpdo connect https://LODGE/gateway/mcp
+   mcpdo() { npx -y -p @modelcontextprotocol/inspector@2.15.0 mcpdo "$@"; }
+   c=$(mktemp -d)
+   export MCP_CATALOG_PATH=$c/mcp.json
+   echo '{"mcpServers":{"lodge":{"type":"http","url":"https://LODGE/gateway/mcp"}}}' > "$MCP_CATALOG_PATH"
+   mcpdo connect lodge
    ```
 
    Expected: mcpdo opens lodge's consent page in the browser, or prints its
@@ -219,14 +240,13 @@ back to a loopback address on that computer.
    a `127.0.0.1` or `localhost` address.
 2. Type `inspector` as the principal. Select **Approve**.
    Expected: the browser goes to mcpdo's loopback address, and mcpdo
-   reports the connection. The grants page lists principal `inspector`
-   with 1 client, scope `mcp`.
-3. Run each of these commands in the same terminal (`mcpdo` below means
-   `npx -y -p @modelcontextprotocol/inspector@2.15.0 mcpdo`):
+   reports the connection `@lodge`. The grants page lists principal
+   `inspector` with 1 client, scope `mcp`.
+3. In the same terminal:
 
    ```sh
-   mcpdo connections/show
-   mcpdo tools/list
+   mcpdo connections/show @lodge
+   mcpdo @lodge tools/list
    ```
 
    Expected: the server's name is `lodge`, and its capabilities have
@@ -234,7 +254,7 @@ back to a loopback address on that computer.
 4. Ask for read access:
 
    ```sh
-   mcpdo tools/call request_access '{"app":"marks","items":[{"cap":"marks:read","sel":{"folder":"/pilot"}}]}'
+   mcpdo @lodge tools/call request_access '{"app":"marks","items":[{"cap":"marks:read","sel":{"folder":"/pilot"}}]}'
    ```
 
    Expected: a result with a `url`, `https://LODGE/oauth/consent/<id>`.
@@ -243,9 +263,9 @@ back to a loopback address on that computer.
 5. List and call the tools:
 
    ```sh
-   mcpdo tools/list
-   mcpdo tools/call marks_list_bookmarks '{"folder":"/pilot"}'
-   mcpdo tools/call marks_update_bookmark '{"id":"<a bookmark ID from the list>","addTags":["inspector"]}'
+   mcpdo @lodge tools/list
+   mcpdo @lodge tools/call marks_list_bookmarks '{"folder":"/pilot"}'
+   mcpdo @lodge tools/call marks_update_bookmark '{"id":"<a bookmark ID from the list>","addTags":["inspector"]}'
    ```
 
    Expected: `tools/list` shows `request_access` and the 4 read tools:
@@ -255,10 +275,11 @@ back to a loopback address on that computer.
    `insufficient_scope: principal inspector holds no marks:write for app
    marks`, and the bookmark does not change.
 6. Clean up. On `https://LODGE/oauth/grants`, at principal `inspector`,
-   select **Revoke**. Then run `mcpdo tools/list`.
+   select **Revoke**. Then run `mcpdo @lodge tools/list`.
    Expected: the call fails. mcpdo reports an auth error, or starts a new
    sign-in: on lodge's consent page, select **Decline**. Then run
-   `mcpdo disconnect --clear-auth`. Keep mcpdo for L6.
+   `mcpdo disconnect lodge --clear-auth` and `mcpdo daemon stop`, and
+   remove the catalog (`rm -r "$c"`).
 
 ## L6: frostmarks works with no lodge
 
@@ -267,44 +288,50 @@ stdio MCP.
 
 Run these steps on any Linux computer with Go 1.27.4 or later, with no
 lodge on it. They follow
-[frostmarks' README](https://github.com/frostyard/frostmarks/blob/main/README.md#use).
+[frostmarks' README](https://github.com/frostyard/frostmarks/blob/main/README.md#use),
+in a new temporary directory, with its own state and socket: the run never
+touches the bookmarks of a frostmarks that the computer has already.
 
-1. Install the 2 commands of the release:
+1. Make the directory, and install the 2 commands of the release in it:
 
    ```sh
-   go install github.com/frostyard/frostmarks/cmd/frostmarksd@v0.1.0
-   go install github.com/frostyard/frostmarks/cmd/marksctl@v0.1.0
+   d=$(mktemp -d)
+   GOBIN=$d/bin go install github.com/frostyard/frostmarks/cmd/frostmarksd@v0.1.0
+   GOBIN=$d/bin go install github.com/frostyard/frostmarks/cmd/marksctl@v0.1.0
    ```
 
-   Expected: `frostmarksd` and `marksctl` are in `$(go env GOPATH)/bin`, or
-   in the directory that `go env GOBIN` names.
-2. Start the daemon, and use the CLI:
+   Expected: `$d/bin` holds `frostmarksd` and `marksctl`.
+2. Start the daemon on the directory's state and socket, and use the CLI:
 
    ```sh
-   frostmarksd &
-   marksctl create-folder /reading
-   marksctl create-bookmark -url https://example.com/ -title Example -folder /reading
-   marksctl list-bookmarks -recursive
-   marksctl search-bookmarks example
+   s=$d/frostmarks.sock
+   $d/bin/frostmarksd -state-dir "$d/state" -socket "$s" &
+   $d/bin/marksctl -socket "$s" create-folder /reading
+   $d/bin/marksctl -socket "$s" create-bookmark -url https://example.com/ -title Example -folder /reading
+   $d/bin/marksctl -socket "$s" list-bookmarks -recursive
+   $d/bin/marksctl -socket "$s" search-bookmarks example
    ```
 
    Expected: each command exits 0. The list and the search each print 1
    line: the bookmark's ID, `/reading`, `https://example.com/` and
    `Example`.
-3. Use the stdio MCP server, with the client of L5:
+3. Use the stdio MCP server, with the client of L5 (the same `mcpdo`
+   function) and a catalog in the run's directory:
 
    ```sh
-   mcpdo connect marksctl mcp
-   mcpdo tools/list
-   mcpdo tools/call search_bookmarks '{"query":"example"}'
+   export MCP_CATALOG_PATH=$d/mcp.json
+   printf '{"mcpServers":{"marks":{"command":"%s","args":["-socket","%s","mcp"]}}}\n' "$d/bin/marksctl" "$s" > "$MCP_CATALOG_PATH"
+   mcpdo connect marks
+   mcpdo @marks tools/list
+   mcpdo @marks tools/call search_bookmarks '{"query":"example"}'
    ```
 
-   Expected: 11 tools with no prefix, `create_bookmark` to
+   Expected: `Tools (11)`, with no prefix, `create_bookmark` to
    `update_bookmark`, and no sign-in. The search returns the bookmark of
    step 2.
-4. Clean up: run `mcpdo disconnect` and `mcpdo daemon stop`, stop
-   `frostmarksd` (`kill %1`), and remove its state,
-   `$XDG_STATE_HOME/frostmarks` (else `~/.local/state/frostmarks`).
+4. Clean up: run `mcpdo disconnect marks` and `mcpdo daemon stop`, stop
+   this run's daemon (`kill %1`), and remove only this run's directory
+   (`rm -r "$d"`).
 
 ## L7: an outside developer builds the example app from hearth's README
 
@@ -335,9 +362,14 @@ To restore Chani's access after L4:
 
 1. Pi Pocket > Menu > MCP > `chani-lodge` > **Sign in**. On lodge's
    consent page, approve client `Chani` as principal `chani`, scope `mcp`.
-2. Tell Chani to ask for her bookmark access again (L1, steps 2 to 4).
+2. Tell Chani to ask again for the items you wrote down before the run
+   (item 3), and for the bookmark access she keeps after the pilot, if
+   any (L1, steps 2 to 4).
 3. The next `events_subscribe` of Chani shows the bridge's sign-in card
    again (L2, step 2).
+
+A new run starts again at [Before the run](#before-the-run): it removes
+the grant items that this run left.
 
 To remove the test data, delete the bookmarks of the run and the folders
 `/pilot` and `/other` in `https://LODGE/marks`. A folder must be empty
