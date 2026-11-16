@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "A consent decision must decide the request, bind the client (conditionally, never rebinding) and write the grant in one transaction, and it must refuse when the effective principal differs from the one the page showed.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) of head 4b50c66, findings 1 and 2",
+  "promoted_to": "internal/gateway/oauth_test.go TestOAuthSigninBindingRace and TestOAuthApproveRefusals"
+}

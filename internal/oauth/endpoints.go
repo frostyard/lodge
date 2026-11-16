@@ -101,16 +101,6 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	n, err := s.unboundClients(r)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "server_error", "lodge cannot read its clients")
-		return
-	}
-	if n >= MaxUnboundClients {
-		s.writeError(w, http.StatusTooManyRequests, "temporarily_unavailable",
-			fmt.Sprintf("%d clients wait for a consent; register again later", n))
-		return
-	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "server_error", "lodge cannot make a client ID")
@@ -123,10 +113,23 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "server_error", "lodge cannot encode the redirect URIs")
 		return
 	}
-	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO oauth_clients (id, name, redirect_uris, registered_at)
-		VALUES (?, ?, ?, ?)`, id, name, string(urisJSON), stamp(now)); err != nil {
+	// The count and the insert are 1 statement: 2 registrations at once
+	// cannot both pass the limit (docs/specs/oauth.md, Registration).
+	res, err := s.db.ExecContext(r.Context(), `INSERT INTO oauth_clients (id, name, redirect_uris, registered_at)
+		SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM oauth_clients WHERE principal IS NULL AND revoked_at IS NULL) < ?`,
+		id, name, string(urisJSON), stamp(now), MaxUnboundClients)
+	if err != nil {
 		s.log.Error("register a client", "err", err)
 		s.writeError(w, http.StatusInternalServerError, "server_error", "lodge cannot store the client")
+		return
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		s.log.Error("count the registered client", "err", err)
+		s.writeError(w, http.StatusInternalServerError, "server_error", "lodge cannot store the client")
+		return
+	} else if n == 0 {
+		s.writeError(w, http.StatusTooManyRequests, "temporarily_unavailable",
+			fmt.Sprintf("%d clients wait for a consent; register again later", MaxUnboundClients))
 		return
 	}
 	s.log.Info("oauth client registered", "client", id, "name", name)
@@ -142,18 +145,6 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		TokenEndpointAuthMethod: "none",
 		Scope:                   ScopeMCP + " " + ScopeEvents,
 	})
-}
-
-// unboundClients is how many clients no consent has bound yet.
-func (s *Server) unboundClients(r *http.Request) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM oauth_clients WHERE principal IS NULL AND revoked_at IS NULL`).Scan(&n)
-	if err != nil {
-		s.log.Error("count the unbound clients", "err", err)
-		return 0, err
-	}
-	return n, nil
 }
 
 // hasControl reports whether s holds a control character.

@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1362,5 +1363,204 @@ func TestOAuthApproveAfterClientRevoked(t *testing.T) {
 	}
 	if decided.Valid {
 		t.Errorf("the request was decided at %s, though the approval was refused", decided.String)
+	}
+}
+
+// boundTo is the principal a client is bound to, and whether one is.
+func (h *oauthHarness) boundTo(clientID string) (string, bool) {
+	h.t.Helper()
+	var principal sql.NullString
+	if err := h.db.QueryRowContext(h.t.Context(), `SELECT principal FROM oauth_clients WHERE id = ?`,
+		clientID).Scan(&principal); err != nil {
+		h.t.Fatal(err)
+	}
+	return principal.String, principal.Valid
+}
+
+// decidedAt is when a request was decided, or the zero time while it is
+// pending.
+func (h *oauthHarness) decidedAt(id string) time.Time {
+	h.t.Helper()
+	var decided sql.NullString
+	if err := h.db.QueryRowContext(h.t.Context(), `SELECT decided_at FROM consent_requests WHERE id = ?`,
+		id).Scan(&decided); err != nil {
+		h.t.Fatal(err)
+	}
+	return parseStamp(h.t, decided.String)
+}
+
+// TestOAuthSigninBindingRace checks that a client is bound by its first
+// approval and never rebound: the second sign-in of 1 client answers 409,
+// and stays pending.
+func TestOAuthSigninBindingRace(t *testing.T) {
+	h := newOAuthHarness(t)
+	client := h.register("pi-pocket", redirectURI)
+	_, first, csrf1, hash1 := h.pendingSigninOf(t, client.ClientID)
+	_, second, csrf2, hash2 := h.pendingSigninOf(t, client.ClientID)
+	ok := h.approve(first, csrf1, hash1, url.Values{"principal": {"alice"}, "scope": {"mcp"}})
+	if ok.status != http.StatusSeeOther || code(t, ok) == "" {
+		t.Fatalf("the first approval: %d %q", ok.status, ok.body)
+	}
+	if bound, set := h.boundTo(client.ClientID); !set || bound != "alice" {
+		t.Fatalf("the client is bound to %q (%v), want alice", bound, set)
+	}
+	// The second sign-in's page cannot be decided either way, and its
+	// approval is 409: the client stays with alice, and no code is issued.
+	page := h.do(h.req(http.MethodGet, "/oauth/consent/"+second, "", pageHeaders()))
+	if page.status != http.StatusConflict ||
+		!strings.Contains(page.body, "client "+client.ClientID+" is bound to principal alice: decline this request") {
+		t.Errorf("the second sign-in's page: %d %q", page.status, page.body)
+	}
+	a := h.approve(second, csrf2, hash2, url.Values{"principal": {"bob"}, "scope": {"mcp"}})
+	if a.status != http.StatusConflict ||
+		!strings.Contains(a.body, "client "+client.ClientID+" is bound to principal alice: decline this request") {
+		t.Fatalf("the second approval: %d %q", a.status, a.body)
+	}
+	if a.header.Get("Location") != "" {
+		t.Errorf("the second approval redirects to %q", a.header.Get("Location"))
+	}
+	if bound, _ := h.boundTo(client.ClientID); bound != "alice" {
+		t.Errorf("the client is bound to %q after the second approval", bound)
+	}
+	if !h.decidedAt(second).IsZero() {
+		t.Error("the second request was decided, though its approval was refused")
+	}
+}
+
+// pendingSigninOf makes a sign-in request of client clientID that waits for
+// a decision.
+func (h *oauthHarness) pendingSigninOf(t *testing.T, clientID string) (string, string, string, string) {
+	t.Helper()
+	a := h.authorize(clientID, redirectURI, map[string]string{"scope": "mcp"})
+	if a.status != http.StatusSeeOther {
+		t.Fatalf("authorize: %d %q %q", a.status, a.header.Get("Location"), a.body)
+	}
+	id := consentID(t, a)
+	_, csrf, hash := h.consentPage(id)
+	return clientID, id, csrf, hash
+}
+
+// parseStamp reads a stored time, or the zero time.
+func parseStamp(t *testing.T, text string) time.Time {
+	t.Helper()
+	if text == "" {
+		return time.Time{}
+	}
+	at, err := time.Parse(store.TimeFormat, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// TestOAuthApproveRefusals checks the forms an approval refuses: 400, with
+// the request still pending and nothing changed.
+func TestOAuthApproveRefusals(t *testing.T) {
+	h := newOAuthHarness(t)
+	client := h.register("pi-pocket", redirectURI)
+	_, signin, csrf, hash := h.pendingSigninOf(t, client.ClientID)
+	for name, fields := range map[string]url.Values{
+		"a principal that is not a name": {"principal": {"Bad Name"}, "scope": {"mcp"}},
+		"no scope":                       {"principal": {"chani"}},
+		"a scope not asked for":          {"principal": {"chani"}, "scope": {"events"}},
+		"a scope asked and another":      {"principal": {"chani"}, "scope": {"mcp", "events"}},
+	} {
+		a := h.approve(signin, csrf, hash, fields)
+		if a.status != http.StatusBadRequest {
+			t.Errorf("%s: %d %q, want 400", name, a.status, a.body)
+		}
+		if !h.decidedAt(signin).IsZero() {
+			t.Errorf("%s: the request was decided", name)
+		}
+		if bound, set := h.boundTo(client.ClientID); set {
+			t.Errorf("%s: the client is bound to %q", name, bound)
+		}
+	}
+	// An access request's items.
+	bound, _ := h.signin("pi-pocket", "mcp")
+	for name, fields := range map[string]url.Values{
+		"no item":                  {},
+		"an item not there":        {"item": {"9"}},
+		"an item that is no index": {"item": {"x"}},
+		"no item but a path":       {"path.0.folder": {"/Reading"}},
+	} {
+		req, err := h.oauth.RequestAccess(t.Context(), bound.ClientID, "marks", marksItems())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, reqCSRF, reqHash := h.consentPage(req.ID)
+		a := h.approve(req.ID, reqCSRF, reqHash, fields)
+		if a.status != http.StatusBadRequest {
+			t.Errorf("%s: %d %q, want 400", name, a.status, a.body)
+		}
+		if !h.decidedAt(req.ID).IsZero() {
+			t.Errorf("%s: the request was decided", name)
+		}
+	}
+	if granted, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(granted) != 0 {
+		t.Errorf("the grant after refused approvals = %+v, %v", granted, err)
+	}
+}
+
+// TestOAuthRegisterLimitRace checks that the limit on unbound clients holds
+// when registrations come at once: exactly 1 gets past it.
+func TestOAuthRegisterLimitRace(t *testing.T) {
+	h := newOAuthHarness(t)
+	for i := range oauth.MaxUnboundClients - 1 {
+		if _, err := h.db.ExecContext(t.Context(),
+			`INSERT INTO oauth_clients (id, name, redirect_uris, registered_at) VALUES (?, 'c', '["https://a.example/cb"]', ?)`,
+			"lgc_bulk"+strconv.Itoa(i), time.Now().UTC().Format(store.TimeFormat)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	statuses := make([]int, 8)
+	errs := make([]error, len(statuses))
+	var wg sync.WaitGroup
+	for i := range statuses {
+		wg.Go(func() {
+			body := `{"redirect_uris":["https://a.example/cb"]}`
+			r, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.lodge.URL+"/oauth/register",
+				strings.NewReader(body))
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			r.Host = lodgeHost
+			r.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultTransport.RoundTrip(r)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			defer resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			statuses[i] = resp.StatusCode
+		})
+	}
+	wg.Wait()
+	created, limited := 0, 0
+	for i, status := range statuses {
+		if errs[i] != nil {
+			t.Fatalf("registration %d: %v", i, errs[i])
+		}
+		switch status {
+		case http.StatusCreated:
+			created++
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Errorf("registration %d answered %d", i, status)
+		}
+	}
+	if created != 1 || limited != len(statuses)-1 {
+		t.Errorf("%d registrations were created and %d limited, want 1 and %d", created, limited, len(statuses)-1)
+	}
+	var unbound int
+	if err := h.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM oauth_clients WHERE principal IS NULL AND revoked_at IS NULL`).Scan(&unbound); err != nil {
+		t.Fatal(err)
+	}
+	if unbound != oauth.MaxUnboundClients {
+		t.Errorf("%d unbound clients, want %d", unbound, oauth.MaxUnboundClients)
 	}
 }

@@ -62,6 +62,3 @@ func (s *Server) checkPageCSRF(admin, given, tsText string) error {
 	}
 	return nil
 }
-
-// pageStamp is the grants page's time, in Unix seconds.
-func (s *Server) pageStamp() string { return strconv.FormatInt(s.now().Unix(), 10) }

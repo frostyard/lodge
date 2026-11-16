@@ -2,7 +2,11 @@ package oauth
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -399,7 +403,7 @@ func TestRequestAccess(t *testing.T) {
 	s, _ := testServer(t)
 	ctx := t.Context()
 	insertClient(t, s, "lgc_bound", "bound", "chani")
-	if err := s.makePrincipal(ctx, "chani"); err != nil {
+	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
 		t.Fatal(err)
 	}
 	insertClient(t, s, "lgc_unbound", "unbound", nil)
@@ -451,7 +455,7 @@ func TestRequestAccessPending(t *testing.T) {
 	s, _ := testServer(t)
 	ctx := t.Context()
 	insertClient(t, s, "lgc_bound", "bound", "chani")
-	if err := s.makePrincipal(ctx, "chani"); err != nil {
+	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
 		t.Fatal(err)
 	}
 	items := []Item{{Cap: "marks:read"}}
@@ -468,14 +472,14 @@ func TestRequestAccessPending(t *testing.T) {
 	if err != nil || len(pending) != MaxPending {
 		t.Fatalf("the pending requests = %d, %v", len(pending), err)
 	}
-	if ok, err := s.decide(ctx, pending[0].ID, DecisionDecline); !ok || err != nil {
+	if ok, err := s.decide(ctx, s.db, pending[0].ID, DecisionDecline); !ok || err != nil {
 		t.Fatalf("decide = %v, %v", ok, err)
 	}
 	if _, err := s.RequestAccess(ctx, "lgc_bound", "marks", items); err != nil {
 		t.Errorf("a request after one was decided: %v", err)
 	}
 	// A request is decided once.
-	if ok, _ := s.decide(ctx, pending[0].ID, DecisionApprove); ok {
+	if ok, _ := s.decide(ctx, s.db, pending[0].ID, DecisionApprove); ok {
 		t.Error("a decided request is decided twice")
 	}
 }
@@ -496,17 +500,17 @@ func TestCheck(t *testing.T) {
 func TestGrantAdd(t *testing.T) {
 	s, _ := testServer(t)
 	ctx := t.Context()
-	if err := s.makePrincipal(ctx, "chani"); err != nil {
+	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
 		t.Fatal(err)
 	}
 	if granted, err := s.Grant(ctx, "chani", "marks"); err != nil || len(granted) != 0 {
 		t.Fatalf("an absent grant = %+v, %v", granted, err)
 	}
 	one := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}
-	if err := s.addGrant(ctx, "chani", "marks", []Item{one}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addGrant(ctx, "chani", "marks", []Item{one, {Cap: "marks:write"}}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one, {Cap: "marks:write"}}); err != nil {
 		t.Fatal(err)
 	}
 	granted, err := s.Grant(ctx, "chani", "marks")
@@ -515,7 +519,7 @@ func TestGrantAdd(t *testing.T) {
 	}
 	// A narrowed path is another item.
 	narrowed := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading/Inbox"}}
-	if err := s.addGrant(ctx, "chani", "marks", []Item{narrowed}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{narrowed}); err != nil {
 		t.Fatal(err)
 	}
 	if granted, _ := s.Grant(ctx, "chani", "marks"); len(granted) != 3 {
@@ -655,4 +659,62 @@ func TestRedirectURIs(t *testing.T) {
 			t.Errorf("redirectOrigin(%q) = %q", uri, origin)
 		}
 	}
+}
+
+// steppingClock advances 1 second on every read, so that 2 reads of it in
+// one page disagree.
+type steppingClock struct{ t time.Time }
+
+func (c *steppingClock) now() time.Time {
+	c.t = c.t.Add(time.Second)
+	return c.t
+}
+
+// TestGrantsPageOneClockRead checks that a page's time and its CSRF token
+// come from 1 read of the clock, so that they agree: a revocation with the
+// pair the page holds works.
+func TestGrantsPageOneClockRead(t *testing.T) {
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "lodge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	c := &steppingClock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}
+	s, err := New(t.Context(), Options{DB: db, Apps: fakeApps{}, Issuer: func() string { return "https://lodge.example" }, Now: c.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertClient(t, s, "lgc_test", "test", "chani")
+	if err := s.makePrincipal(t.Context(), s.db, "chani"); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.grantsPage(rec, httptest.NewRequest(http.MethodGet, "/oauth/grants", nil), "alice@example.com")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the grants page: %d %q", rec.Code, rec.Body.String())
+	}
+	csrf, ts := field(rec.Body.String(), "csrf"), field(rec.Body.String(), "ts")
+	if csrf == "" || ts == "" {
+		t.Fatalf("the page holds no CSRF token or no time: %q", rec.Body.String())
+	}
+	if err := s.checkPageCSRF("alice@example.com", csrf, ts); err != nil {
+		t.Errorf("the page's token and time disagree: %v", err)
+	}
+	form := url.Values{"csrf": {csrf}, "ts": {ts}, "client": {"lgc_test"}}
+	r := httptest.NewRequest(http.MethodPost, "/oauth/grants/revoke", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.revokeTarget(w, r, "alice@example.com")
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("the revocation: %d %q", w.Code, w.Body.String())
+	}
+}
+
+// field is a hidden field's value in a page.
+func field(page, name string) string {
+	m := regexp.MustCompile(`name="` + name + `" value="([^"]+)"`).FindStringSubmatch(page)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }

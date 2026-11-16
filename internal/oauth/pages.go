@@ -3,6 +3,7 @@ package oauth
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -153,6 +154,12 @@ func (s *Server) consentPage(w http.ResponseWriter, r *http.Request, id string) 
 	if c, err := s.store.clientRow(ctx, req.Client); err == nil {
 		data.Client = c.Name
 		data.Bound = c.Bound()
+		// A sign-in whose client another approval bound to another principal
+		// can only be declined, and this page cannot decide it.
+		if req.Kind == KindSignin && c.Bound() && c.Principal != req.Principal {
+			writeOneLine(w, http.StatusConflict, (&boundError{client: req.Client, principal: c.Principal}).Error())
+			return
+		}
 	}
 	switch req.Kind {
 	case KindAccess:
@@ -255,20 +262,18 @@ func (s *Server) decideConsent(w http.ResponseWriter, r *http.Request, id, admin
 	}
 }
 
-// approve decides a request, and does what it says: a sign-in answers the
-// client with a code, and an access request adds its items to the grant.
+// approve decides a request, and does what it says: a sign-in binds the
+// client and answers it with a code, and an access request adds its items to
+// the grant. The decision and what it changes are 1 transaction, so a
+// request that cannot go through stays pending and changes nothing
+// (docs/specs/oauth.md, The consent page).
 func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, admin string) {
 	ctx := r.Context()
-	var err error
 	switch req.Kind {
 	case KindSignin:
-		var (
-			principal string
-			scopes    []string
-		)
-		principal, scopes, err = s.signinChoice(r, req)
+		principal, scopes, err := s.signinChoice(r, req)
 		if err != nil {
-			writeOneLine(w, http.StatusBadRequest, err.Error())
+			s.choiceRefused(w, err)
 			return
 		}
 		// The authorization request is rebuilt and checked before anything
@@ -280,16 +285,15 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			writeOneLine(w, http.StatusBadRequest, "the request cannot be answered any more: "+oneLine(err.Error()))
 			return
 		}
-		if ok, derr := s.decide(ctx, req.ID, DecisionApprove); !ok {
-			s.notDecided(w, derr, req.ID)
+		if err := s.refuse(w, req, s.inTx(ctx, func(tx *sql.Tx) error {
+			if ok, derr := s.decide(ctx, tx, req.ID, DecisionApprove); !ok {
+				return notDecidedError{derr}
+			}
+			return s.approveSignin(ctx, tx, req, principal, scopes)
+		})); err != nil {
 			return
 		}
 		s.log.Info("sign-in approved", "request", req.ID, "client", req.Client, "principal", principal, "scopes", joinScopes(scopes), "admin", admin)
-		if err := s.approveSignin(ctx, req, principal, scopes); err != nil {
-			s.log.Error("approve a sign-in", "request", req.ID, "err", err)
-			writeOneLine(w, http.StatusInternalServerError, "lodge cannot bind the client")
-			return
-		}
 		s.answerSignin(ctx, w, ar, req, principal, scopes)
 	case KindAccess:
 		items, err := s.accessChoice(r, req)
@@ -297,21 +301,75 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			writeOneLine(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if ok, derr := s.decide(ctx, req.ID, DecisionApprove); !ok {
-			s.notDecided(w, derr, req.ID)
+		if err := s.refuse(w, req, s.inTx(ctx, func(tx *sql.Tx) error {
+			if ok, derr := s.decide(ctx, tx, req.ID, DecisionApprove); !ok {
+				return notDecidedError{derr}
+			}
+			return s.addGrant(ctx, tx, req.Principal, req.App, items)
+		})); err != nil {
 			return
 		}
 		s.log.Info("access approved", "request", req.ID, "client", req.Client, "principal", req.Principal, "app", req.App, "items", len(items), "admin", admin)
-		if err := s.addGrant(ctx, req.Principal, req.App, items); err != nil {
-			s.log.Error("add a grant", "request", req.ID, "err", err)
-			writeOneLine(w, http.StatusInternalServerError, "lodge cannot write the grant")
-			return
-		}
 		w.Header().Set("Location", "/oauth/grants")
 		w.WriteHeader(http.StatusSeeOther)
 	default:
 		writeOneLine(w, http.StatusBadRequest, "no request kind "+string(req.Kind))
 	}
+}
+
+// notDecidedError is a decision another one won, or one that came too late.
+type notDecidedError struct{ err error }
+
+func (e notDecidedError) Error() string { return "this request was decided already" }
+
+// inTx runs f in 1 transaction, and commits it when f returns nil.
+func (s *Server) inTx(ctx context.Context, f func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("oauth: begin a decision: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := f(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("oauth: commit a decision: %w", err)
+	}
+	return nil
+}
+
+// refuse answers a decision that changed nothing: a client another approval
+// bound is 409, a request another decision took is 409, and any other
+// failure is 500.
+func (s *Server) refuse(w http.ResponseWriter, req Request, err error) error {
+	var (
+		be *boundError
+		nd notDecidedError
+	)
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &be):
+		writeOneLine(w, http.StatusConflict, be.Error())
+		return err
+	case errors.As(err, &nd):
+		s.notDecided(w, nd.err, req.ID)
+		return err
+	}
+	s.log.Error("decide a request", "request", req.ID, "err", err)
+	writeOneLine(w, http.StatusInternalServerError, "lodge cannot decide the request")
+	return err
+}
+
+// choiceRefused answers a form that breaks a rule: 400 with one line, and
+// the request stays pending. A client bound to another principal is 409.
+func (s *Server) choiceRefused(w http.ResponseWriter, err error) {
+	var be *boundError
+	if errors.As(err, &be) {
+		writeOneLine(w, http.StatusConflict, be.Error())
+		return
+	}
+	writeOneLine(w, http.StatusBadRequest, err.Error())
 }
 
 // signinChoice is a sign-in's principal and scopes, from the form.
@@ -320,10 +378,15 @@ func (s *Server) signinChoice(r *http.Request, req Request) (string, []string, e
 	principal := strings.TrimSpace(r.PostForm.Get("principal"))
 	bound, err := s.boundPrincipal(ctx, req.Client)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		return "", nil, fmt.Errorf("lodge cannot read the client")
+		return "", nil, fmt.Errorf("lodge cannot read the client: %w", err)
 	}
-	// A bound client keeps its principal.
 	if bound != "" {
+		// A client is bound for good: a decision for another principal than
+		// the one the page showed and the hash covers is refused, never
+		// taken silently (ADR-0023).
+		if bound != req.Principal {
+			return "", nil, &boundError{client: req.Client, principal: bound}
+		}
 		principal = bound
 	}
 	if !ValidPrincipal(principal) {
@@ -428,7 +491,7 @@ func (s *Server) decline(w http.ResponseWriter, r *http.Request, req Request, ad
 			return
 		}
 	}
-	if ok, err := s.decide(ctx, req.ID, DecisionDecline); !ok {
+	if ok, err := s.decide(ctx, s.db, req.ID, DecisionDecline); !ok {
 		s.notDecided(w, err, req.ID)
 		return
 	}
@@ -492,8 +555,11 @@ func (s *Server) grantsPage(w http.ResponseWriter, r *http.Request, admin string
 		writeOneLine(w, http.StatusInternalServerError, "lodge cannot read the principals")
 		return
 	}
-	ts := s.pageStamp()
-	data := grantsData{CSRF: s.pageCSRF(admin, s.now().Unix()), TS: ts}
+	// One read of the clock makes both the page's time and its token, which
+	// checkPageCSRF compares: 2 reads could disagree.
+	now := s.now()
+	ts := now.Unix()
+	data := grantsData{CSRF: s.pageCSRF(admin, ts), TS: strconv.FormatInt(ts, 10)}
 	for _, p := range list {
 		pd := principalData{Name: p.Name, Created: pageWhen(p.Created)}
 		clients, err := s.store.clients(ctx, p.Name)

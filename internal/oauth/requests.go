@@ -253,11 +253,18 @@ func (s *Server) pendingRequests(ctx context.Context) ([]Request, error) {
 	return out, nil
 }
 
-// decide records a decision, and reports whether this call made it: a
+// querier runs a statement: lodge's database, or the transaction a decision
+// holds.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// decide records a decision in q, and reports whether this call made it: a
 // request is decided once, while it is pending and unexpired.
-func (s *Server) decide(ctx context.Context, id, decision string) (bool, error) {
+func (s *Server) decide(ctx context.Context, q querier, id, decision string) (bool, error) {
 	now := stamp(s.now())
-	res, err := s.db.ExecContext(ctx, `UPDATE consent_requests SET decided_at = ?, decision = ?
+	res, err := q.ExecContext(ctx, `UPDATE consent_requests SET decided_at = ?, decision = ?
 		WHERE id = ? AND decided_at IS NULL AND expires_at > ?`, now, decision, id, now)
 	if err != nil {
 		return false, fmt.Errorf("oauth: decide a request: %w", err)
@@ -365,9 +372,21 @@ func (s *Server) createSigninRequest(ctx context.Context, clientID string, scope
 // expires reports whether the request may no longer be decided.
 func (r Request) expires(now time.Time) bool { return !now.Before(r.Expires) }
 
+// boundError is a client that another approval bound to another principal:
+// the request can only be declined.
+type boundError struct {
+	client, principal string
+}
+
+func (e *boundError) Error() string {
+	return fmt.Sprintf("client %s is bound to principal %s: decline this request", e.client, e.principal)
+}
+
 // approveSignin binds the client to the principal with the scopes, and
-// creates or revives the principal.
-func (s *Server) approveSignin(ctx context.Context, req Request, principal string, scopes []string) error {
+// creates or revives the principal, in q: with the decision, in 1
+// transaction. A client another approval bound stays as it is, and
+// boundError says so.
+func (s *Server) approveSignin(ctx context.Context, q querier, req Request, principal string, scopes []string) error {
 	if !ValidPrincipal(principal) {
 		return fmt.Errorf("principal %q is not a name: %w", principal, ErrInvalid)
 	}
@@ -379,25 +398,39 @@ func (s *Server) approveSignin(ctx context.Context, req Request, principal strin
 			return fmt.Errorf("scope %q was not asked for: %w", sc, ErrInvalid)
 		}
 	}
-	if err := s.makePrincipal(ctx, principal); err != nil {
+	if err := s.makePrincipal(ctx, q, principal); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE oauth_clients SET principal = ?, scope = ? WHERE id = ?`,
-		principal, joinScopes(scopes), req.Client); err != nil {
+	// A client is bound by its first approved sign-in, and never rebound.
+	res, err := q.ExecContext(ctx, `UPDATE oauth_clients SET principal = ?, scope = ?
+		WHERE id = ? AND revoked_at IS NULL AND (principal IS NULL OR principal = ?)`,
+		principal, joinScopes(scopes), req.Client, principal)
+	if err != nil {
 		return fmt.Errorf("oauth: bind a client: %w", err)
+	}
+	switch n, err := res.RowsAffected(); {
+	case err != nil:
+		return fmt.Errorf("oauth: bind a client: %w", err)
+	case n == 0:
+		// Somebody else bound it: report who it is bound to now.
+		bound, err := s.boundPrincipalIn(ctx, q, req.Client)
+		if err != nil {
+			return err
+		}
+		return &boundError{client: req.Client, principal: bound}
 	}
 	return nil
 }
 
-// makePrincipal creates the principal, or revives a revoked one, which then
-// starts with no grant.
-func (s *Server) makePrincipal(ctx context.Context, name string) error {
+// makePrincipal creates the principal in q, or revives a revoked one, which
+// then starts with no grant.
+func (s *Server) makePrincipal(ctx context.Context, q querier, name string) error {
 	now := stamp(s.now())
 	var revoked sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT revoked_at FROM principals WHERE name = ?`, name).Scan(&revoked)
+	err := q.QueryRowContext(ctx, `SELECT revoked_at FROM principals WHERE name = ?`, name).Scan(&revoked)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO principals (name, created_at) VALUES (?, ?)`, name, now); err != nil {
+		if _, err := q.ExecContext(ctx, `INSERT INTO principals (name, created_at) VALUES (?, ?)`, name, now); err != nil {
 			return fmt.Errorf("oauth: make a principal: %w", err)
 		}
 		return nil
@@ -406,10 +439,10 @@ func (s *Server) makePrincipal(ctx context.Context, name string) error {
 	case !revoked.Valid:
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE principals SET revoked_at = NULL, created_at = ? WHERE name = ?`, now, name); err != nil {
+	if _, err := q.ExecContext(ctx, `UPDATE principals SET revoked_at = NULL, created_at = ? WHERE name = ?`, now, name); err != nil {
 		return fmt.Errorf("oauth: revive a principal: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM grants WHERE principal = ?`, name); err != nil {
+	if _, err := q.ExecContext(ctx, `DELETE FROM grants WHERE principal = ?`, name); err != nil {
 		return fmt.Errorf("oauth: clear a revived principal's grants: %w", err)
 	}
 	return nil
@@ -417,8 +450,13 @@ func (s *Server) makePrincipal(ctx context.Context, name string) error {
 
 // boundPrincipal is the principal a client is bound to, or "".
 func (s *Server) boundPrincipal(ctx context.Context, clientID string) (string, error) {
+	return s.boundPrincipalIn(ctx, s.db, clientID)
+}
+
+// boundPrincipalIn is the principal a client is bound to, read in q.
+func (s *Server) boundPrincipalIn(ctx context.Context, q querier, clientID string) (string, error) {
 	var principal sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT principal FROM oauth_clients WHERE id = ? AND revoked_at IS NULL`, clientID).Scan(&principal)
+	err := q.QueryRowContext(ctx, `SELECT principal FROM oauth_clients WHERE id = ? AND revoked_at IS NULL`, clientID).Scan(&principal)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	} else if err != nil {

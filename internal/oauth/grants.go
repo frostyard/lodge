@@ -177,18 +177,13 @@ func (s *storage) grants(ctx context.Context, principal string) (map[string][]It
 	return out, rows.Err()
 }
 
-// addGrant adds items to the principal's grant for app, without adding an
-// exact duplicate twice. It holds the database while it reads and writes, so
-// that two decisions at once keep both sets of items.
-func (s *Server) addGrant(ctx context.Context, principal, app string, items []Item) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("oauth: begin a grant: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+// addGrant adds items to the principal's grant for app in q, without adding
+// an exact duplicate twice. An approval calls it in the request's own
+// transaction, so the decision and the grant go together.
+func (s *Server) addGrant(ctx context.Context, q querier, principal, app string, items []Item) error {
 	have := []Item{}
 	var text string
-	err = tx.QueryRowContext(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
+	err := q.QueryRowContext(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -207,13 +202,10 @@ func (s *Server) addGrant(ctx context.Context, principal, app string, items []It
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO grants (principal, app, items, updated_at) VALUES (?, ?, ?, ?)
+	if _, err := q.ExecContext(ctx, `INSERT INTO grants (principal, app, items, updated_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT (principal, app) DO UPDATE SET items = excluded.items, updated_at = excluded.updated_at`,
 		principal, app, string(encoded), stamp(s.now())); err != nil {
 		return fmt.Errorf("oauth: write a grant: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("oauth: commit a grant: %w", err)
 	}
 	if s.onGrant != nil {
 		s.onGrant(principal, app)
