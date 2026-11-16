@@ -55,9 +55,11 @@ lodge reads the file at start. After a change, reload it:
 sudo lodgectl reload
 ```
 
-lodge refuses a configuration that breaks a rule, keeps serving everything
-else, and `lodgectl status` shows the reason. The full rules are in the
-inference spec's
+lodge refuses a configuration that breaks a rule and keeps serving everything
+else; `lodgectl status` shows the reason for the agents and the inference
+layer. A `broker` member that breaks a rule, or a broker that cannot start,
+shows in lodge's log instead, and the broker stays off. The full rules are in
+the inference spec's
 [Configuration](https://github.com/frostyard/lodge/blob/main/docs/specs/inference.md#configuration),
 the HTTP spec's
 [agent socket](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#the-agent-socket)

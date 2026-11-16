@@ -65,8 +65,26 @@ func (g *Gateway) nats(w http.ResponseWriter, r *http.Request, who peer.WhoIs) {
 		return
 	}
 	g.log.Info("broker client", "node", p.NodeName, "login", p.Login)
-	c.SetReadLimit(MaxBrokerMessage)
 	nc := websocket.NetConn(r.Context(), c, websocket.MessageBinary)
-	defer nc.Close()
-	g.cfg.Broker.ServeClient(r.Context(), nc)
+	// NetConn turns the read limit off, so lodge sets it after it: the
+	// broker's payload cap holds on this door too.
+	c.SetReadLimit(MaxBrokerMessage)
+	bc := &brokerConn{Conn: nc, ws: c}
+	defer bc.Close()
+	g.cfg.Broker.ServeClient(r.Context(), bc)
+}
+
+// brokerConn is the broker's side of /nats. Its Close ends the connection at
+// once: a revoke must not wait for a peer's close handshake, which an
+// uncooperative peer can stretch for seconds.
+type brokerConn struct {
+	net.Conn
+	ws *websocket.Conn
+}
+
+// Close ends the WebSocket now, without a close handshake.
+func (c *brokerConn) Close() error {
+	err := c.ws.CloseNow()
+	_ = c.Conn.Close()
+	return err
 }

@@ -550,7 +550,9 @@ listener of its own.
   6. **Peer:** [identity checks](#identity) a and b, as for an agent
      request.
   7. Otherwise lodge upgrades, caps a message at 64 KiB, and hands the
-     connection to the broker.
+     connection to the broker. The cap is the WebSocket's read limit,
+     set after the wrapper that would turn it off, so a message over it
+     ends the connection with `1009` (message too big).
 
   The `CONNECT` line's `auth_token` names the client. **lodge issues no
   event token yet,** so every client is refused with
@@ -581,18 +583,25 @@ listener of its own.
   **A subscription stays on 1 app:** subscribing the same client and
   subscription name to another app is refused, with an error that asks
   for an unsubscribe first, and that unsubscribe deletes the consumer it
-  has. Subscribing it again to the same app updates its filters.
+  has. Subscribing it again to the same app updates its filters. A
+  client's subscribe, unsubscribe and revoke run 1 at a time, so the check
+  and the consumer it makes are 1 step.
 - **A subscription change reconnects the client:** its permission names
   its consumers.
 - **Revoking a client closes it first.** lodge takes the client out of
   its index, closes its connections at once, and deletes its consumers
   after that, concurrently and within 1 s: a consumer's deletion can wait
   for the server's own 5 s API timeout, and a revoked client must not
-  stay connected meanwhile. A consumer that is not deleted in time is
-  kept in a set that no connection's authentication reads, and the
-  client's next revoke, or a subscription for it, tries again. The next
-  start restores it from its metadata, and a revoke there finds it, so a
-  revoked client keeps no consumer for good.
+  stay connected meanwhile. A `/nats` WebSocket ends with no close
+  handshake, so a peer that answers nothing delays neither the revoke nor
+  the other connections. A consumer that is not deleted in time is kept in
+  a set that no connection's authentication reads, and the client's next
+  revoke tries again. The next start restores it from its metadata, and a
+  revoke there finds it, so a revoked client keeps no consumer for good.
+- **A subscription waits for a kept cleanup.** A subscribe of that client
+  deletes the kept consumers first, and fails while 1 stays, so that no
+  ref outlives it to delete a consumer it makes or to orphan one on
+  another app.
 - **Connections.** An app or a client holds at most 64 connections at
   once; past that a connection is refused. The socket's
   [limits](#connections) do not apply to it: the broker counts an

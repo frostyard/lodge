@@ -60,7 +60,9 @@
     from it, and the refusal is logged at most once a minute per uid.
   - `/nats` on lodge's `lodge` node: a WebSocket, `GET` only, with a
     named tailnet peer, no `Origin`, no second listener. A browser is
-    refused: its token would have to live in a page.
+    refused: its token would have to live in a page. A message over 64 KiB
+    ends the connection, as on the server itself: the WebSocket's read
+    limit is set after the wrapper that turns it off.
 - **lodge reads 1 protocol line, never a message.** On either door it
   reads the connection's `CONNECT` line (at most 8 KiB), decides the
   identity, removes `auth_token`, `user`, `pass`, `jwt`, `nkey` and
@@ -100,6 +102,10 @@
     subscribing the same client and subscription name to another app is
     refused, with an error that asks for an unsubscribe first. Subscribing
     it again to the same app updates its filters.
+  - **A client's subscription operations run 1 at a time.** A per-client
+    lock holds a subscribe, an unsubscribe and a revoke, so the one-app
+    check and the consumer it makes are 1 step: 2 subscribes of the same
+    client and subscription leave 1 consumer, not 1 per app.
 - **Permissions are fixed when a connection opens.** A subscription,
   an unsubscribe and a revoke close the client's connections, so it
   reconnects with the new permissions.
@@ -107,10 +113,17 @@
   of lodge's index, closes its connections at once, and only then deletes
   its consumers, concurrently and within 1 s: a consumer's deletion can
   wait for the server's own 5 s API timeout, and a revoked client must
-  not stay connected meanwhile. A deletion that fails is kept in a set
-  the authentication never reads, and the client's next revoke, or a
-  subscription for it, tries again; the consumer's metadata also brings
-  it back at the next start, where a revoke finds it.
+  not stay connected meanwhile.
+  - A WebSocket ends now, with no close handshake, so an uncooperative
+    peer cannot delay the revoke for its 5 s, and the connections close
+    together rather than 1 after another.
+  - A deletion that fails is kept in a set the authentication never
+    reads, and the client's next revoke tries again. The consumer's
+    metadata also brings it back at the next start, where a revoke finds
+    it.
+  - A subscription of that client waits for the kept consumers to go
+    first, and fails rather than create a consumer that a kept ref could
+    delete later or orphan on another app.
 - **lodge issues no event token yet.** `/nats` answers every client with
   `-ERR 'Authorization Violation'` until lodge has a token to issue: the
   door, the proxy and the accounts are the whole of it for now.

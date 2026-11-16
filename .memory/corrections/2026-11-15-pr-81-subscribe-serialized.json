@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A client's subscribe, unsubscribe and revoke run 1 at a time under a per-client lock, so the one-app check and the consumer it makes are 1 step: 2 concurrent subscribes of the same client and subscription otherwise make 1 consumer per app. Creating an account must also answer the one another caller made in between (server.ErrAccountExists).",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 529b7c3, finding 2",
+  "promoted_to": "internal/broker: TestSubscribeIsSerialized"
+}

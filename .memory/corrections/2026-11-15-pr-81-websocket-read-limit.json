@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-15",
+  "scope": "internal/broker",
+  "correction": "A WebSocket read limit set before websocket.NetConn is lost: NetConn sets it to -1. Set the broker's 64 KiB cap after NetConn, so a message over it ends the connection with 1009.",
+  "evidence": "frostyard/lodge#81, cross-review (openai/gpt-6.1-sol) of head 529b7c3, finding 3",
+  "promoted_to": "internal/gateway: TestNatsMessageCap"
+}
