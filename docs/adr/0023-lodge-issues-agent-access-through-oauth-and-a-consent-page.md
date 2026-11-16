@@ -68,8 +68,10 @@
   of it is in lodge's database in `/var/lib/lodge/`.
 - **The consent page amends 2 rules of lodge-http.md.** "No browser route
   writes" gains 1 exception, and "issuing a token … happen only on the
-  control socket" gains 1 exception: the consent and grants pages, under
-  these conditions together:
+  control socket" gains 1 exception: the consent routes, under these
+  conditions together. `/oauth/authorize` only records a pending request,
+  which grants nothing; the writes that grant or take away access are a
+  decision on the consent page and a revocation on the grants page.
   - **Only an admin approves.** `lodgectl allow admin LOGIN` and
     `lodgectl disallow admin LOGIN` keep a list of admin logins, on the
     control socket only. A page that approves, declines or revokes
@@ -78,10 +80,13 @@
     admin's.
   - **Each decision is a `POST` from lodge's own page:** `Origin` is
     exactly lodge's, and `Sec-Fetch-Site` is present and `same-origin`.
-  - **Each carries a CSRF token** that only lodge's page of that request
-    holds, and **the hash of the exact request**: the client, the
-    principal, the app, the capabilities and the selectors that the page
-    showed. lodge refuses a decision whose hash is not the request's.
+  - **Each carries a CSRF token.** A decision carries the token that only
+    lodge's page of that request holds, and **the hash of the exact
+    request**: the client, the principal, the app, the capabilities and
+    the selectors that the page showed. lodge refuses a decision whose
+    hash is not the request's. A revocation carries the grants page's
+    token, which covers the admin's login and a time, and expires after
+    1 hour.
   - **A request is decided once,** and a pending request expires after
     24 hours.
   - **The pages run no script,** cannot be framed, and send no referrer

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "A code or a refresh token is consumed by 1 conditional update whose failure revokes the family durably, after fosite's rollback; a revocation cascade runs in 1 transaction; and an inner rollback poisons the outer transaction, which then rolls back and says so.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) of head 4b50c66, batch 2 findings 1, 2, 3, 5, 6 and 7",
+  "promoted_to": "internal/oauth/oauth_test.go TestTokenSingleUseIsAtomic, TestNestedRollback and TestReadsUseTheTransaction; internal/gateway/oauth_test.go TestOAuthRefreshSingleUse, TestOAuthCodeSingleUse, TestOAuthRevokePrincipalThenRevive and TestOAuthSweepKeepsReplayEvidence"
+}

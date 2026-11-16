@@ -185,9 +185,11 @@ disabled, and why) feeds `/lodge/apps` and `lodgectl apps`.
   Frontends keep their sessions alive by sending traffic while visible.
 - **Writes.** No browser route but the WebSocket accepts anything but
   `GET` and `HEAD`, so a forged cross-site request finds nothing that
-  writes. The one exception is the consent page's `POST`: only an admin's
-  login, from lodge's own page, with the request's CSRF token and hash
-  ([Agents](#agents)).
+  writes. The one exception is the consent routes, for an admin's login
+  only ([Agents](#agents)): `/oauth/authorize` records a pending request,
+  which grants nothing; a decision is a `POST` from lodge's own page with
+  that request's CSRF token and hash; and a revocation is a `POST` from the
+  grants page with its CSRF token.
 
 ### Agents
 

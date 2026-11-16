@@ -138,6 +138,10 @@ type Options struct {
 	// OnRevoke is called after a client or a principal was revoked: the
 	// principal, and the clients that went with it.
 	OnRevoke func(principal string, clients []string)
+	// BeforeDecision, when it is set, is called between a sign-in's choice
+	// and the transaction that decides it. internal/gateway's tests use it to
+	// hold 2 approvals at once; lodge leaves it nil.
+	BeforeDecision func()
 }
 
 // Server is lodge's OAuth authorization server and its pages.
@@ -149,6 +153,8 @@ type Server struct {
 	log      *slog.Logger
 	onGrant  func(principal, app string)
 	onRevoke func(principal string, clients []string)
+	// beforeDecision is Options.BeforeDecision: a test's seam, nil in lodge.
+	beforeDecision func()
 
 	provider fosite.OAuth2Provider
 	strategy *strategy
@@ -166,7 +172,8 @@ func New(ctx context.Context, o Options) (*Server, error) {
 	if o.Issuer == nil {
 		return nil, errors.New("oauth: no issuer")
 	}
-	s := &Server{db: o.DB, apps: o.Apps, issuer: o.Issuer, log: o.Log, onGrant: o.OnGrant, onRevoke: o.OnRevoke}
+	s := &Server{db: o.DB, apps: o.Apps, issuer: o.Issuer, log: o.Log, onGrant: o.OnGrant, onRevoke: o.OnRevoke,
+		beforeDecision: o.BeforeDecision}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
@@ -181,7 +188,7 @@ func New(ctx context.Context, o Options) (*Server, error) {
 	if s.pagesKey, err = s.key(ctx, "pages"); err != nil {
 		return nil, err
 	}
-	s.store = &storage{db: o.DB, now: s.now}
+	s.store = &storage{db: o.DB, now: s.now, log: s.log}
 	cfg := &fosite.Config{
 		AccessTokenLifespan:            AccessTokenLifespan,
 		RefreshTokenLifespan:           RefreshTokenLifespan,
@@ -272,16 +279,22 @@ func (s *Server) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := s.sweep(ctx); err != nil {
+			if err := s.Sweep(ctx); err != nil {
 				s.log.Warn("oauth sweep", "err", err)
 			}
 		}
 	}
 }
 
-// sweep deletes the expired sessions, the unbound clients older than 24
-// hours, and the requests that were decided or expired 24 hours ago
-// (docs/specs/oauth.md, State).
+// Sweep deletes what expired: the sessions, the unbound clients older than
+// 24 hours, and the requests that were decided or expired 24 hours ago
+// (docs/specs/oauth.md, State). Run calls it every hour.
+func (s *Server) Sweep(ctx context.Context) error { return s.sweep(ctx) }
+
+// sweep does the work Sweep names. An inactive code or refresh token is kept
+// while its family holds an active token that has not expired: it is the
+// evidence that the token was used, which revokes the family when someone
+// presents it again.
 func (s *Server) sweep(ctx context.Context) error {
 	now := s.now().UTC()
 	for _, q := range []struct {
@@ -289,7 +302,12 @@ func (s *Server) sweep(ctx context.Context) error {
 		sql  string
 		arg  []any
 	}{
-		{"sessions", `DELETE FROM oauth_sessions WHERE expires_at <= ?`, []any{stamp(now)}},
+		{"sessions", `DELETE FROM oauth_sessions WHERE expires_at <= ?
+			AND (kind IN ('` + kindAccess + `', '` + kindPKCE + `')
+			     OR NOT EXISTS (SELECT 1 FROM oauth_sessions AS f
+			                     WHERE f.request_id = oauth_sessions.request_id
+			                       AND f.active = 1 AND f.expires_at > ?))`,
+			[]any{stamp(now), stamp(now)}},
 		{"unbound clients", `DELETE FROM oauth_clients WHERE principal IS NULL AND registered_at <= ?`,
 			[]any{stamp(now.Add(-unboundClientLifespan))}},
 		{"requests", `DELETE FROM consent_requests WHERE COALESCE(decided_at, expires_at) <= ?`,

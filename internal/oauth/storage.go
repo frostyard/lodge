@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 type storage struct {
 	db  *sql.DB
 	now func() time.Time
+	log *slog.Logger
 }
 
 var (
@@ -44,6 +46,13 @@ var (
 type txState struct {
 	tx    *sql.Tx
 	depth int
+	// poisoned is set when an inner Rollback undid part of the work, which
+	// this one transaction cannot undo alone: the outer Commit rolls back.
+	poisoned error
+	// families are the token families whose token was used twice in this
+	// transaction. fosite rolls the transaction back, so they are revoked
+	// once it is gone.
+	families []string
 }
 
 type txKey struct{}
@@ -62,34 +71,117 @@ func (s *storage) BeginTX(ctx context.Context) (context.Context, error) {
 	return context.WithValue(ctx, txKey{}, &txState{tx: tx, depth: 1}), nil
 }
 
-// Commit commits the outermost transaction of this context.
+// Commit commits the outermost transaction of this context. A transaction
+// an inner Rollback poisoned rolls back instead, and says so.
 func (s *storage) Commit(ctx context.Context) error {
 	st, ok := ctx.Value(txKey{}).(*txState)
-	if !ok {
+	if !ok || st.depth <= 0 {
 		return nil
 	}
 	if st.depth--; st.depth > 0 {
 		return nil
+	}
+	if st.poisoned != nil {
+		_ = st.tx.Rollback()
+		s.revokeFamilies(ctx, st.families)
+		return fmt.Errorf("oauth: commit a transaction that was rolled back inside it: %w", st.poisoned)
 	}
 	if err := st.tx.Commit(); err != nil {
 		return fmt.Errorf("oauth: commit: %w", err)
 	}
+	s.revokeFamilies(ctx, st.families)
 	return nil
 }
 
-// Rollback rolls back the outermost transaction of this context.
+// Rollback rolls back the outermost transaction of this context, and any
+// inner one poisons it. The families whose token was used twice are revoked
+// after the rollback, so that the revocation outlives fosite's transaction.
 func (s *storage) Rollback(ctx context.Context) error {
 	st, ok := ctx.Value(txKey{}).(*txState)
-	if !ok {
+	if !ok || st.depth <= 0 {
 		return nil
 	}
 	if st.depth--; st.depth > 0 {
+		st.poisoned = errors.New("a transaction inside it was rolled back")
 		return nil
 	}
-	if err := st.tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+	err := st.tx.Rollback()
+	s.revokeFamilies(ctx, st.families)
+	if err != nil && !errors.Is(err, sql.ErrTxDone) {
 		return fmt.Errorf("oauth: roll back: %w", err)
 	}
 	return nil
+}
+
+// revokeFamilies revokes each family durably: fosite's transaction is gone,
+// so the revocation is not undone with it.
+func (s *storage) revokeFamilies(ctx context.Context, families []string) {
+	if len(families) == 0 {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	for _, family := range families {
+		if err := s.revokeFamily(ctx, family); err != nil {
+			s.log.Error("revoke a token family after its reuse", "family", family, "err", err)
+		}
+	}
+}
+
+// revokeFamily marks every refresh token of a family inactive, and deletes
+// its access tokens, in a transaction of its own.
+func (s *storage) revokeFamily(ctx context.Context, family string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("oauth: begin a revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txctx := context.WithValue(ctx, txKey{}, &txState{tx: tx, depth: 1})
+	if err := s.RevokeRefreshToken(txctx, family); err != nil && !errors.Is(err, fosite.ErrNotFound) {
+		return err
+	}
+	if err := s.RevokeAccessToken(txctx, family); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("oauth: commit a revocation: %w", err)
+	}
+	return nil
+}
+
+// markReused records a family whose code or refresh token was used twice, and
+// returns the error the token endpoint reports: it names use, fosite's own
+// error for the presented kind, and errTokenReused. The revocation runs when
+// fosite's transaction, which it rolls back, is gone.
+func (s *storage) markReused(ctx context.Context, family string, use error) error {
+	if st, ok := ctx.Value(txKey{}).(*txState); ok && st.depth > 0 {
+		st.families = append(st.families, family)
+	} else if err := s.revokeFamily(context.WithoutCancel(ctx), family); err != nil {
+		s.log.Error("revoke a token family after its reuse", "family", family, "err", err)
+	}
+	return &reusedError{family: family, use: use}
+}
+
+// errTokenReused means a code or a refresh token that another request
+// consumed was presented.
+var errTokenReused = errors.New("oauth: the token was already used")
+
+// reusedError is a code or refresh token that was used already: its family
+// is revoked, and the token endpoint answers invalid_grant.
+type reusedError struct {
+	family string
+	// use is fosite's own error for the presented kind, which its flows
+	// decide by.
+	use error
+}
+
+func (e *reusedError) Error() string {
+	return "oauth: the token was already used: family " + e.family
+}
+
+// Unwrap answers both errors: fosite's own for the presented kind, and
+// errTokenReused, which the token endpoint answers invalid_grant for.
+func (e *reusedError) Unwrap() []error {
+	return []error{e.use, errTokenReused}
 }
 
 func txOf(ctx context.Context) *sql.Tx {
@@ -114,6 +206,33 @@ func (s *storage) queryRow(ctx context.Context, q string, args ...any) *sql.Row 
 		return tx.QueryRowContext(ctx, q, args...)
 	}
 	return s.db.QueryRowContext(ctx, q, args...)
+}
+
+// query runs a query in fosite's transaction when there is one.
+func (s *storage) query(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+	if tx := txOf(ctx); tx != nil {
+		return tx.QueryContext(ctx, q, args...)
+	}
+	return s.db.QueryContext(ctx, q, args...)
+}
+
+// querier runs a statement or a query: lodge's database, or a transaction.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// at returns the querier a statement runs in: q when it is given, else
+// fosite's transaction, else the database.
+func (s *storage) at(ctx context.Context, q querier) querier {
+	if q != nil {
+		return q
+	}
+	if tx := txOf(ctx); tx != nil {
+		return tx
+	}
+	return s.db
 }
 
 // GetClient returns client id, which is always a public client; a revoked
@@ -333,31 +452,45 @@ func (s *storage) CreateAuthorizeCodeSession(ctx context.Context, code string, r
 	return s.create(ctx, kindCode, code, req, nil)
 }
 
-// GetAuthorizeCodeSession returns the request of code. An invalidated code
-// answers its request and fosite.ErrInvalidatedAuthorizeCode.
+// GetAuthorizeCodeSession returns the request of code. A code that another
+// exchange consumed is a reuse: it answers its request, the error fosite's
+// code flow acts on, and its family is revoked.
 func (s *storage) GetAuthorizeCodeSession(ctx context.Context, code string, session fosite.Session) (fosite.Requester, error) {
 	req, r, err := s.get(ctx, kindCode, code, session)
 	if err != nil {
 		return nil, err
 	}
 	if !r.active {
-		return req, fosite.ErrInvalidatedAuthorizeCode
+		return req, s.markReused(ctx, r.requestID, fosite.ErrInvalidatedAuthorizeCode)
 	}
 	return req, nil
 }
 
-// InvalidateAuthorizeCodeSession marks code used.
+// InvalidateAuthorizeCodeSession consumes code: 1 conditional update, so
+// that 1 exchange wins. A code another exchange consumed revokes its family,
+// and no token is issued for it.
 func (s *storage) InvalidateAuthorizeCodeSession(ctx context.Context, code string) error {
-	res, err := s.exec(ctx, `UPDATE oauth_sessions SET active = 0 WHERE kind = ? AND signature = ?`, kindCode, code)
+	res, err := s.exec(ctx, `UPDATE oauth_sessions SET active = 0 WHERE kind = ? AND signature = ? AND active = 1`,
+		kindCode, code)
 	if err != nil {
 		return fmt.Errorf("oauth: invalidate a code: %w", err)
 	}
-	if n, err := res.RowsAffected(); err != nil {
+	n, err := res.RowsAffected()
+	if err != nil {
 		return fmt.Errorf("oauth: invalidate a code: %w", err)
-	} else if n == 0 {
-		return fosite.ErrNotFound
 	}
-	return nil
+	if n == 1 {
+		return nil
+	}
+	var family string
+	switch err := s.queryRow(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
+		kindCode, code).Scan(&family); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fosite.ErrNotFound
+	case err != nil:
+		return fmt.Errorf("oauth: read a used code: %w", err)
+	}
+	return s.markReused(ctx, family, fosite.ErrInvalidatedAuthorizeCode)
 }
 
 // CreateAccessTokenSession stores the request under signature.
@@ -428,11 +561,24 @@ func (s *storage) RevokeAccessToken(ctx context.Context, requestID string) error
 	return nil
 }
 
-// RotateRefreshToken invalidates the family's refresh tokens and deletes
-// its access tokens, before the flow stores the new pair.
-func (s *storage) RotateRefreshToken(ctx context.Context, requestID, _ string) error {
-	if err := s.RevokeRefreshToken(ctx, requestID); err != nil && !errors.Is(err, fosite.ErrNotFound) {
-		return err
+// RotateRefreshToken consumes the present refresh token in 1 conditional
+// update, before the flow stores the new pair, and deletes the family's
+// access tokens. A token another request consumed revokes the family, and no
+// pair is issued.
+func (s *storage) RotateRefreshToken(ctx context.Context, requestID, signature string) error {
+	res, err := s.exec(ctx, `UPDATE oauth_sessions SET active = 0 WHERE kind = ? AND signature = ? AND active = 1`,
+		kindRefresh, signature)
+	if err != nil {
+		return fmt.Errorf("oauth: rotate a refresh token: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("oauth: rotate a refresh token: %w", err)
+	}
+	if n == 0 {
+		// A concurrent request consumed it, or it was replayed: the family
+		// goes, and this one gets no pair.
+		return s.markReused(ctx, requestID, fosite.ErrInactiveToken)
 	}
 	return s.RevokeAccessToken(ctx, requestID)
 }
@@ -454,9 +600,9 @@ func (s *storage) GetPKCERequestSession(ctx context.Context, signature string, s
 // code, and the sweep deletes it.
 func (s *storage) DeletePKCERequestSession(context.Context, string) error { return nil }
 
-// deleteClientSessions deletes every session of a client.
-func (s *storage) deleteClientSessions(ctx context.Context, clientID string) error {
-	if _, err := s.exec(ctx, `DELETE FROM oauth_sessions WHERE client_id = ?`, clientID); err != nil {
+// deleteClientSessions deletes every session of a client, in q.
+func (s *storage) deleteClientSessions(ctx context.Context, q querier, clientID string) error {
+	if _, err := s.at(ctx, q).ExecContext(ctx, `DELETE FROM oauth_sessions WHERE client_id = ?`, clientID); err != nil {
 		return fmt.Errorf("oauth: delete a client's sessions: %w", err)
 	}
 	return nil

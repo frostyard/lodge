@@ -285,6 +285,9 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			writeOneLine(w, http.StatusBadRequest, "the request cannot be answered any more: "+oneLine(err.Error()))
 			return
 		}
+		if s.beforeDecision != nil {
+			s.beforeDecision()
+		}
 		if err := s.refuse(w, req, s.inTx(ctx, func(tx *sql.Tx) error {
 			if ok, derr := s.decide(ctx, tx, req.ID, DecisionApprove); !ok {
 				return notDecidedError{derr}
@@ -302,6 +305,11 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			return
 		}
 		if err := s.refuse(w, req, s.inTx(ctx, func(tx *sql.Tx) error {
+			// The client and the principal may have been revoked between
+			// the request and this decision.
+			if err := s.checkAccessLive(ctx, tx, req); err != nil {
+				return err
+			}
 			if ok, derr := s.decide(ctx, tx, req.ID, DecisionApprove); !ok {
 				return notDecidedError{derr}
 			}
@@ -344,6 +352,7 @@ func (s *Server) inTx(ctx context.Context, f func(tx *sql.Tx) error) error {
 func (s *Server) refuse(w http.ResponseWriter, req Request, err error) error {
 	var (
 		be *boundError
+		ge *goneError
 		nd notDecidedError
 	)
 	switch {
@@ -351,6 +360,9 @@ func (s *Server) refuse(w http.ResponseWriter, req Request, err error) error {
 		return nil
 	case errors.As(err, &be):
 		writeOneLine(w, http.StatusConflict, be.Error())
+		return err
+	case errors.As(err, &ge):
+		writeOneLine(w, http.StatusGone, ge.Error())
 		return err
 	case errors.As(err, &nd):
 		s.notDecided(w, nd.err, req.ID)
@@ -562,7 +574,7 @@ func (s *Server) grantsPage(w http.ResponseWriter, r *http.Request, admin string
 	data := grantsData{CSRF: s.pageCSRF(admin, ts), TS: strconv.FormatInt(ts, 10)}
 	for _, p := range list {
 		pd := principalData{Name: p.Name, Created: pageWhen(p.Created)}
-		clients, err := s.store.clients(ctx, p.Name)
+		clients, err := s.store.clients(ctx, nil, p.Name)
 		if err != nil {
 			s.log.Error("read a principal's clients", "principal", p.Name, "err", err)
 			writeOneLine(w, http.StatusInternalServerError, "lodge cannot read the clients")

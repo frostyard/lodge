@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/url"
@@ -64,8 +65,8 @@ type Request struct {
 }
 
 // canonical is the JSON the request hash is taken over: the members in this
-// order, the scopes sorted, the items in the request's order, and no
-// spaces.
+// order, the scopes sorted, the keys of each sel sorted, the items in the
+// request's order, and no spaces. It is deterministic: a map's order is not.
 func (r Request) canonical() ([]byte, error) {
 	scopes := append([]string{}, r.Scopes...)
 	slices.Sort(scopes)
@@ -73,7 +74,7 @@ func (r Request) canonical() ([]byte, error) {
 	if items == nil {
 		items = []Item{}
 	}
-	return jsonMarshal(struct {
+	return json.Marshal(struct {
 		ID        string   `json:"id"`
 		Kind      Kind     `json:"kind"`
 		Client    string   `json:"client"`
@@ -81,7 +82,7 @@ func (r Request) canonical() ([]byte, error) {
 		App       string   `json:"app"`
 		Scopes    []string `json:"scopes"`
 		Items     []Item   `json:"items"`
-	}{r.ID, r.Kind, r.Client, r.Principal, r.App, scopes, items})
+	}{r.ID, r.Kind, r.Client, r.Principal, r.App, scopes, items}, json.Deterministic(true))
 }
 
 // Hash is the request's SHA-256, in lowercase hex: what the consent page
@@ -152,8 +153,10 @@ func validItem(a apps.App, it Item) error {
 	return nil
 }
 
-// request is a stored consent_requests row.
-func (s *Server) createRequest(ctx context.Context, req Request) error {
+// createRequest stores req while fewer than MaxPending requests are pending:
+// 1 statement, so that 2 creations at once cannot both pass the limit
+// (docs/specs/oauth.md, Requests).
+func (s *Server) createRequest(ctx context.Context, q querier, req Request) error {
 	scopesJSON, err := jsonMarshal(req.Scopes)
 	if err != nil {
 		return err
@@ -170,13 +173,20 @@ func (s *Server) createRequest(ctx context.Context, req Request) error {
 		}
 		query = string(b)
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO consent_requests
+	res, err := s.store.at(ctx, q).ExecContext(ctx, `INSERT INTO consent_requests
 		(id, kind, client_id, principal, app, scopes, items, query, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE (SELECT COUNT(*) FROM consent_requests WHERE decided_at IS NULL AND expires_at > ?) < ?`,
 		req.ID, string(req.Kind), req.Client, req.Principal, req.App, string(scopesJSON), string(itemsJSON),
-		query, stamp(req.Created), stamp(req.Expires))
+		query, stamp(req.Created), stamp(req.Expires), stamp(s.now()), MaxPending)
 	if err != nil {
 		return fmt.Errorf("oauth: store a request: %w", err)
+	}
+	switch n, err := res.RowsAffected(); {
+	case err != nil:
+		return fmt.Errorf("oauth: store a request: %w", err)
+	case n == 0:
+		return fmt.Errorf("%d requests are pending: %w", MaxPending, ErrTooMany)
 	}
 	return nil
 }
@@ -212,16 +222,6 @@ func (s *Server) request(ctx context.Context, id string) (Request, error) {
 	return req, nil
 }
 
-// pending is how many requests wait for a decision.
-func (s *Server) pending(ctx context.Context) (int, error) {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM consent_requests WHERE decided_at IS NULL AND expires_at > ?`,
-		stamp(s.now())).Scan(&n); err != nil {
-		return 0, fmt.Errorf("oauth: count the pending requests: %w", err)
-	}
-	return n, nil
-}
-
 // pendingRequests returns the requests that wait for a decision, oldest
 // first.
 func (s *Server) pendingRequests(ctx context.Context) ([]Request, error) {
@@ -253,13 +253,6 @@ func (s *Server) pendingRequests(ctx context.Context) ([]Request, error) {
 	return out, nil
 }
 
-// querier runs a statement: lodge's database, or the transaction a decision
-// holds.
-type querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // decide records a decision in q, and reports whether this call made it: a
 // request is decided once, while it is pending and unexpired.
 func (s *Server) decide(ctx context.Context, q querier, id, decision string) (bool, error) {
@@ -276,9 +269,10 @@ func (s *Server) decide(ctx context.Context, q querier, id, decision string) (bo
 	return n == 1, nil
 }
 
-// deleteRequests deletes a client's pending requests, and its decided ones.
-func (s *Server) deleteRequests(ctx context.Context, clientID string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM consent_requests WHERE client_id = ?`, clientID); err != nil {
+// deleteRequests deletes a client's pending requests, and its decided ones,
+// in q.
+func (s *Server) deleteRequests(ctx context.Context, q querier, clientID string) error {
+	if _, err := s.store.at(ctx, q).ExecContext(ctx, `DELETE FROM consent_requests WHERE client_id = ?`, clientID); err != nil {
 		return fmt.Errorf("oauth: delete a client's requests: %w", err)
 	}
 	return nil
@@ -288,16 +282,6 @@ func (s *Server) deleteRequests(ctx context.Context, clientID string) error {
 // of an installed, enabled app with a hearth manifest
 // (docs/specs/oauth.md, Requests).
 func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items []Item) (Request, error) {
-	c, err := s.store.clientRow(ctx, clientID)
-	if err != nil {
-		return Request{}, err
-	}
-	if c.Principal == "" {
-		return Request{}, fmt.Errorf("client %s is bound to no principal: %w", clientID, ErrNotFound)
-	}
-	if err := s.store.livePrincipal(ctx, c.Principal); err != nil {
-		return Request{}, err
-	}
 	a, ok := s.apps.Get(app)
 	if !ok || !a.Enabled() || a.Hearth == nil {
 		return Request{}, fmt.Errorf("app %q is not installed with a hearth manifest: %w", app, ErrNotFound)
@@ -310,25 +294,33 @@ func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items 
 			return Request{}, fmt.Errorf("item %d: %w", i, err)
 		}
 	}
-	n, err := s.pending(ctx)
-	if err != nil {
-		return Request{}, err
-	}
-	if n >= MaxPending {
-		return Request{}, fmt.Errorf("%d requests are pending: %w", n, ErrTooMany)
-	}
 	id, err := newID()
 	if err != nil {
 		return Request{}, err
 	}
 	now := s.now().UTC()
-	req := Request{ID: id, Kind: KindAccess, Client: c.ID, Principal: c.Principal, App: app,
-		Scopes: []string{}, Items: normalize(items), Created: now, Expires: now.Add(RequestLifespan),
-		URL: s.Issuer() + "/oauth/consent/" + id}
-	if err := s.createRequest(ctx, req); err != nil {
+	req := Request{ID: id, Kind: KindAccess, Client: clientID, App: app, Scopes: []string{}, Items: normalize(items),
+		Created: now, Expires: now.Add(RequestLifespan), URL: s.Issuer() + "/oauth/consent/" + id}
+	// The client, its principal, the limit and the insert are 1 transaction:
+	// it serializes with a revocation, so a revoked client makes no request.
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		c, err := s.store.clientRowAt(ctx, tx, clientID)
+		if err != nil {
+			return err
+		}
+		if c.Principal == "" {
+			return fmt.Errorf("client %s is bound to no principal: %w", clientID, ErrNotFound)
+		}
+		if err := s.store.livePrincipal(ctx, tx, c.Principal); err != nil {
+			return err
+		}
+		req.Principal = c.Principal
+		return s.createRequest(ctx, tx, req)
+	})
+	if err != nil {
 		return Request{}, err
 	}
-	s.log.Info("access requested", "request", id, "client", c.ID, "principal", c.Principal, "app", app, "items", len(items))
+	s.log.Info("access requested", "request", id, "client", clientID, "principal", req.Principal, "app", app, "items", len(items))
 	return req, nil
 }
 
@@ -348,13 +340,6 @@ func normalize(items []Item) []Item {
 // createSigninRequest records a sign-in for a client, whose authorization
 // request is query, and returns it.
 func (s *Server) createSigninRequest(ctx context.Context, clientID string, scopes []string, principal string, query url.Values) (Request, error) {
-	n, err := s.pending(ctx)
-	if err != nil {
-		return Request{}, err
-	}
-	if n >= MaxPending {
-		return Request{}, fmt.Errorf("%d requests are pending: %w", n, ErrTooMany)
-	}
 	id, err := newID()
 	if err != nil {
 		return Request{}, err
@@ -363,7 +348,7 @@ func (s *Server) createSigninRequest(ctx context.Context, clientID string, scope
 	req := Request{ID: id, Kind: KindSignin, Client: clientID, Principal: principal, App: "",
 		Scopes: scopes, Items: []Item{}, Created: now, Expires: now.Add(RequestLifespan), Query: query,
 		URL: s.Issuer() + "/oauth/consent/" + id}
-	if err := s.createRequest(ctx, req); err != nil {
+	if err := s.createRequest(ctx, s.db, req); err != nil {
 		return Request{}, err
 	}
 	return req, nil
@@ -371,6 +356,33 @@ func (s *Server) createSigninRequest(ctx context.Context, clientID string, scope
 
 // expires reports whether the request may no longer be decided.
 func (r Request) expires(now time.Time) bool { return !now.Before(r.Expires) }
+
+// goneError is a request whose client or principal is revoked: it can only
+// be declined, and usually a revocation deleted it already.
+type goneError struct{ line string }
+
+func (e *goneError) Error() string { return e.line }
+
+// checkAccessLive re-checks, in an approval's transaction, that the request's
+// client is live and bound to its principal, and that the principal is live.
+func (s *Server) checkAccessLive(ctx context.Context, q querier, req Request) error {
+	c, err := s.store.clientRowAt(ctx, q, req.Client)
+	if errors.Is(err, ErrNotFound) {
+		return &goneError{line: "client " + req.Client + " is revoked: decline this request"}
+	} else if err != nil {
+		return err
+	}
+	if c.Principal != req.Principal {
+		return &boundError{client: req.Client, principal: c.Principal}
+	}
+	if err := s.store.livePrincipal(ctx, q, req.Principal); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return &goneError{line: "principal " + req.Principal + " is revoked: decline this request"}
+		}
+		return err
+	}
+	return nil
+}
 
 // boundError is a client that another approval bound to another principal:
 // the request can only be declined.

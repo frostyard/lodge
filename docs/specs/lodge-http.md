@@ -552,9 +552,12 @@ errors ([oauth.md](oauth.md)), not one line.
 6. **Admin:** the login is on the admin list, else `login LOGIN is not an
    admin: lodgectl allow admin LOGIN`.
 
-A failure is 403 unless it says otherwise, with one line. A `POST` then
-needs the CSRF token, and on `/oauth/consent/<id>` the request hash, that
-[oauth.md](oauth.md#the-consent-page) describes.
+A failure is 403 unless it says otherwise, with one line. Then a `POST` to
+`/oauth/consent/<id>` needs that request's CSRF token and its hash
+([oauth.md](oauth.md#the-consent-page)), and a `POST` to
+`/oauth/grants/revoke` needs the grants page's CSRF token, which covers the
+admin's login and a time ([oauth.md](oauth.md#the-grants-page)). The
+status of each refusal is in oauth.md.
 
 Every consent response, errors included, carries:
 
@@ -694,11 +697,14 @@ repository.
 - lodge serves nothing on a non-loopback address except through its two
   tailnet nodes, and nothing through Funnel.
 - No browser route writes, and no request to one reads identity from
-  anything but WhoIs. The one exception is the consent routes' `POST`,
-  under every [consent check](#oauth-routes), the CSRF token and the
-  request hash
-  ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
-  It still reads identity from WhoIs alone, and sets no cookie.
+  anything but WhoIs. The one exception is the consent routes, under every
+  [consent check](#oauth-routes)
+  ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)):
+  `/oauth/authorize` records a pending request, which grants nothing; a
+  decision, a `POST` to `/oauth/consent/<id>`, carries that request's CSRF
+  token and hash; a revocation, a `POST` to `/oauth/grants/revoke`, carries
+  the grants page's CSRF token. They still read identity from WhoIs alone,
+  and set no cookie.
 - Every browser and content check has a test that fails it. Each finding
   of lodge's security review, and of M4's review that lodge took over, has a
   test.

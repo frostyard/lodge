@@ -145,9 +145,9 @@ client's `client_id`:
 - Errors are fosite's JSON (RFC 6749, section 5.2), without debug detail.
 
 `POST /oauth/revoke` (RFC 7009) takes `token`, an optional
-`token_type_hint` and `client_id`. Revoking a refresh token revokes its
-family; revoking an access token revokes that token. It answers 200 for a
-token it does not know.
+`token_type_hint` and `client_id`. Revoking an access token or a refresh
+token revokes its family: every token of the approval that issued it
+(RFC 7009, section 2.1). It answers 200 for a token it does not know.
 
 ### Principals, clients and grants
 
@@ -169,7 +169,8 @@ token it does not know.
     `/`-separated segments in Unicode NFC, with no empty, `.` or `..`
     segment and no trailing `/`. An item without `sel`, or without a
     selector, covers that selector's root.
-  - **A path G covers a path P** when P is G, or P starts with G and `/`.
+  - **A path G covers a path P** when G is `/`, P equals G, or P starts
+    with G and `/`.
   - An approval adds its items to the grant; an exact duplicate is not
     added twice.
 - **Effective access is the principal's grant limited by the client's
@@ -226,8 +227,8 @@ A request is what the consent page shows and an admin decides.
 - **A pending request expires 24 hours after it was made.** A request is
   deleted 24 hours after it expired or was decided.
 - **The request hash** is the SHA-256, in lowercase hex, of this JSON, with
-  the members in this order, the scopes sorted, the items in the request's
-  order, and no spaces:
+  the members in this order, the scopes sorted, the keys of each `sel`
+  sorted, the items in the request's order, and no spaces:
 
   ```json
   {"id":"…","kind":"access","client":"lgc_…","principal":"chani","app":"marks","scopes":[],"items":[{"cap":"marks:read","sel":{"folder":"/Reading"}}]}
@@ -267,8 +268,25 @@ A request is what the consent page shows and an admin decides.
     adds the approved items to the principal's grant for the app, and
     answers 303 to `/oauth/grants`.
   - Declining answers 303 to `/oauth/grants`.
-- A decision that breaks a rule answers 400 with one line, and leaves the
-  request pending.
+- **A refused decision changes nothing,** answers with one line, and
+  leaves the request pending, unless it was decided or expired already. In
+  the order lodge checks:
+
+  | Refusal | Status |
+  | --- | --- |
+  | the form cannot be read | 400 |
+  | no request of that ID | 404 |
+  | the CSRF token is not the request's | 403 |
+  | the hash is not the request's | 409 |
+  | the request was decided | 409 |
+  | the request expired | 410 |
+  | a field breaks a rule above: principal, scopes, items, paths, or a decision that is neither `approve` nor `decline` | 400 |
+  | the client is bound to another principal than the request's | 409 |
+  | the client or the principal was revoked after the request | 410 |
+- **A sign-in whose client is bound to another principal than the one the
+  request shows** answers 409, on the page and on an approval, with one
+  line: `client CLIENT is bound to principal P: decline this request`. The
+  request stays pending, and it can be declined.
 
 ### The grants page
 

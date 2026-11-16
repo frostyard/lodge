@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,11 +49,20 @@ type oauthHarness struct {
 	granted        [][2]string
 	revoked        []string
 	revokedClients [][]string
+	// notes is the app notes, which an MCP token reaches.
+	notes *fakeApp
 }
 
 const redirectURI = "https://client.example/callback"
 
 func newOAuthHarness(t *testing.T) *oauthHarness {
+	t.Helper()
+	return newOAuthHarnessWith(t, nil)
+}
+
+// newOAuthHarnessWith builds the harness, after opts changed the OAuth
+// server's options.
+func newOAuthHarnessWith(t *testing.T, opts func(*oauth.Options)) *oauthHarness {
 	t.Helper()
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "lodge.db"))
@@ -60,19 +70,21 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	h := &oauthHarness{t: t, root: root, who: &fakeWhoIs{peer: alice()}, db: db,
+	h := &oauthHarness{t: t, root: root, who: &fakeWhoIs{peer: alice()}, db: db, notes: &fakeApp{},
 		clock: &clock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}}
 	apptest.InstallShell(t, root, map[string]string{"index.html": "<!doctype html><title>Lodge</title>"})
 	apptest.Install(t, root, "notes", map[string]any{"name": "Notes", "mcp": true}, nil)
 	dir := apptest.Install(t, root, "marks", map[string]any{"name": "Marks", "hearth": "hearth.json"}, nil)
 	if err := os.WriteFile(filepath.Join(dir, "hearth.json"), []byte(`{"hearth":1,"app":"marks",`+
-		`"capabilities":["marks:read","marks:write"],"selectors":["folder"]}`), 0o644); err != nil {
+		`"capabilities":["marks:read","marks:write"],"selectors":["folder","tag"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	apptest.Serve(t, root, "notes", h.notes)
 	h.apps = apps.New(root, nil)
 	if err := h.apps.Load(); err != nil {
 		t.Fatal(err)
 	}
+	h.apps.Poll(t.Context())
 	h.allow = allow.New(db, h.clock.now)
 	for _, login := range []string{"alice@example.com"} {
 		if err := h.allow.AllowLogin(t.Context(), login); err != nil {
@@ -85,7 +97,7 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 	if err := h.allow.AllowNode(t.Context(), "nPhone1CNTRL", "phone"); err != nil {
 		t.Fatal(err)
 	}
-	h.oauth, err = oauth.New(t.Context(), oauth.Options{DB: db, Apps: h.apps,
+	options := oauth.Options{DB: db, Apps: h.apps,
 		Issuer: func() string { return lodgeOrigin },
 		Now:    h.clock.now,
 		OnGrant: func(principal, app string) {
@@ -94,7 +106,11 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 		OnRevoke: func(principal string, clients []string) {
 			h.revoked = append(h.revoked, principal)
 			h.revokedClients = append(h.revokedClients, clients)
-		}})
+		}}
+	if opts != nil {
+		opts(&options)
+	}
+	h.oauth, err = oauth.New(t.Context(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +234,10 @@ type registrationAnswer struct {
 // verifier is a PKCE code verifier, and its S256 challenge.
 const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 
+// wrongVerifier is another verifier of the same, valid length: fosite refuses
+// it on its S256 challenge, not on its form.
+const wrongVerifier = "M25iVXpKU3puUjFaYWg3T1NDTDQtcW1ROUY5YXlwalNoc0lfYzJK"
+
 // authorize makes an authorization request as a browser or an MCP client
 // would, and returns its answer.
 func (h *oauthHarness) authorize(clientID, redirect string, extra map[string]string) answer {
@@ -297,21 +317,41 @@ type tokenAnswer struct {
 // exchange trades a code for tokens.
 func (h *oauthHarness) exchange(clientID, redirect, code, verifier string) (answer, tokenAnswer) {
 	h.t.Helper()
-	a := h.post("/oauth/token", url.Values{"grant_type": {"authorization_code"}, "client_id": {clientID},
+	return h.token(url.Values{"grant_type": {"authorization_code"}, "client_id": {clientID},
 		"code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}})
-	var out tokenAnswer
-	_ = json.Unmarshal([]byte(a.body), &out)
-	return a, out
 }
 
 // refresh trades a refresh token for a new pair.
 func (h *oauthHarness) refresh(clientID, refresh string) (answer, tokenAnswer) {
 	h.t.Helper()
-	a := h.post("/oauth/token", url.Values{"grant_type": {"refresh_token"}, "client_id": {clientID},
+	return h.token(url.Values{"grant_type": {"refresh_token"}, "client_id": {clientID},
 		"refresh_token": {refresh}})
+}
+
+// token posts to the token endpoint, and decodes its answer, or its OAuth
+// error.
+func (h *oauthHarness) token(form url.Values) (answer, tokenAnswer) {
+	h.t.Helper()
+	a := h.post("/oauth/token", form)
+	return a, decodeToken(h.t, a)
+}
+
+// decodeToken decodes a token answer, or its OAuth error.
+func decodeToken(t *testing.T, a answer) tokenAnswer {
+	t.Helper()
 	var out tokenAnswer
-	_ = json.Unmarshal([]byte(a.body), &out)
-	return a, out
+	if err := json.Unmarshal([]byte(a.body), &out); err != nil {
+		t.Fatalf("the token answer is not JSON: %v: %q", err, a.body)
+	}
+	return out
+}
+
+// tokenError checks that a token answer is 400 with the OAuth error code.
+func tokenError(t *testing.T, a answer, tok tokenAnswer, want string) {
+	t.Helper()
+	if a.status != http.StatusBadRequest || tok.Error != want {
+		t.Errorf("the token answer: %d %q, want 400 with error %q", a.status, a.body, want)
+	}
 }
 
 // signin is a whole sign-in: a registration, an authorization, an approval
@@ -514,11 +554,10 @@ func TestOAuthSignIn(t *testing.T) {
 	if !strings.HasPrefix(loc.Query().Get("code"), "lgo_ac_") {
 		t.Errorf("the code %q has no lodge prefix", loc.Query().Get("code"))
 	}
-	// A wrong verifier is invalid_grant, and the right one gives tokens.
-	if a, _ := h.exchange(client.ClientID, redirectURI, loc.Query().Get("code"), "wrong-verifier-wrong-verifier-wrong"); a.status != http.StatusBadRequest ||
-		!strings.Contains(a.body, "invalid_grant") {
-		t.Errorf("a wrong code_verifier: %d %q", a.status, a.body)
-	}
+	// A wrong verifier of a valid length is invalid_grant, and the right one
+	// still exchanges the same code: the challenge is kept.
+	a2, tok2 := h.exchange(client.ClientID, redirectURI, loc.Query().Get("code"), wrongVerifier)
+	tokenError(t, a2, tok2, "invalid_grant")
 	ans, tok := h.exchange(client.ClientID, redirectURI, loc.Query().Get("code"), verifier)
 	if ans.status != http.StatusOK {
 		t.Fatalf("exchange: %d %q", ans.status, ans.body)
@@ -549,9 +588,8 @@ func TestOAuthSignIn(t *testing.T) {
 		t.Errorf("the refresh token expires in %v, want about 30 days", d)
 	}
 	// The code is good once: a second exchange revokes what it issued.
-	if a, _ := h.exchange(client.ClientID, redirectURI, loc.Query().Get("code"), verifier); !strings.Contains(a.body, "invalid_grant") {
-		t.Errorf("the second exchange of a code: %d %q", a.status, a.body)
-	}
+	a3, tok3 := h.exchange(client.ClientID, redirectURI, loc.Query().Get("code"), verifier)
+	tokenError(t, a3, tok3, "invalid_grant")
 	if _, err := h.oauth.Check(t.Context(), tok.AccessToken, "mcp"); err == nil {
 		t.Error("the access token works after its code was used twice")
 	}
@@ -624,10 +662,8 @@ func TestOAuthRefreshRotation(t *testing.T) {
 	if _, err := h.oauth.Check(t.Context(), second.AccessToken, "mcp"); err != nil {
 		t.Errorf("the new access token: %v", err)
 	}
-	if a, _ := h.refresh(client.ClientID, first.RefreshToken); a.status != http.StatusBadRequest ||
-		!strings.Contains(a.body, "invalid_grant") {
-		t.Errorf("the old refresh token: %d %q", a.status, a.body)
-	}
+	old, oldTok := h.refresh(client.ClientID, first.RefreshToken)
+	tokenError(t, old, oldTok, "invalid_grant")
 }
 
 // TestOAuthRefreshReuseRevokesTheFamily checks that a refresh token used
@@ -640,13 +676,10 @@ func TestOAuthRefreshReuseRevokesTheFamily(t *testing.T) {
 		t.Fatalf("the new access token: %v", err)
 	}
 	// The old refresh token again: reuse, and the family goes.
-	if a, _ := h.refresh(client.ClientID, first.RefreshToken); a.status != http.StatusBadRequest ||
-		!strings.Contains(a.body, "invalid_grant") {
-		t.Fatalf("the reused refresh token: %d %q", a.status, a.body)
-	}
-	if a, _ := h.refresh(client.ClientID, second.RefreshToken); a.status != http.StatusBadRequest ||
-		!strings.Contains(a.body, "invalid_grant") {
-		t.Errorf("the new refresh token after a reuse: %d %q", a.status, a.body)
+	old, oldTok := h.refresh(client.ClientID, first.RefreshToken)
+	tokenError(t, old, oldTok, "invalid_grant")
+	if a, tok := h.refresh(client.ClientID, second.RefreshToken); true {
+		tokenError(t, a, tok, "invalid_grant")
 	}
 	if _, err := h.oauth.Check(t.Context(), second.AccessToken, "mcp"); err == nil {
 		t.Error("the new access token works after a refresh token was reused")
@@ -748,7 +781,7 @@ func TestOAuthConsentChecks(t *testing.T) {
 				t.Errorf("%d %q, want %d with %q", a.status, a.body, c.status, c.line)
 			}
 			// A refused decision leaves the request pending.
-			if c.name != "POST twice" && c.name != "POST with another hash" {
+			if c.name != "POST twice" {
 				page := h.do(h.req(http.MethodGet, "/oauth/consent/"+id, "", pageHeaders()))
 				if page.status != http.StatusOK {
 					t.Errorf("the request is not pending after a refused decision: %d %q", page.status, page.body)
@@ -1029,8 +1062,18 @@ func TestOAuthRevokePrincipal(t *testing.T) {
 	h := newOAuthHarness(t)
 	client, tok := h.signin("pi-pocket", "mcp")
 	other, otherTok := h.signin("pi-pocket-2", "mcp", "events")
-	if _, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", marksItems()); err != nil {
+	// A grant of the principal, which the revocation must delete.
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", marksItems())
+	if err != nil {
 		t.Fatal(err)
+	}
+	_, reqCSRF, reqHash := h.consentPage(req.ID)
+	if a := h.approve(req.ID, reqCSRF, reqHash, url.Values{"item": {"0", "1"},
+		"path.0.folder": {"/Reading"}, "path.1.folder": {"/Reading/Inbox"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the access approval: %d %q", a.status, a.body)
+	}
+	if granted, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(granted) != 2 {
+		t.Fatalf("the grant before the revocation = %+v, %v", granted, err)
 	}
 	page, csrf, ts := h.grantsPage()
 	if page.status != http.StatusOK {
@@ -1562,5 +1605,566 @@ func TestOAuthRegisterLimitRace(t *testing.T) {
 	}
 	if unbound != oauth.MaxUnboundClients {
 		t.Errorf("%d unbound clients, want %d", unbound, oauth.MaxUnboundClients)
+	}
+}
+
+// concurrent runs fn n times at once, and returns what each returned.
+func concurrent(t *testing.T, n int, fn func(i int) (answer, error)) []answer {
+	t.Helper()
+	out := make([]answer, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			out[i], errs[i] = fn(i)
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	return out
+}
+
+// TestOAuthRefreshSingleUse checks that 2 refreshes with 1 refresh token at
+// once give at most 1 pair, and that no token of the family works after.
+func TestOAuthRefreshSingleUse(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, first := h.signin("pi-pocket", "mcp")
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {client.ClientID},
+		"refresh_token": {first.RefreshToken}}.Encode()
+	answers := concurrent(t, 2, func(int) (answer, error) {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.lodge.URL+"/oauth/token",
+			strings.NewReader(form))
+		if err != nil {
+			return answer{}, err
+		}
+		r.Host = lodgeHost
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := http.DefaultTransport.RoundTrip(r)
+		if err != nil {
+			return answer{}, err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return answer{}, err
+		}
+		return answer{resp.StatusCode, resp.Header, string(b)}, nil
+	})
+	pairs := 0
+	var winner tokenAnswer
+	for _, a := range answers {
+		tok := decodeToken(t, a)
+		if a.status == http.StatusOK && tok.AccessToken != "" && tok.RefreshToken != "" {
+			pairs++
+			winner = tok
+			continue
+		}
+		tokenError(t, a, tok, "invalid_grant")
+	}
+	if pairs != 1 {
+		t.Fatalf("%d refreshes got a pair, want 1", pairs)
+	}
+	// The reuse revokes the family: none of its tokens works.
+	if _, err := h.oauth.Check(t.Context(), winner.AccessToken, "mcp"); err == nil {
+		t.Error("the winner's access token works after the refresh token was used twice")
+	}
+	twice, twiceTok := h.refresh(client.ClientID, winner.RefreshToken)
+	tokenError(t, twice, twiceTok, "invalid_grant")
+	if _, err := h.oauth.Check(t.Context(), first.AccessToken, "mcp"); err == nil {
+		t.Error("the first access token works after the reuse")
+	}
+}
+
+// TestOAuthCodeSingleUse checks that 2 exchanges of 1 code at once give at
+// most 1 pair, and that no token of the family works after.
+func TestOAuthCodeSingleUse(t *testing.T) {
+	h := newOAuthHarness(t)
+	client := h.register("pi-pocket", redirectURI)
+	a := h.authorize(client.ClientID, redirectURI, map[string]string{"scope": "mcp"})
+	id := consentID(t, a)
+	_, csrf, hash := h.consentPage(id)
+	approved := h.approve(id, csrf, hash, url.Values{"principal": {"chani"}, "scope": {"mcp"}})
+	if approved.status != http.StatusSeeOther {
+		t.Fatalf("the approval: %d %q", approved.status, approved.body)
+	}
+	code := code(t, approved)
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {client.ClientID},
+		"code": {code}, "redirect_uri": {redirectURI}, "code_verifier": {verifier}}.Encode()
+	answers := concurrent(t, 2, func(int) (answer, error) {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.lodge.URL+"/oauth/token",
+			strings.NewReader(form))
+		if err != nil {
+			return answer{}, err
+		}
+		r.Host = lodgeHost
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := http.DefaultTransport.RoundTrip(r)
+		if err != nil {
+			return answer{}, err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return answer{}, err
+		}
+		return answer{resp.StatusCode, resp.Header, string(b)}, nil
+	})
+	pairs := 0
+	var winner tokenAnswer
+	for _, a := range answers {
+		tok := decodeToken(t, a)
+		if a.status == http.StatusOK && tok.AccessToken != "" && tok.RefreshToken != "" {
+			pairs++
+			winner = tok
+			continue
+		}
+		tokenError(t, a, tok, "invalid_grant")
+	}
+	if pairs != 1 {
+		t.Fatalf("%d exchanges got a pair, want 1", pairs)
+	}
+	// The code was exchanged twice: the family is revoked, the pair too.
+	if _, err := h.oauth.Check(t.Context(), winner.AccessToken, "mcp"); err == nil {
+		t.Error("the winner's access token works after the code was exchanged twice")
+	}
+	twice, twiceTok := h.refresh(client.ClientID, winner.RefreshToken)
+	tokenError(t, twice, twiceTok, "invalid_grant")
+}
+
+// TestOAuthRevokeAccessRevokesFamily checks RFC 7009, section 2.1: revoking
+// an access token revokes its family too.
+func TestOAuthRevokeAccessRevokesFamily(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, tok := h.signin("pi-pocket", "mcp")
+	a := h.post("/oauth/revoke", url.Values{"client_id": {client.ClientID}, "token": {tok.AccessToken},
+		"token_type_hint": {"access_token"}})
+	if a.status != http.StatusOK {
+		t.Fatalf("revoke: %d %q", a.status, a.body)
+	}
+	if _, err := h.oauth.Check(t.Context(), tok.AccessToken, "mcp"); err == nil {
+		t.Error("the access token works after it was revoked")
+	}
+	after, afterTok := h.refresh(client.ClientID, tok.RefreshToken)
+	tokenError(t, after, afterTok, "invalid_grant")
+}
+
+// TestOAuthSweepKeepsReplayEvidence checks that the sweep keeps an inactive
+// refresh token while its family holds an unexpired one: presenting it again
+// revokes the family.
+func TestOAuthSweepKeepsReplayEvidence(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, first := h.signin("pi-pocket", "mcp")
+	_, second := h.refresh(client.ClientID, first.RefreshToken)
+	// The harness's clock is 8 hours after the real one: put the first
+	// refresh row inside that gap, and the second beyond it.
+	h.clock.advance(8 * time.Hour)
+	realNow := time.Now().UTC()
+	for _, c := range []struct {
+		expires time.Time
+		oldest  bool
+	}{
+		{expires: realNow.Add(2 * time.Hour), oldest: true},
+		{expires: realNow.Add(30 * time.Hour)},
+	} {
+		q := `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND signature = ` +
+			`(SELECT signature FROM oauth_sessions WHERE kind = 'refresh' ORDER BY expires_at LIMIT 1)`
+		if !c.oldest {
+			q = `UPDATE oauth_sessions SET expires_at = ? WHERE kind = 'refresh' AND signature = ` +
+				`(SELECT signature FROM oauth_sessions WHERE kind = 'refresh' ORDER BY expires_at DESC LIMIT 1)`
+		}
+		if _, err := h.db.ExecContext(t.Context(), q, c.expires.UTC().Format(store.TimeFormat)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.oauth.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The used refresh token is still there, though it expired: it is the
+	// evidence that revokes the family.
+	var rows int
+	if err := h.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM oauth_sessions WHERE kind = 'refresh' AND active = 0`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("%d inactive refresh rows after the sweep, want 1", rows)
+	}
+	// Presenting it again is a reuse, and the family goes.
+	replayed, replayedTok := h.refresh(client.ClientID, first.RefreshToken)
+	tokenError(t, replayed, replayedTok, "invalid_grant")
+	descendant, descendantTok := h.refresh(client.ClientID, second.RefreshToken)
+	tokenError(t, descendant, descendantTok, "invalid_grant")
+}
+
+// TestOAuthRevokePrincipalThenRevive checks that revoking a principal ends
+// every client of it, and that approving the name again starts with no grant
+// and no working old token.
+func TestOAuthRevokePrincipalThenRevive(t *testing.T) {
+	h := newOAuthHarness(t)
+	first, firstTok := h.signin("pi-pocket", "mcp")
+	second, secondTok := h.signin("pi-pocket-2", "mcp")
+	// A grant of the principal, which a revocation deletes.
+	req, err := h.oauth.RequestAccess(t.Context(), first.ClientID, "marks", marksItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, csrf, hash := h.consentPage(req.ID)
+	if a := h.approve(req.ID, csrf, hash, url.Values{"item": {"0"},
+		"path.0.folder": {"/Reading"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the access approval: %d %q", a.status, a.body)
+	}
+	if err := h.oauth.RevokePrincipal(t.Context(), "chani"); err != nil {
+		t.Fatal(err)
+	}
+	// Every client of the principal is revoked, at once.
+	for _, id := range []string{first.ClientID, second.ClientID} {
+		var revoked sql.NullString
+		if err := h.db.QueryRowContext(t.Context(), `SELECT revoked_at FROM oauth_clients WHERE id = ?`, id).Scan(&revoked); err != nil {
+			t.Fatal(err)
+		}
+		if !revoked.Valid {
+			t.Errorf("client %s is not revoked", id)
+		}
+	}
+	// Approving the name again revives it, with no grant, and the old tokens
+	// stay refused.
+	_, thirdTok := h.signin("pi-pocket-3", "mcp")
+	if _, err := h.oauth.Check(t.Context(), thirdTok.AccessToken, "mcp"); err != nil {
+		t.Errorf("the revived principal's new token: %v", err)
+	}
+	for name, old := range map[string]struct {
+		client string
+		tok    tokenAnswer
+	}{"first": {first.ClientID, firstTok}, "second": {second.ClientID, secondTok}} {
+		if _, err := h.oauth.Check(t.Context(), old.tok.AccessToken, "mcp"); err == nil {
+			t.Errorf("the %s client's old token works after the principal was revoked", name)
+		}
+		if a, _ := h.refresh(old.client, old.tok.RefreshToken); a.status == http.StatusOK {
+			t.Errorf("the %s client's old refresh token works after the principal was revoked", name)
+		}
+	}
+	if granted, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(granted) != 0 {
+		t.Errorf("the grant after a revival = %+v, %v", granted, err)
+	}
+}
+
+// TestOAuthLegacyTokensWithOAuth checks that an lgm_ token still reaches an
+// app through /mcp/<id> while lodge serves OAuth: the tokens serve their own
+// routes.
+func TestOAuthLegacyTokensWithOAuth(t *testing.T) {
+	h := newOAuthHarness(t)
+	if _, tok := h.signin("pi-pocket", "mcp"); tok.AccessToken == "" {
+		t.Fatal("no OAuth access token")
+	}
+	secret, err := h.tokens.Issue(t.Context(), "agent", "notes", "vault=1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := h.do(h.req(http.MethodPost, "/mcp/notes", "{}", map[string]string{
+		"Authorization": "Bearer " + secret, "Content-Type": "application/json"}))
+	if a.status != http.StatusOK || a.body != "app /mcp" {
+		t.Fatalf("an lgm_ token on /mcp/notes: %d %q", a.status, a.body)
+	}
+	seen := h.notes.last(t)
+	switch {
+	case seen.Path != "/mcp":
+		t.Errorf("the app got the path %q", seen.Path)
+	case seen.Header.Get("Lodge-Caller") != "agent":
+		t.Errorf("Lodge-Caller = %q", seen.Header.Get("Lodge-Caller"))
+	case seen.Header.Get("Lodge-Token") != "agent":
+		t.Errorf("Lodge-Token = %q", seen.Header.Get("Lodge-Token"))
+	case seen.Header.Get("Lodge-Scope") != "vault=1":
+		t.Errorf("Lodge-Scope = %q", seen.Header.Get("Lodge-Scope"))
+	case seen.Header.Get("Authorization") != "":
+		t.Error("the app got the token's Authorization header")
+	}
+	// The OAuth token is still refused there.
+	b := h.do(h.req(http.MethodPost, "/mcp/notes", "{}", map[string]string{
+		"Authorization": "Bearer " + h.signinToken(t), "Content-Type": "application/json"}))
+	if b.status != http.StatusUnauthorized {
+		t.Errorf("an OAuth token on /mcp/notes: %d %q", b.status, b.body)
+	}
+}
+
+// signinToken makes a new sign-in, and returns its access token.
+func (h *oauthHarness) signinToken(t *testing.T) string {
+	t.Helper()
+	_, tok := h.signin("pi-pocket-token", "mcp")
+	return tok.AccessToken
+}
+
+// TestOAuthWrongHash checks a decision whose hash is not the request's: it
+// changes nothing, and a valid decision afterwards still works.
+func TestOAuthWrongHash(t *testing.T) {
+	h := newOAuthHarness(t)
+	client := h.register("pi-pocket", redirectURI)
+	_, id, csrf, hash := h.pendingSigninOf(t, client.ClientID)
+	a := h.approve(id, csrf, "not-the-hash", url.Values{"principal": {"chani"}, "scope": {"mcp"}})
+	if a.status != http.StatusConflict || !strings.Contains(a.body, "the page shows another request") {
+		t.Fatalf("a wrong hash: %d %q", a.status, a.body)
+	}
+	// Nothing changed: pending, and the client unbound.
+	if !h.decidedAt(id).IsZero() {
+		t.Error("the request was decided")
+	}
+	if bound, set := h.boundTo(client.ClientID); set {
+		t.Errorf("the client is bound to %q after a refused hash", bound)
+	}
+	if a := h.approve(id, csrf, hash, url.Values{"principal": {"chani"}, "scope": {"mcp"}}); a.status != http.StatusSeeOther || code(t, a) == "" {
+		t.Errorf("the valid approval after a wrong hash: %d %q", a.status, a.body)
+	}
+	if bound, _ := h.boundTo(client.ClientID); bound != "chani" {
+		t.Errorf("the client is bound to %q", bound)
+	}
+}
+
+// TestOAuthScopeNarrowing checks that an approval of fewer scopes than the
+// request asked for gives a token with only the approved one.
+func TestOAuthScopeNarrowing(t *testing.T) {
+	h := newOAuthHarness(t)
+	client := h.register("pi-pocket", redirectURI)
+	a := h.authorize(client.ClientID, redirectURI, map[string]string{"scope": "mcp events"})
+	if a.status != http.StatusSeeOther {
+		t.Fatalf("authorize: %d %q %q", a.status, a.header.Get("Location"), a.body)
+	}
+	id := consentID(t, a)
+	page, csrf, hash := h.consentPage(id)
+	if page.status != http.StatusOK {
+		t.Fatalf("the page: %d %q", page.status, page.body)
+	}
+	// Both scopes are offered, and the admin keeps mcp.
+	for _, sc := range []string{"mcp", "events"} {
+		if !strings.Contains(page.body, `name="scope" value="`+sc+`"`) {
+			t.Errorf("the page does not offer the scope %s", sc)
+		}
+	}
+	approved := h.approve(id, csrf, hash, url.Values{"principal": {"chani"}, "scope": {"mcp"}})
+	if approved.status != http.StatusSeeOther {
+		t.Fatalf("the approval: %d %q", approved.status, approved.body)
+	}
+	ans, tok := h.exchange(client.ClientID, redirectURI, code(t, approved), verifier)
+	if ans.status != http.StatusOK {
+		t.Fatalf("the exchange: %d %q", ans.status, ans.body)
+	}
+	if tok.Scope != "mcp" {
+		t.Errorf("the token's scope = %q, want mcp", tok.Scope)
+	}
+	if _, err := h.oauth.Check(t.Context(), tok.AccessToken, "mcp"); err != nil {
+		t.Errorf("Check(mcp) = %v", err)
+	}
+	if _, err := h.oauth.Check(t.Context(), tok.AccessToken, "events"); err == nil {
+		t.Error("Check(events) passes for a token the consent did not grant it")
+	}
+}
+
+// postConsent sends a decision, and returns its error instead of failing the
+// test: 2 of them run at once.
+func (h *oauthHarness) postConsent(id, csrf, hash string, fields url.Values) (answer, error) {
+	form := url.Values{"csrf": {csrf}, "hash": {hash}, "decision": {"approve"}}
+	for k, v := range fields {
+		form[k] = v
+	}
+	r, err := http.NewRequestWithContext(h.t.Context(), http.MethodPost, h.lodge.URL+"/oauth/consent/"+id,
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return answer{}, err
+	}
+	r.Host = lodgeHost
+	for k, v := range formHeaders() {
+		r.Header.Set(k, v)
+	}
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil {
+		return answer{}, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return answer{}, err
+	}
+	return answer{resp.StatusCode, resp.Header, string(b)}, nil
+}
+
+// TestOAuthConcurrentBinding checks that 2 approvals of 1 unbound client,
+// both past the unbound read, bind it once: 1 code is issued, and the other
+// approval answers 409.
+func TestOAuthConcurrentBinding(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		arrived int
+	)
+	release := make(chan struct{})
+	h := newOAuthHarnessWith(t, func(o *oauth.Options) {
+		o.BeforeDecision = func() {
+			mu.Lock()
+			arrived++
+			if arrived == 2 {
+				close(release)
+			}
+			mu.Unlock()
+			// A watchdog, so that a missing approval fails rather than hangs.
+			select {
+			case <-release:
+			case <-time.After(20 * time.Second):
+				t.Error("the second approval did not come")
+			}
+		}
+	})
+	client := h.register("pi-pocket", redirectURI)
+	_, first, csrf1, hash1 := h.pendingSigninOf(t, client.ClientID)
+	_, second, csrf2, hash2 := h.pendingSigninOf(t, client.ClientID)
+	answers := make([]answer, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		answers[0], errs[0] = h.postConsent(first, csrf1, hash1, url.Values{"principal": {"alice"}, "scope": {"mcp"}})
+	})
+	wg.Go(func() {
+		answers[1], errs[1] = h.postConsent(second, csrf2, hash2, url.Values{"principal": {"bob"}, "scope": {"mcp"}})
+	})
+	wg.Wait()
+	codes, conflicts := 0, 0
+	loser := ""
+	for i, a := range answers {
+		if errs[i] != nil {
+			t.Fatalf("approval %d: %v", i, errs[i])
+		}
+		switch a.status {
+		case http.StatusSeeOther:
+			if code(t, a) == "" {
+				t.Errorf("approval %d redirects without a code: %q", i, a.header.Get("Location"))
+			}
+			codes++
+		case http.StatusConflict:
+			if !strings.Contains(a.body, "is bound to principal") || !strings.Contains(a.body, "decline this request") {
+				t.Errorf("the losing approval: %d %q", a.status, a.body)
+			}
+			conflicts++
+			loser = []string{first, second}[i]
+		default:
+			t.Errorf("approval %d: %d %q", i, a.status, a.body)
+		}
+	}
+	if codes != 1 || conflicts != 1 {
+		t.Fatalf("%d codes and %d conflicts, want 1 and 1", codes, conflicts)
+	}
+	// One binding, and no rebind.
+	bound, set := h.boundTo(client.ClientID)
+	if !set || (bound != "alice" && bound != "bob") {
+		t.Fatalf("the client is bound to %q (%v)", bound, set)
+	}
+	var codeRows int
+	if err := h.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM oauth_sessions WHERE kind = 'code' AND client_id = ?`, client.ClientID).Scan(&codeRows); err != nil {
+		t.Fatal(err)
+	}
+	if codeRows != 1 {
+		t.Errorf("%d codes were stored for the client, want 1", codeRows)
+	}
+	// The request of the losing approval stays pending.
+	if !h.decidedAt(loser).IsZero() {
+		t.Error("the losing approval decided its request")
+	}
+}
+
+// TestOAuthAccessAfterRevocation checks that an access request whose client
+// was revoked cannot be approved, and that the grant it would have made
+// changes nothing.
+func TestOAuthAccessAfterRevocation(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, _ := h.signin("pi-pocket", "mcp")
+	// One approved request, which stays as it is.
+	first, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks",
+		[]oauth.Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, firstCSRF, firstHash := h.consentPage(first.ID)
+	if a := h.approve(first.ID, firstCSRF, firstHash, url.Values{"item": {"0"},
+		"path.0.folder": {"/Reading"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the first approval: %d %q", a.status, a.body)
+	}
+	before, err := h.oauth.Grant(t.Context(), "chani", "marks")
+	if err != nil || len(before) != 1 {
+		t.Fatalf("the grant = %+v, %v", before, err)
+	}
+	// A second request, whose client is revoked: the revocation deletes the
+	// request, so the decision is 404.
+	second, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", marksItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, csrf, hash := h.consentPage(second.ID)
+	if err := h.oauth.RevokeClient(t.Context(), client.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	if a := h.approve(second.ID, csrf, hash, url.Values{"item": {"0"}, "path.0.folder": {"/Reading"}}); a.status != http.StatusNotFound {
+		t.Errorf("the approval after the client was revoked: %d %q", a.status, a.body)
+	}
+	if after, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(after) != 1 {
+		t.Errorf("the grant after the refused approval = %+v, %v", after, err)
+	}
+
+	// The approval's own re-check: a client revoked behind the cascade's
+	// back leaves its request, and the approval refuses it.
+	other, _ := h.signin("pi-pocket-2", "mcp")
+	third, err := h.oauth.RequestAccess(t.Context(), other.ClientID, "marks", marksItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, thirdCSRF, thirdHash := h.consentPage(third.ID)
+	if _, err := h.db.ExecContext(t.Context(), `UPDATE oauth_clients SET revoked_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(store.TimeFormat), other.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	a := h.approve(third.ID, thirdCSRF, thirdHash, url.Values{"item": {"0"}, "path.0.folder": {"/Reading"}})
+	if a.status != http.StatusGone || !strings.Contains(a.body, "is revoked: decline this request") {
+		t.Errorf("the approval of a revoked client's request: %d %q", a.status, a.body)
+	}
+	if !h.decidedAt(third.ID).IsZero() {
+		t.Error("the request was decided, though its approval was refused")
+	}
+	if after, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(after) != 1 {
+		t.Errorf("the grant after the refused approval = %+v, %v", after, err)
+	}
+	// A revoked client makes no new request.
+	if _, err := h.oauth.RequestAccess(t.Context(), other.ClientID, "marks", marksItems()); !errors.Is(err, oauth.ErrNotFound) {
+		t.Errorf("a revoked client's request: %v, want ErrNotFound", err)
+	}
+}
+
+// TestOAuthAccessTwoSelectors checks a round trip where an item names 2
+// selectors: the page offers both, and the approval keeps what the admin
+// narrowed.
+func TestOAuthAccessTwoSelectors(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, _ := h.signin("pi-pocket", "mcp")
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", []oauth.Item{
+		{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading", "tag": "/a"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, csrf, hash := h.consentPage(req.ID)
+	if page.status != http.StatusOK {
+		t.Fatalf("the page: %d %q", page.status, page.body)
+	}
+	for _, want := range []string{`name="path.0.folder"`, `name="path.0.tag"`, "/Reading", "/a"} {
+		if !strings.Contains(page.body, want) {
+			t.Errorf("the page does not show %q", want)
+		}
+	}
+	a := h.approve(req.ID, csrf, hash, url.Values{"item": {"0"},
+		"path.0.folder": {"/Reading/Inbox"}, "path.0.tag": {"/a"}})
+	if a.status != http.StatusSeeOther {
+		t.Fatalf("the approval: %d %q", a.status, a.body)
+	}
+	granted, err := h.oauth.Grant(t.Context(), "chani", "marks")
+	if err != nil || len(granted) != 1 || granted[0].Cap != "marks:read" ||
+		granted[0].Sel["folder"] != "/Reading/Inbox" || granted[0].Sel["tag"] != "/a" {
+		t.Errorf("the grant = %+v, %v", granted, err)
 	}
 }

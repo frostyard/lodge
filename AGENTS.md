@@ -194,8 +194,10 @@ These are the app contract's rules
   running.
 - **lodge never parses an app's JSON-RPC.** It moves frames.
 - **Identity comes from WhoIs alone.** No browser route writes, except the
-  consent page's `POST`, which only an admin's login makes, from lodge's own
-  page, with the request's CSRF token and hash. Issuing an `lgm_` token,
+  consent routes, and only for an admin's login: `/oauth/authorize` records
+  a pending request, which grants nothing; a decision is a `POST` from
+  lodge's own page with that request's CSRF token and hash; a revocation is
+  a `POST` from lodge's grants page with its CSRF token. Issuing an `lgm_` token,
   allowing a login or a node, and making an admin happen only on the
   control socket; an OAuth token only after an admin's approval
   ([ADR-0023](docs/adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).

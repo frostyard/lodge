@@ -48,13 +48,19 @@ type Access struct {
 	Scopes    []string `json:"scopes"`
 }
 
-// client reads client id. An unknown or revoked client is ErrNotFound.
+// clientRow reads client id. An unknown or revoked client is ErrNotFound.
 func (s *storage) clientRow(ctx context.Context, id string) (Client, error) {
+	return s.clientRowAt(ctx, nil, id)
+}
+
+// clientRowAt reads client id in q: a transaction, fosite's, or the
+// database. An unknown or revoked client is ErrNotFound.
+func (s *storage) clientRowAt(ctx context.Context, q querier, id string) (Client, error) {
 	var c Client
 	var uris string
 	var principal, scope, lastUsed, revoked sql.NullString
 	var registered string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, redirect_uris, principal, scope, registered_at, last_used_at, revoked_at
+	err := s.at(ctx, q).QueryRowContext(ctx, `SELECT id, name, redirect_uris, principal, scope, registered_at, last_used_at, revoked_at
 		FROM oauth_clients WHERE id = ? AND revoked_at IS NULL`, id).Scan(&c.ID, &c.Name, &uris,
 		&principal, &scope, &registered, &lastUsed, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -71,8 +77,8 @@ func (s *storage) clientRow(ctx context.Context, id string) (Client, error) {
 }
 
 // clients returns the live clients of a principal, sorted by name.
-func (s *storage) clients(ctx context.Context, principal string) ([]Client, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM oauth_clients WHERE principal = ? AND revoked_at IS NULL ORDER BY name, id`, principal)
+func (s *storage) clients(ctx context.Context, q querier, principal string) ([]Client, error) {
+	rows, err := s.at(ctx, q).QueryContext(ctx, `SELECT id FROM oauth_clients WHERE principal = ? AND revoked_at IS NULL ORDER BY name, id`, principal)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read the clients: %w", err)
 	}
@@ -90,7 +96,7 @@ func (s *storage) clients(ctx context.Context, principal string) ([]Client, erro
 	}
 	out := []Client{}
 	for _, id := range ids {
-		c, err := s.clientRow(ctx, id)
+		c, err := s.clientRowAt(ctx, q, id)
 		if err != nil {
 			return nil, err
 		}
@@ -100,9 +106,9 @@ func (s *storage) clients(ctx context.Context, principal string) ([]Client, erro
 }
 
 // livePrincipal reports ErrNotFound unless name is a live principal.
-func (s *storage) livePrincipal(ctx context.Context, name string) error {
+func (s *storage) livePrincipal(ctx context.Context, q querier, name string) error {
 	var revoked sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT revoked_at FROM principals WHERE name = ?`, name).Scan(&revoked)
+	err := s.at(ctx, q).QueryRowContext(ctx, `SELECT revoked_at FROM principals WHERE name = ?`, name).Scan(&revoked)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return ErrNotFound
@@ -114,9 +120,9 @@ func (s *storage) livePrincipal(ctx context.Context, name string) error {
 	return nil
 }
 
-// principals returns the live principals, with their clients.
+// principals returns the live principals.
 func (s *storage) principals(ctx context.Context) ([]Principal, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, created_at, revoked_at FROM principals WHERE revoked_at IS NULL ORDER BY name`)
+	rows, err := s.query(ctx, `SELECT name, created_at, revoked_at FROM principals WHERE revoked_at IS NULL ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read the principals: %w", err)
 	}
@@ -139,7 +145,7 @@ func (s *storage) principals(ctx context.Context) ([]Principal, error) {
 // client of the principal may do there.
 func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, error) {
 	var text string
-	err := s.db.QueryRowContext(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
+	err := s.store.queryRow(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return []Item{}, nil
 	} else if err != nil {
@@ -157,7 +163,7 @@ func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, erro
 
 // grants returns every grant of a principal, by app.
 func (s *storage) grants(ctx context.Context, principal string) (map[string][]Item, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT app, items FROM grants WHERE principal = ? ORDER BY app`, principal)
+	rows, err := s.query(ctx, `SELECT app, items FROM grants WHERE principal = ? ORDER BY app`, principal)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read the grants: %w", err)
 	}
@@ -252,7 +258,7 @@ func (s *Server) Check(ctx context.Context, token, scope string) (Access, error)
 	if !c.Bound() {
 		return Access{}, fmt.Errorf("client %s is bound to no principal: %w", c.ID, ErrNotFound)
 	}
-	if err := s.store.livePrincipal(ctx, c.Principal); err != nil {
+	if err := s.store.livePrincipal(ctx, nil, c.Principal); err != nil {
 		return Access{}, err
 	}
 	if subject := req.GetSession().GetSubject(); subject != c.Principal {
@@ -272,7 +278,7 @@ func (s *Server) Check(ctx context.Context, token, scope string) (Access, error)
 // touch records a client's last use, at most once a minute.
 func (s *Server) touch(ctx context.Context, id string) error {
 	now := s.now().UTC()
-	_, err := s.db.ExecContext(ctx, `UPDATE oauth_clients SET last_used_at = ?
+	_, err := s.store.exec(ctx, `UPDATE oauth_clients SET last_used_at = ?
 		WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
 		stamp(now), id, stamp(now.Add(-lastUseEvery)))
 	if err != nil {
@@ -282,13 +288,18 @@ func (s *Server) touch(ctx context.Context, id string) error {
 }
 
 // RevokeClient revokes client id: its tokens stop working at once, and its
-// pending requests go.
+// pending requests go. The cascade is 1 transaction, and its hook runs after
+// the commit.
 func (s *Server) RevokeClient(ctx context.Context, id string) error {
-	c, err := s.store.clientRow(ctx, id)
+	var c Client
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if c, err = s.store.clientRowAt(ctx, tx, id); err != nil {
+			return err
+		}
+		return s.revokeClient(ctx, tx, c, stamp(s.now()))
+	})
 	if err != nil {
-		return err
-	}
-	if err := s.revokeClient(ctx, c, stamp(s.now())); err != nil {
 		return err
 	}
 	if s.onRevoke != nil {
@@ -298,43 +309,50 @@ func (s *Server) RevokeClient(ctx context.Context, id string) error {
 	return nil
 }
 
-// revokeClient marks a client revoked and deletes its tokens and pending
-// requests.
-func (s *Server) revokeClient(ctx context.Context, c Client, now string) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE oauth_clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, c.ID); err != nil {
+// revokeClient marks a client revoked in q, and deletes its tokens and
+// pending requests.
+func (s *Server) revokeClient(ctx context.Context, q querier, c Client, now string) error {
+	if _, err := s.store.at(ctx, q).ExecContext(ctx,
+		`UPDATE oauth_clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, c.ID); err != nil {
 		return fmt.Errorf("oauth: revoke a client: %w", err)
 	}
-	if err := s.store.deleteClientSessions(ctx, c.ID); err != nil {
+	if err := s.store.deleteClientSessions(ctx, q, c.ID); err != nil {
 		return err
 	}
-	return s.deleteRequests(ctx, c.ID)
+	return s.deleteRequests(ctx, q, c.ID)
 }
 
 // RevokePrincipal revokes a principal: each of its clients, its grants and
 // its requests go, and its name may be approved again with no grant.
 func (s *Server) RevokePrincipal(ctx context.Context, name string) error {
-	if err := s.store.livePrincipal(ctx, name); err != nil {
-		return err
-	}
-	clients, err := s.store.clients(ctx, name)
-	if err != nil {
-		return err
-	}
-	now := stamp(s.now())
-	ids := make([]string, 0, len(clients))
-	for _, c := range clients {
-		if err := s.revokeClient(ctx, c, now); err != nil {
+	var ids []string
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := s.store.livePrincipal(ctx, tx, name); err != nil {
 			return err
 		}
-		ids = append(ids, c.ID)
-	}
-	// A client of a revoked principal holds no grant: deleting them keeps
-	// the next approval of the name empty, as it must be.
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM grants WHERE principal = ?`, name); err != nil {
-		return fmt.Errorf("oauth: delete a principal's grants: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE principals SET revoked_at = ? WHERE name = ?`, now, name); err != nil {
-		return fmt.Errorf("oauth: revoke a principal: %w", err)
+		clients, err := s.store.clients(ctx, tx, name)
+		if err != nil {
+			return err
+		}
+		now := stamp(s.now())
+		for _, c := range clients {
+			if err := s.revokeClient(ctx, tx, c, now); err != nil {
+				return err
+			}
+			ids = append(ids, c.ID)
+		}
+		// A revoked principal holds no grant: deleting them keeps the next
+		// approval of the name empty, as it must be.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM grants WHERE principal = ?`, name); err != nil {
+			return fmt.Errorf("oauth: delete a principal's grants: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE principals SET revoked_at = ? WHERE name = ?`, now, name); err != nil {
+			return fmt.Errorf("oauth: revoke a principal: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if s.onRevoke != nil {
 		s.onRevoke(name, ids)
