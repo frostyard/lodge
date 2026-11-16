@@ -485,6 +485,22 @@ and design/overview.md's [events](../design/overview.md#events).
     `/mcp/<id>`, the PocketJournal, Porter by the agent socket and Chani's
     frostnotes entry still work.
 
+## Phase 10 — The pilot run
+
+The owner runs the pilot of apps on hearth on the live system: frostmarks,
+the first app on frostyard/hearth, behind lodge as its hub, with the
+owner's agent and a second MCP client. The 7 lines are the exit criteria
+of the incubating repositories in frostyard/core's
+[plan 0002](https://github.com/frostyard/core/blob/main/docs/plans/0002-org-portfolio-roadmap.md)
+([ADR-0085](https://github.com/frostyard/core/blob/main/docs/adr/0085-build-new-first-party-apps-on-hearth-with-lodge-as-their-hub.md)).
+It checks Phases 7 to 9 from end to end: [oauth.md](../specs/oauth.md),
+[the MCP gateway](../specs/lodge-http.md#the-mcp-gateway) and
+[event subscriptions](../specs/lodge-http.md#event-subscriptions).
+
+- **[runbook-pilot.md](../runbook-pilot.md):** each line as numbered steps
+  with the expected result, and the record of the run.
+- **Done when:** the record of a run shows each of the 7 lines as pass.
+
 ## Later / ideas
 
 - One aggregated `/mcp` for clients that want a single connector.
@@ -559,6 +575,7 @@ and design/overview.md's [events](../design/overview.md#events).
 
 ## References
 
+- Checked by: [runbook-pilot.md](../runbook-pilot.md) (Phase 10)
 - Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/oauth.md](../specs/oauth.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
 - Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md), [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Accepted); [ADR-0017](../adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md) and [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md) (Accepted); [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)
