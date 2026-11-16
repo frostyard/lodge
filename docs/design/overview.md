@@ -185,7 +185,9 @@ disabled, and why) feeds `/lodge/apps` and `lodgectl apps`.
   Frontends keep their sessions alive by sending traffic while visible.
 - **Writes.** No browser route but the WebSocket accepts anything but
   `GET` and `HEAD`, so a forged cross-site request finds nothing that
-  writes.
+  writes. The one exception is the consent page's `POST`: only an admin's
+  login, from lodge's own page, with the request's CSRF token and hash
+  ([Agents](#agents)).
 
 ### Agents
 
@@ -224,6 +226,27 @@ until frostread was retired on 2026-11-15.
   closes them. The gateway serves the socket with the same code as the
   tailnet's `/mcp/<id>`. The kit's `lodgeapp.Env.AgentClient` is an
   agent's client of it.
+
+**OAuth and consent**
+([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md);
+[oauth.md](../specs/oauth.md)). lodge is also an OAuth 2.1 authorization
+server, so a standard MCP client signs in without a token copied by hand.
+
+- `internal/oauth` wraps `github.com/ory/fosite`, with its storage in
+  lodge's database. A client discovers lodge, registers, and signs in
+  with PKCE; the redirect may use any loopback port.
+- The sign-in opens the **consent page**, which only an admin's login can
+  decide (`lodgectl allow admin`). The admin picks the principal, such as
+  `chani`, and the scope, `mcp`, `events` or both. Later grants come as
+  access requests: 1 app and items `{cap, sel}` from the app's hearth
+  manifest, which the admin narrows, approves or declines.
+- A grant belongs to the principal; each client acts for it within its
+  scope. Tokens are opaque: 1 hour for access, 30 days for refresh,
+  rotated, and a reused refresh token revokes its family.
+- The **grants page** lists principals, clients, grants and last use, and
+  revokes a client or a principal.
+- `Check`, `Grant` and `RequestAccess` serve the MCP gateway and the
+  broker. `/mcp/<id>` with `lgm_` tokens is unchanged.
 
 ### Untrusted content
 
@@ -330,8 +353,11 @@ aliases fail at once.
 
 `internal/control` serves JSON-RPC on `/run/lodge/control.sock` to root
 and to lodge's own uid. `cmd/lodgectl` is its client. It is the only way to
-allow a login or a node, issue a token, or reload the apps
+allow a login or a node, make an admin, issue an `lgm_` token, or reload
+the apps
 ([lodge-http.md](../specs/lodge-http.md#the-control-socket-and-lodgectl)).
+OAuth tokens come from an admin's approval on the consent page instead
+([Agents](#agents)).
 
 ### The kit and the client
 
@@ -457,7 +483,7 @@ Apps pin all three to a published lodge commit or release.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
-- Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md), [specs/inference.md](../specs/inference.md)
-- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and consent, Proposed), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/oauth.md](../specs/oauth.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md), [specs/inference.md](../specs/inference.md)
+- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (OAuth, consent and grants)
 - Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md); Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) and [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md)

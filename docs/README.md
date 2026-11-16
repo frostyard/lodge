@@ -42,6 +42,7 @@ frostyard/core's
 - [0019 — The accent is frostyard's cold blue](adr/0019-the-accent-is-frostyards-cold-blue.md)
 - [0020 — Apps report an unread count for the rail in their health](adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (Proposed)
 - [0021 — The text tokens reach 4.5:1 on every surface](adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)
+- [0023 — lodge issues agent access through OAuth and a consent page](adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (Proposed)
 
 ### Design
 
@@ -54,11 +55,12 @@ frostyard/core's
 - [lodge-client](specs/lodge-client.md) — the postMessage protocol between the shell and an app's frame, the companion's messages, and the library's API
 - [The shell](specs/shell.md) — the shell page: rail, switcher and its shortcut, frames, addresses and history, the companion
 - [The inference layer](specs/inference.md) — lodge's side of the inference socket: the caller, providers, aliases and allow-lists, the queue, credentials, availability and the usage log
+- [lodge's OAuth server, consent and grants](specs/oauth.md) — metadata, registration, authorization, tokens, principals, clients and grants, requests, the consent and grants pages, CSRF, state
 - [The UI package](specs/ui-package.md) — `@frostyard/lodge-ui`: its exports, the token names, the theme, the rules and how an app consumes it
 
 ### Plans
 
-- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant's design, the companion and the agent socket
+- [0001 — Roadmap](plans/0001-roadmap.md) — the kit, lodge v1 with notes, inference, mail, the assistant's design, the companion and the agent socket, OAuth and consent
 
 ## Conventions
 

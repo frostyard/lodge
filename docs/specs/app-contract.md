@@ -105,7 +105,7 @@ Proposed).
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `contract` | int | yes | the contract major this app speaks: `1` |
-| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `lodge` or `mcp`; the URL segment |
+| `id` | string | yes | `^[a-z][a-z0-9]{0,15}$`; equal to the directory's name; not `app`, `device`, `lodge`, `mcp` or `oauth`; the URL segment |
 | `name` | string | yes | 1 to 32 characters; shown in the rail and the switcher |
 | `icon` | string | yes | a relative path to an SVG file inside `web/` |
 | `version` | string | yes | the app's version, 1 to 64 visible ASCII characters |
@@ -117,6 +117,7 @@ Proposed).
 | `mcp` | bool | no | the app serves MCP |
 | `remoteImages` | bool | no | the app's frame may load any `https:` image (notes: yes; Porter: never) |
 | `companion` | bool | no | the app is the companion: it opens in a panel beside the current app, and is told that app's context ([shell.md](shell.md#the-companion)). At most one app |
+| `hearth` | string | no | the file name of the app's hearth manifest in its directory, `^[a-z0-9][a-z0-9._-]{0,63}\.json$`, not `app.json`. lodge reads its capabilities and selectors for the consent page ([oauth.md](oauth.md#the-apps-manifest)) |
 
 A missing bool is `false`. Notes' manifest:
 
@@ -130,8 +131,9 @@ A missing bool is `false`. Notes' manifest:
   `SIGHUP`). Fields it does not know are ignored, so a minor addition does
   not break an older lodge.
 - An app is **disabled** when its manifest does not parse or breaks a
-  constraint, its `contract` is not a major lodge speaks, or `web/index.html`
-  or its icon is missing. lodge logs why, the rail shows it, and every route
+  constraint, its `contract` is not a major lodge speaks, `web/index.html`
+  or its icon is missing, or the hearth manifest it names cannot be read or
+  is not one lodge reads. lodge logs why, the rail shows it, and every route
   of that app answers 503. The other apps are unaffected.
 - An icon that carries the attribute `data-lodge-placeholder` is the
   new-lodge-app scaffold's placeholder. The app stays enabled. lodge logs
@@ -459,7 +461,7 @@ Every app bundle includes `@frostyard/lodge-client`, built for the base
 
 ## References
 
-- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the badge, Proposed), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0011](../adr/0011-a-shared-inference-layer-routes-apps-to-models.md), [ADR-0013](../adr/0013-the-companion-opens-beside-the-current-app.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (the `hearth` member, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Context: [design/overview.md](../design/overview.md)
-- Related: [lodge-http.md](lodge-http.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
-- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket)
+- Related: [lodge-http.md](lodge-http.md), [oauth.md](oauth.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md)
+- Built in: [roadmap — Phase 1](../plans/0001-roadmap.md#phase-1--the-kit) (the app side), [Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge's side), [Phase 3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [Phase 7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (the `hearth` member)
