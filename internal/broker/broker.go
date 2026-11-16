@@ -487,12 +487,14 @@ type Spec struct {
 	// Topic is the requested prefix of the subjects it takes, whose first
 	// token is App.
 	Topic string
-	// Inactive makes the consumer without the callback's filters: it takes
-	// its resync subject alone, and delivers nothing until the caller
-	// activates it with Refilter. A caller that reads a grant outside the
-	// broker's lock uses it, so that the subscription is registered before
-	// its filters are read: a grant change that runs after that read then
-	// finds it.
+	// Inactive makes a new subscription's consumer without the callback's
+	// filters: it takes its resync subject alone, and delivers nothing until
+	// the caller activates it with Refilter. A caller that reads a grant
+	// outside the broker's lock uses it, so that the subscription is
+	// registered before its filters are read: a grant change that runs after
+	// that read then finds it. It applies to a new subscription only: 1 that
+	// is registered already keeps the callback's filters, because its
+	// consumer may hold events that its grant allows it to read.
 	Inactive bool
 }
 
@@ -579,9 +581,12 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 	if err := validateCount(fs); err != nil {
 		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
 	}
-	if spec.Inactive {
-		// The callback's answer is the precheck; the filters go in when the
-		// caller activates the subscription, which reads the grant again.
+	if spec.Inactive && on == nil {
+		// It is a new subscription: the callback's answer is the precheck,
+		// and the filters go in when the caller activates it, which reads the
+		// grant again. A subscription that is registered already keeps them
+		// now: its consumer may hold events that its grant lets it read, and
+		// a narrower filter in between would move it past them.
 		fs = []string{resync}
 	}
 	// A revoke that could not delete a consumer kept it for this client,

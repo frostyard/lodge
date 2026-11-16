@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker",
+  "correction": "An inactive consumer, made for a subscription that is registered already, takes its resync subject alone for a moment, and a pull in that moment moves the consumer past events that its grant lets it read. The inactive form belongs to a new subscription only: 1 that is registered keeps the callback's filters, because a grant change after that read finds it and refilters it through the lifecycle lock.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 2 at b4caabd (openai/gpt-6.1-sol): blocking finding 1, a re-PUT skips an existing subscription's authorized backlog",
+  "promoted_to": "internal/events/acceptance_test.go TestARePutKeepsTheBacklog"
+}

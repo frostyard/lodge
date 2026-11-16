@@ -762,3 +762,102 @@ func TestAClientLookupFailureRevokesItsClient(t *testing.T) {
 		t.Errorf("the client lists the subscriptions %+v, want none", subs)
 	}
 }
+
+// TestARePutKeepsTheBacklog checks that subscribing a registered subscription
+// again keeps the filters its consumer has: it may hold events that its grant
+// allows it to read, and an inactive consumer in between would pull past them.
+func TestARePutKeepsTheBacklog(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	for range 3 {
+		h.publish(t, "marks.bookmark.created.folder.f0")
+	}
+	// The same subscription is made again, with the same topic: in the window
+	// before its activation it keeps the filters that its grant gives.
+	client, _, ok := h.svc.Tokens(t.Context(), token)
+	if !ok {
+		t.Fatal("the service refuses the token")
+	}
+	hooks := 0
+	events.SetBeforeActivate(h.svc, func() {
+		hooks++
+		state, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1")
+		if err != nil {
+			t.Errorf("the consumer of a subscription made again: %v", err)
+			return
+		}
+		if want := []string{"marks.bookmark.created.folder", "marks.bookmark.created.folder.>"}; !slices.Contains(state.Filters, want[0]) ||
+			!slices.Contains(state.Filters, want[1]) {
+			t.Errorf("the consumer's filters are %q, want the grant's %q, not its resync subject alone",
+				state.Filters, want)
+		}
+	})
+	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err != nil {
+		t.Fatalf("Subscribe again: %v", err)
+	}
+	if hooks != 1 {
+		t.Fatalf("the hook ran %d times, want 1", hooks)
+	}
+
+	// The 3 events that the subscription was allowed to read all come.
+	nc := h.subscribed(t, token)
+	msgs := pull(t, nc, "app_marks", sub.Consumer, 10, time.Second)
+	if len(msgs) != 3 {
+		t.Fatalf("the pull answered %d messages, want the 3 events of the backlog", len(msgs))
+	}
+}
+
+// TestAnUnsubscribeDuringActivationKeepsTheOthers checks that a subscription
+// which is removed while it is activated leaves its client's other
+// subscriptions, and their delivery, alone: the client is not revoked.
+func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	keep, err := h.svc.Subscribe(t.Context(), h.access(t, token), "keep", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe keep: %v", err)
+	}
+	hooks := 0
+	events.SetBeforeActivate(h.svc, func() {
+		hooks++
+		// The new subscription goes while it is activated.
+		if err := h.svc.Unsubscribe(t.Context(), h.access(t, token), "new"); err != nil {
+			t.Errorf("Unsubscribe new: %v", err)
+		}
+	})
+	_, err = h.svc.Subscribe(t.Context(), h.access(t, token), "new", "marks.bookmark.created")
+	if hooks != 1 {
+		t.Fatalf("the hook ran %d times, want 1", hooks)
+	}
+	if !errors.Is(err, events.ErrNotFound) {
+		t.Fatalf("the PUT answered %v, want an error that wraps ErrNotFound", err)
+	}
+
+	// The client keeps its other subscription and its consumer: it is not
+	// revoked. The PUT closed its connection, as every subscribe does, so a
+	// new 1 takes the pulled events of the subscription it kept.
+	client, _, ok := h.svc.Tokens(t.Context(), token)
+	if !ok {
+		t.Fatal("the service refuses the token")
+	}
+	subs := h.b.ClientSubscriptions(client)
+	if len(subs) != 1 || subs[0].Sub != "keep" {
+		t.Errorf("the client's subscriptions are %+v, want keep alone", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", keep.Consumer); err != nil {
+		t.Errorf("keep's consumer: %v", err)
+	}
+	nc := h.subscribed(t, token)
+	h.publish(t, "marks.bookmark.created.folder.f0")
+	msgs := pull(t, nc, "app_marks", keep.Consumer, 10, time.Second)
+	if len(msgs) != 1 {
+		t.Fatalf("the pull on the subscription the client kept answered %d messages, want 1", len(msgs))
+	}
+
+}

@@ -208,10 +208,18 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	// filters: a grant change that runs after it refilters the consumer
 	// through the same lifecycle lock.
 	if err := s.o.Broker.Refilter(ctx, client, sub, s.refilter(access.Principal)); err != nil {
-		// It delivers nothing yet, so a subscription that cannot be
-		// activated goes with it: its consumer, and then its client when
-		// even that fails.
-		if uerr := s.unsubscribe(ctx, client, sub); uerr != nil {
+		if errors.Is(err, broker.ErrNotFound) {
+			// The subscription went while it was activated, so there is
+			// nothing left to clean up, and the client keeps its others.
+			return Subscription{}, fmt.Errorf("%w: subscription %q was removed while it was activated", ErrNotFound, sub)
+		}
+		// A subscription whose grant cannot be read now goes: its
+		// consumer, and then its client when even that fails. A subscription that is already gone leaves the
+		// client's others alone.
+		uerr := s.unsubscribe(ctx, client, sub)
+		switch {
+		case uerr == nil, errors.Is(uerr, broker.ErrNotFound):
+		default:
 			s.log.Warn("unsubscribe a subscription that could not be activated", "client", client, "sub", sub,
 				"err", uerr)
 			s.revoke(client)

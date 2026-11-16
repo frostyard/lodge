@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "A subscription that is unsubscribed while it is activated is already gone, so its cleanup must not take its client with it: a refilter that answers ErrNotFound is the subscription's own 404, and an unsubscribe that answers ErrNotFound means the subscription removed itself. The client is revoked only for another cleanup error.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 2 at b4caabd (openai/gpt-6.1-sol): blocking finding 2, a concurrent unsubscribe makes activation cleanup revoke the client",
+  "promoted_to": "internal/events/acceptance_test.go TestAnUnsubscribeDuringActivationKeepsTheOthers"
+}
