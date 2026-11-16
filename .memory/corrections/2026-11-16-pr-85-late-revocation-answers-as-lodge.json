@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/mcpgw",
+  "correction": "A refusal that the MCP gateway makes after lodge's token check (a client revoked in the window before its registration) must answer exactly as lodge's own check does: 401 with the resource_metadata challenge, the confined headers and Connection: close. mcpgw takes that answer from lodge through Caller.Refuse, and never writes its own 401.",
+  "evidence": "frostyard/lodge#85 cross-review re-review 1 at 47e8832 (openai/gpt-6.1-sol): blocking finding 6, the late-revocation 401 lacked WWW-Authenticate and Connection: close",
+  "promoted_to": "internal/gateway/mcpgw_test.go TestMCPGatewayRevokedAfterTheCheck"
+}

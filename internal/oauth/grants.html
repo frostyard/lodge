@@ -24,6 +24,8 @@
   ul { list-style: none; margin: 0; padding: 0; }
   ul.items > li { border-top: 1px solid #e6edf4; padding: .5rem 0; }
   ul.items > li:first-child { border-top: 0; }
+  ul.items form { display: inline-block; margin-left: .5rem; }
+  ul.items form button { padding: .15rem .55rem; font-size: .85rem; }
   .paths { margin: .25rem 0 0 1.5rem; display: grid; gap: .2rem; color: #4a5768; font-size: .9rem; }
   table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .95rem; }
   th, td { text-align: left; padding: .4rem .5rem; border-top: 1px solid #e6edf4; vertical-align: top; }
@@ -42,6 +44,7 @@
 
   <h2>Principals</h2>
   {{range .Principals}}
+  {{$p := .}}
   <section class="card">
     <header>
       <h3><code class="accent">{{.Name}}</code></h3>
@@ -62,11 +65,20 @@
     <h3 style="margin-top:1rem">Grants</h3>
     {{if .Grants}}
     {{range .Grants}}
+    {{$g := .}}
     <p class="muted"><strong>{{.AppName}}</strong> <code>{{.App}}</code></p>
     <ul class="items">
       {{range $item := .Items}}
       <li>
         <code class="accent">{{$item.Cap}}</code>{{if $item.Everything}} &mdash; everything{{end}}
+        <form method="post" action="/oauth/grants/revoke">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="ts" value="{{$.TS}}">
+          <input type="hidden" name="principal" value="{{$p.Name}}">
+          <input type="hidden" name="app" value="{{$g.App}}">
+          <input type="hidden" name="item" value="{{$item.Hash}}">
+          <button type="submit">Remove</button>
+        </form>
         {{if $item.Selectors}}
         <ul class="paths">
           {{range $sel := $item.Selectors}}
@@ -138,7 +150,7 @@
   <p class="muted">No request waits for a decision.</p>
   {{end}}
 
-  <p class="foot">A revocation ends the client's or the principal's tokens at once, and the next check of one refuses it.</p>
+  <p class="foot">A revocation ends the client's or the principal's tokens at once, and the next check of one refuses it. Removing 1 item narrows a grant with no new sign-in.</p>
 </main>
 </body>
 </html>

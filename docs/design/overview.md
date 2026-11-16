@@ -255,6 +255,41 @@ server, so a standard MCP client signs in without a token copied by hand.
   revokes a client or a principal.
 - `Check`, `Grant` and `RequestAccess` serve the MCP gateway and the
   broker. `/mcp/<id>` with `lgm_` tokens is unchanged.
+- The grants page also removes 1 item of a grant, which narrows it without
+  a new sign-in.
+
+**The MCP gateway**
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md);
+[lodge-http.md](../specs/lodge-http.md#the-mcp-gateway)). Apps on
+frostyard/hearth have no `/mcp/<id>`. An agent reaches all of them through
+1 MCP endpoint, `/gateway/mcp`, with its OAuth token.
+
+```
+agent ──Bearer lgo_at_…──► /gateway/mcp ── internal/mcpgw (MCP server, 1 per principal)
+                                   │  tools: <id>_<tool> for each granted capability
+                                   │  + request_access ──► oauth.RequestAccess ──► consent page
+                                   ▼
+            app socket: POST /connect/<service>/<method>
+            Lodge-Principal, Lodge-Grant ──► hearth's lodge adapter ──► the app's checks
+```
+
+- `internal/mcpgw` wraps the Go MCP SDK. It keeps 1 MCP server per
+  principal, whose tools are the agent operations of each app on hearth
+  that the principal's grant holds a capability for. Descriptions and
+  schemas come from the app's tool catalog; permissions, effects and
+  hints from its hearth manifest (`internal/apps`).
+- A session is bound to its OAuth client. Each call reads the grant again;
+  a missing capability is an `insufficient_scope` tool error that points
+  to `request_access`, and the app checks the paths and stored objects
+  itself.
+- `internal/oauth`'s grant hook and `lodgectl reload` make the gateway
+  compute the tools again; a changed list sends
+  `notifications/tools/list_changed` to the principal's live sessions.
+  Its revoke hook ends the requests of the revoked clients.
+- A frame of an app on hearth calls the same API on
+  `/app/<id>/connect/` ([lodge-http.md](../specs/lodge-http.md#app-calls-appidconnect)),
+  as its login with every capability of the app, and only its `ui`
+  operations.
 
 ### Untrusted content
 
@@ -517,7 +552,7 @@ Apps pin all three to a published lodge commit or release.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and consent, Proposed), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and consent, Proposed), [ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (the MCP gateway, Proposed), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Contracts: [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/oauth.md](../specs/oauth.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md), [specs/inference.md](../specs/inference.md)
-- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (OAuth, consent and grants)
+- Built in: [roadmap](../plans/0001-roadmap.md), Phases [1](../plans/0001-roadmap.md#phase-1--the-kit) (the kit and the client), [2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app) (lodge v1), [3](../plans/0001-roadmap.md#phase-3--the-inference-layer) (inference), [4](../plans/0001-roadmap.md#phase-4--mail-in-lodge) (mail), [5](../plans/0001-roadmap.md#phase-5--the-assistants-design) (the assistant's design), [6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket) (the companion and the agent socket), [7](../plans/0001-roadmap.md#phase-7--oauth-consent-and-grants) (OAuth, consent and grants), [8](../plans/0001-roadmap.md#phase-8--the-mcp-gateway-and-apps-on-hearth) (the MCP gateway and apps on hearth)
 - Related: frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) and [ADR-0026](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0026-notesd-runs-as-a-lodge-app.md); Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) and [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md)

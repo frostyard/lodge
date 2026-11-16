@@ -299,8 +299,21 @@ A request is what the consent page shows and an admin decides.
   and when it expires, and a link to its consent page.
 
 Each client and each principal has a form, `POST /oauth/grants/revoke`,
-with `csrf`, `ts`, and `client=<ID>` or `principal=<name>`. A revocation
-answers 303 to `/oauth/grants`; an unknown or revoked target is 404.
+with `csrf`, `ts`, and `client=<ID>` or `principal=<name>`. Each item of
+each grant has one too, with `principal=<name>`, `app=<id>` and
+`item=<hash>`, and a button **Remove**: it removes that item from the
+principal's grant for the app, and deletes the grant when no item is left
+([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
+An item's hash is the SHA-256, in lowercase hex, of the item's JSON as the
+[request hash](#requests) writes it: `{"cap":"…","sel":{…}}`, the `sel`
+keys sorted, no spaces, and no `sel` for an item without a selector.
+
+- A form names exactly 1 target: `client` alone, `principal` alone, or
+  `principal`, `app` and `item` together; any other mix is 400.
+- A revocation or a removal answers 303 to `/oauth/grants`; an unknown or
+  revoked target is 404.
+- A removal narrows the grant at once: the gateway reads the grant at each
+  call, and tells the principal's sessions that its tools changed.
 
 ### CSRF tokens
 
@@ -333,9 +346,13 @@ All of it is in lodge's database in `/var/lib/lodge/`:
 
 `internal/oauth` gives the rest of lodge:
 
-- `Check(ctx, token, scope)`: the principal, client and scopes of a live
-  access token that has `scope`, from a live, bound client of a live
-  principal; else an error. It records last use.
+- `Check(ctx, token, scope)`: the principal, client, scopes and expiry of a
+  live access token that has `scope`, from a live, bound client of a live
+  principal; else an error. A live token whose scopes, or whose client's
+  scope, lack `scope` is the error `ErrScope`, which the gateway answers
+  with 403 and not 401. It records last use.
+- `RemoveGrantItem(ctx, principal, app, hash)`: removes 1 item of a grant
+  ([the grants page](#the-grants-page)).
 - `Grant(ctx, principal, app)`: the principal's items for the app.
 - `RequestAccess(ctx, client, app, items)`: an access request
   ([above](#requests)).
@@ -360,6 +377,6 @@ All of it is in lodge's database in `/var/lib/lodge/`:
 
 ## References
 
-- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)
+- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md), [ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (the removal of a grant's item, the gateway's use)
 - Context: [design/overview.md](../design/overview.md#agents)
 - Related: [lodge-http.md](lodge-http.md#oauth-routes) (the routes and their checks), [app-contract.md](app-contract.md#the-manifest-appjson) (the `hearth` member)

@@ -31,6 +31,7 @@ import (
 	"github.com/frostyard/lodge/internal/control"
 	"github.com/frostyard/lodge/internal/gateway"
 	"github.com/frostyard/lodge/internal/inference"
+	"github.com/frostyard/lodge/internal/mcpgw"
 	"github.com/frostyard/lodge/internal/oauth"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/store"
@@ -179,10 +180,25 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	var base atomic.Value
 	base.Store(names.LodgeOrigin)
 
+	// lodge's MCP gateway, /gateway/mcp (docs/specs/lodge-http.md, The MCP
+	// gateway; ADR-0024). The OAuth server is made before it, and its hooks
+	// reach the gateway through the pointer, which is set before lodge serves.
+	var mcpGateway atomic.Pointer[mcpgw.Gateway]
+
 	// lodge's OAuth server, its consent page and its grants page
 	// (docs/specs/oauth.md).
 	oauthSrv, err := oauth.New(ctx, oauth.Options{DB: db, Apps: reg,
-		Issuer: func() string { return base.Load().(string) }, Log: log.With("part", "oauth")})
+		Issuer: func() string { return base.Load().(string) }, Log: log.With("part", "oauth"),
+		OnGrant: func(principal, app string) {
+			if gw := mcpGateway.Load(); gw != nil {
+				gw.GrantChanged(principal, app)
+			}
+		},
+		OnRevoke: func(principal string, clients []string) {
+			if gw := mcpGateway.Load(); gw != nil {
+				gw.Revoked(principal, clients)
+			}
+		}})
 	if err != nil {
 		return err
 	}
@@ -236,6 +252,11 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 				return err
 			}
 		}
+		// A reload changes the apps' tools, which every open session of the
+		// gateway learns of.
+		if gw := mcpGateway.Load(); gw != nil {
+			gw.AppsChanged()
+		}
 		return nil
 	}
 
@@ -255,8 +276,13 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	// The gateway exists before the nodes join, for the agent socket, which
 	// names no node; the nodes' listeners start, and its names are set,
 	// once they have joined.
+	// 1 pool of connections to the apps, for lodge's routes and its MCP
+	// gateway, so that the limit is 1 app's connections in all (ADR-0024).
+	appsTransport := gateway.NewAppTransport(reg)
+	mcpGateway.Store(mcpgw.New(mcpgw.Options{Apps: reg, OAuth: oauthSrv, Transport: appsTransport,
+		Log: log.With("part", "mcpgw"), Version: version}))
 	gcfg := gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss,
-		OAuth: oauthSrv, Log: log}
+		OAuth: oauthSrv, MCP: mcpGateway.Load(), Transport: appsTransport, Log: log}
 	if br != nil {
 		gcfg.Broker = br
 	}

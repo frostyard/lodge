@@ -2,8 +2,9 @@
 # Runs lodge's development build on loopback for a smoke test
 # (docs/specs/lodge-http.md, The development build): a layout root, the
 # shell, the e2e identity allowed, and three fake apps unless FAKE_APPS=0:
-# one, which reports a badge of 3, two, and helper, which is the companion
-# (Ctrl+Shift+`).
+# one, which reports a badge of 3, two, helper, which is the companion
+# (Ctrl+Shift+`), and hearth's example app, notelite, which is an app on
+# hearth.
 #
 #   make e2e-build && dev/e2e.sh [ROOT]
 #
@@ -19,7 +20,7 @@ root=${1:-$(mktemp -d "${TMPDIR:-/tmp}/lodge-e2e.XXXXXX")}
 port=${LODGE_PORT:-8480}
 cport=${LODGE_CONTENT_PORT:-8481}
 
-for b in lodge-e2e lodgectl lodge-fakeapp; do
+for b in lodge-e2e lodgectl lodge-fakeapp lodge-hearthapp; do
 	[ -x "$build/$b" ] || { echo "e2e.sh: $build/$b is missing; run make e2e-build" >&2; exit 1; }
 done
 
@@ -59,9 +60,13 @@ if [ "${FAKE_APPS:-1}" = 1 ]; then
 	pids="$pids $!"
 	LODGE_ROOT=$root "$build/lodge-fakeapp" --id helper --name Helper --key h --content=false --companion &
 	pids="$pids $!"
+	# hearth's example app: an app on hearth, for the MCP gateway and the
+	# Connect route.
+	LODGE_ROOT=$root "$build/lodge-hearthapp" &
+	pids="$pids $!"
 	i=0
 	until [ -S "$root/run/lodge/apps/one.sock" ] && [ -S "$root/run/lodge/apps/two.sock" ] &&
-		[ -S "$root/run/lodge/apps/helper.sock" ]; do
+		[ -S "$root/run/lodge/apps/helper.sock" ] && [ -S "$root/run/lodge/apps/notelite.sock" ]; do
 		i=$((i + 1))
 		[ $i -le 100 ] || { echo "e2e.sh: the fake apps did not start" >&2; exit 1; }
 		sleep 0.1

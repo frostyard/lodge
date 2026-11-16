@@ -49,7 +49,67 @@ type Hearth struct {
 	Capabilities []string `json:"capabilities"`
 	// Selectors are the app's selector names, such as folder.
 	Selectors []string `json:"selectors"`
+	// Operations are the app's RPCs (ADR-0024).
+	Operations []Operation `json:"operations"`
+	// Tools are the app's agent tools, from its catalog (ADR-0024).
+	Tools []Tool `json:"tools"`
 }
+
+// Operation is 1 RPC of an app's hearth manifest: its full name, the
+// capability it needs, what it does, where it is exposed, and, for an agent
+// operation, its MCP tool's name (ADR-0024).
+type Operation struct {
+	// Name is the RPC's full name, <package>.<service>.<method>.
+	Name string `json:"name"`
+	// Permission is the capability the call needs, one of the app's.
+	Permission string `json:"permission"`
+	// Effect is what the call does: read, write or outward.
+	Effect string `json:"effect"`
+	// Expose is where the RPC is reachable: ui, agent, or both.
+	Expose []string `json:"expose"`
+	// Tool is the RPC's MCP tool name, set exactly when Expose holds agent.
+	Tool string `json:"tool,omitzero"`
+}
+
+// Agent reports whether an agent may reach the operation.
+func (o Operation) Agent() bool { return slices.Contains(o.Expose, "agent") }
+
+// UI reports whether the app's web interface may reach the operation.
+func (o Operation) UI() bool { return slices.Contains(o.Expose, "ui") }
+
+// Service is the operation's service: its name up to the last dot.
+func (o Operation) Service() string {
+	i := strings.LastIndexByte(o.Name, '.')
+	if i < 0 {
+		return ""
+	}
+	return o.Name[:i]
+}
+
+// Method is the operation's method: its name after the last dot.
+func (o Operation) Method() string {
+	i := strings.LastIndexByte(o.Name, '.')
+	if i < 0 {
+		return o.Name
+	}
+	return o.Name[i+1:]
+}
+
+// Tool is 1 tool of an app's catalog, in the shape of an MCP tools/list
+// entry: its name, its description, and the JSON Schemas of its request and
+// its response (ADR-0024).
+type Tool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// InputSchema and OutputSchema are raw JSON: lodge checks their shape
+	// and moves them, and never reads a schema.
+	InputSchema  jsontext.Value `json:"inputSchema"`
+	OutputSchema jsontext.Value `json:"outputSchema,omitzero"`
+}
+
+// GatewayTools are the names of the tools lodge's MCP gateway adds to every
+// app's tools, so that no app's tool may make one of them (ADR-0024).
+var GatewayTools = []string{"request_access"}
 
 // HearthFormat is the hearth manifest format major this lodge reads.
 const HearthFormat = 1
@@ -59,6 +119,29 @@ const MaxHearth = 1 << 20
 
 // hearthName is the form of a capability's name and of a selector.
 var hearthName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// operationName is the form of an operation's full name.
+var operationName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
+
+// toolName is the form of an operation's tool name and of a catalog tool's.
+var toolName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// What an operation's effect and expose may hold.
+var (
+	operationEffects   = []string{"read", "write", "outward"}
+	operationExposures = []string{"ui", "agent"}
+)
+
+// The bounds of a tool catalog (ADR-0024).
+const (
+	// maxTools is how many tools a catalog may hold.
+	maxTools = 128
+	// maxToolName bounds a tool's name in bytes: the gateway's name is
+	// <app id>_<tool>, and an MCP tool name is at most 64 characters.
+	maxToolName = 47
+	// maxToolDescription bounds a tool's description in bytes.
+	maxToolDescription = 4096
+)
 
 // PlaceholderIcon marks the new-lodge-app scaffold's icon
 // (.agents/skills/new-lodge-app/template/web/public/icon.svg.tmpl). An app
@@ -334,11 +417,16 @@ func (r *Registry) loadOne(id string) App {
 		}
 	}
 	// Its hearth manifest, when it names one: the capabilities and the
-	// selectors the consent page shows.
+	// selectors the consent page shows, and the operations and the tools an
+	// agent reaches (ADR-0024).
 	web := filepath.Join(dir, "web")
 	var hearthErr error
 	if m.Hearth != "" {
-		hearthErr = loadHearth(dir, m.Hearth, id, &a)
+		if err := loadHearth(dir, m.Hearth, id, &a); err != nil {
+			hearthErr = err
+		} else if err := loadTools(dir, m.Tools, id, &a); err != nil {
+			hearthErr = err
+		}
 	}
 	switch {
 	case a.uid < 0 && r.devUID < 0:
@@ -388,10 +476,11 @@ func loadHearth(dir, name, id string, a *App) error {
 		return fmt.Errorf("its hearth manifest %s is larger than 1 MiB", name)
 	}
 	var m struct {
-		Hearth       int      `json:"hearth"`
-		App          string   `json:"app"`
-		Capabilities []string `json:"capabilities"`
-		Selectors    []string `json:"selectors"`
+		Hearth       int         `json:"hearth"`
+		App          string      `json:"app"`
+		Capabilities []string    `json:"capabilities"`
+		Selectors    []string    `json:"selectors"`
+		Operations   []Operation `json:"operations"`
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
 		return fmt.Errorf("its hearth manifest %s: %w", name, err)
@@ -413,8 +502,230 @@ func loadHearth(dir, name, id string, a *App) error {
 			return fmt.Errorf("its hearth manifest %s has selector %q, not a name", name, sel)
 		}
 	}
-	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors}
+	if err := checkOperations(name, m.Operations, m.Capabilities); err != nil {
+		return err
+	}
+	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors, Operations: m.Operations}
 	return nil
+}
+
+// checkOperations checks a hearth manifest's operations: each name, the
+// capability it needs, its effect, its expose, and its tool (ADR-0024). A
+// break names the manifest and the operation.
+func checkOperations(name string, ops []Operation, capabilities []string) error {
+	names, tools := map[string]bool{}, map[string]bool{}
+	for _, op := range ops {
+		label := "an operation without a name"
+		if op.Name != "" {
+			label = "operation " + op.Name
+		}
+		bad := func(format string, args ...any) error {
+			return fmt.Errorf("its hearth manifest %s: %s: %s", name, label, fmt.Sprintf(format, args...))
+		}
+		switch {
+		case !operationName.MatchString(op.Name) || len(strings.Split(op.Name, ".")) < 3:
+			return bad("its name must be <package>.<service>.<method>, of at least 3 parts")
+		case names[op.Name]:
+			return bad("its name is another operation's")
+		}
+		names[op.Name] = true
+		if !slices.Contains(capabilities, op.Permission) {
+			return bad("its permission %q is not one of the app's capabilities", op.Permission)
+		}
+		if !slices.Contains(operationEffects, op.Effect) {
+			return bad("its effect %q is not read, write or outward", op.Effect)
+		}
+		switch {
+		case len(op.Expose) == 0:
+			return bad("its expose is empty: name ui, agent or both")
+		case !distinct(op.Expose):
+			return bad("its expose names %v with a repeat", op.Expose)
+		}
+		for _, where := range op.Expose {
+			if !slices.Contains(operationExposures, where) {
+				return bad("its expose has %q, not ui or agent", where)
+			}
+		}
+		switch {
+		case op.Agent() && op.Tool == "":
+			return bad("an agent operation needs its tool's name")
+		case !op.Agent() && op.Tool != "":
+			return bad("its tool %q is set, and it is not exposed to agents", op.Tool)
+		case op.Tool != "" && !toolName.MatchString(op.Tool):
+			return bad("its tool %q must match ^[a-z][a-z0-9_]*$", op.Tool)
+		case tools[op.Tool]:
+			return bad("its tool %q is another operation's", op.Tool)
+		}
+		if op.Tool != "" {
+			tools[op.Tool] = true
+		}
+	}
+	return nil
+}
+
+// distinct reports whether no value of list repeats.
+func distinct(list []string) bool {
+	seen := make(map[string]bool, len(list))
+	for _, s := range list {
+		if seen[s] {
+			return false
+		}
+		seen[s] = true
+	}
+	return true
+}
+
+// loadTools reads and checks app id's tool catalog, name, from dir into
+// a.Hearth.Tools: 1 MCP tool for each agent operation of the hearth manifest,
+// in the shape of an MCP tools/list result (ADR-0024). A catalog it cannot
+// read or use is an error, which becomes the app's reason.
+func loadTools(dir, name, id string, a *App) error {
+	agents := agentOperations(a.Hearth.Operations)
+	if name == "" {
+		if len(agents) > 0 {
+			return errors.New("its hearth manifest has agent operations, and app.json names no tools")
+		}
+		return nil
+	}
+	p := filepath.Join(dir, name)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return fmt.Errorf("its tool catalog %s: %w", name, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("its tool catalog %s is not a regular file", name)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return fmt.Errorf("its tool catalog %s: %w", name, err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxHearth+1))
+	if err != nil {
+		return fmt.Errorf("its tool catalog %s: %w", name, err)
+	}
+	if len(b) > MaxHearth {
+		return fmt.Errorf("its tool catalog %s is larger than 1 MiB", name)
+	}
+	var c struct {
+		Tools []struct {
+			Name         string         `json:"name"`
+			Description  jsontext.Value `json:"description"`
+			InputSchema  jsontext.Value `json:"inputSchema"`
+			OutputSchema jsontext.Value `json:"outputSchema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("its tool catalog %s: %w", name, err)
+	}
+	if len(c.Tools) > maxTools {
+		return fmt.Errorf("its tool catalog %s has %d tools, more than %d", name, len(c.Tools), maxTools)
+	}
+	catalog := make([]Tool, 0, len(c.Tools))
+	seen, used := map[string]bool{}, map[string]bool{}
+	for _, t := range c.Tools {
+		label := "a tool without a name"
+		if t.Name != "" {
+			label = "tool " + t.Name
+		}
+		bad := func(format string, args ...any) error {
+			return fmt.Errorf("its tool catalog %s: %s: %s", name, label, fmt.Sprintf(format, args...))
+		}
+		switch {
+		case !toolName.MatchString(t.Name):
+			return bad("its name must match ^[a-z][a-z0-9_]*$")
+		case len(t.Name) > maxToolName:
+			return bad("its name is longer than %d bytes", maxToolName)
+		case seen[t.Name]:
+			return bad("its name is another tool's")
+		case !isToolOf(t.Name, agents):
+			return bad("it is not the tool of an agent operation of its hearth manifest")
+		}
+		seen[t.Name], used[t.Name] = true, true
+		description := ""
+		if len(t.Description) > 0 {
+			if t.Description.Kind() != '"' {
+				return bad("its description is not a string")
+			}
+			if err := json.Unmarshal(t.Description, &description); err != nil {
+				return bad("its description: %v", err)
+			}
+		}
+		if len(description) > maxToolDescription {
+			return bad("its description is longer than %d bytes", maxToolDescription)
+		}
+		if !objectSchema(t.InputSchema) {
+			return bad("its inputSchema is not a JSON object whose type is object")
+		}
+		in, err := compactSchema(t.InputSchema)
+		if err != nil {
+			return fmt.Errorf("its tool catalog %s: %s: its inputSchema: %w", name, label, err)
+		}
+		tool := Tool{Name: t.Name, Description: description, InputSchema: in}
+		// A null output schema is none, as an absent one is.
+		if len(t.OutputSchema) > 0 && t.OutputSchema.Kind() != 'n' {
+			if !objectSchema(t.OutputSchema) {
+				return bad("its outputSchema is not a JSON object whose type is object")
+			}
+			if tool.OutputSchema, err = compactSchema(t.OutputSchema); err != nil {
+				return fmt.Errorf("its tool catalog %s: %s: its outputSchema: %w", name, label, err)
+			}
+		}
+		// The gateway names each tool <id>_<tool>, and its own tools are
+		// lodge's.
+		if g := id + "_" + t.Name; slices.Contains(GatewayTools, g) {
+			return bad("the gateway's tool %s is lodge's own", g)
+		}
+		catalog = append(catalog, tool)
+	}
+	for _, op := range agents {
+		if !used[op.Tool] {
+			return fmt.Errorf("its tool catalog %s has no tool %q, which its operation %s needs", name, op.Tool, op.Name)
+		}
+	}
+	a.Hearth.Tools = catalog
+	return nil
+}
+
+// agentOperations are the operations an agent may reach.
+func agentOperations(ops []Operation) []Operation {
+	var out []Operation
+	for _, op := range ops {
+		if op.Agent() {
+			out = append(out, op)
+		}
+	}
+	return out
+}
+
+// isToolOf reports whether name is the tool of one of the operations.
+func isToolOf(name string, ops []Operation) bool {
+	return slices.ContainsFunc(ops, func(op Operation) bool { return op.Tool == name })
+}
+
+// objectSchema reports whether v is a JSON object whose type member is the
+// string object.
+func objectSchema(v jsontext.Value) bool {
+	if len(v) == 0 || v.Kind() != '{' {
+		return false
+	}
+	var s struct {
+		Type jsontext.Value `json:"type"`
+	}
+	if err := json.Unmarshal(v, &s); err != nil {
+		return false
+	}
+	var t string
+	return len(s.Type) > 0 && json.Unmarshal(s.Type, &t) == nil && t == "object"
+}
+
+// compactSchema is v in its canonical compact form: no space outside a string.
+func compactSchema(v jsontext.Value) (jsontext.Value, error) {
+	out := v.Clone()
+	if err := out.Compact(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // placeholder reports whether the icon at rel under dir is the scaffold's.

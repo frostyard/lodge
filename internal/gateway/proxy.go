@@ -22,6 +22,10 @@ const (
 	kindAgent   kind = "agent"
 	kindDevice  kind = "device"
 	kindContent kind = "content"
+	// kindPrincipal is a signed-in person's call to an app on hearth, with
+	// every capability of the app on the root path: /app/<id>/connect/…. An
+	// agent's calls are the MCP gateway's, not this route's (ADR-0024).
+	kindPrincipal kind = "principal"
 )
 
 // proxyReq is one request to proxy to an app's socket.
@@ -37,6 +41,10 @@ type proxyReq struct {
 	token       tokens.Token
 	// session is the session's ID, on the /api upgrade only.
 	session string
+	// principal and grant are the caller and its grant, for kindPrincipal: a
+	// person's login, and Lodge-Grant's base64url text.
+	principal string
+	grant     string
 	// headers sets this kind's response headers, on errors too.
 	headers func(http.Header)
 	// modify rewrites the app's response headers.
@@ -65,6 +73,19 @@ func stripClient(h http.Header, device bool) {
 // lodgeapp.Caller, which deletes every Lodge-* header first, so lodge and
 // the apps agree on the encoding.
 func setCaller(h http.Header, p proxyReq) {
+	if p.kind == kindPrincipal {
+		// Contract 1 adds this kind's 2 headers, which the kit's Caller does
+		// not hold yet (app-contract.md, Caller headers).
+		for k := range h {
+			if strings.HasPrefix(http.CanonicalHeaderKey(k), "Lodge-") {
+				delete(h, k)
+			}
+		}
+		h.Set("Lodge-Caller", string(kindPrincipal))
+		h.Set("Lodge-Principal", p.principal)
+		h.Set("Lodge-Grant", p.grant)
+		return
+	}
 	c := lodgeapp.Caller{Kind: lodgeapp.Kind(p.kind)}
 	switch p.kind {
 	case kindSession, kindContent:
@@ -121,6 +142,12 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, p proxyReq) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if errors.Is(err, context.Canceled) {
+				return
+			}
+			// A body past its limit is the caller's fault, not the app's.
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				fail(w, http.StatusRequestEntityTooLarge, "the body is larger than lodge passes on", p.headers)
 				return
 			}
 			g.log.Warn("proxy to an app", "app", p.app.ID, "kind", p.kind, "err", err)

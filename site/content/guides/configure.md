@@ -127,7 +127,29 @@ An admin must also be on the allowed logins, on an allowed device.
 `https://LODGE/oauth/grants` is the **grants page**. It lists each
 principal, its clients, its grants, when each was last used, and the
 requests that wait for you. It revokes a client or a whole principal,
-and their tokens stop at once.
+and their tokens stop at once. **Remove** beside an item of a grant takes
+that item away, and the agent's next call no longer has it.
+
+## The MCP gateway for agents
+
+Apps built on [hearth](https://github.com/frostyard/hearth) have no
+`/mcp/<id>`. An agent reaches all of them at 1 address,
+`https://LODGE/gateway/mcp`, after it signs in as above with the scope
+`mcp`. Give the agent 1 entry for that URL, such as in pi-pocket's
+`mcp.json`:
+
+```json
+{"chani-lodge": {"url": "https://LODGE/gateway/mcp", "oauth": {"clientName": "Chani"}}}
+```
+
+- The agent sees a tool for each thing its grant allows, named
+  `<app>_<tool>`, such as `marks_list_bookmarks`, and 1 tool of lodge's,
+  `request_access`.
+- To get more, it calls `request_access` and gives you the link it
+  returns. That opens the consent page. When you approve, its new tools
+  appear in the same session, with no restart.
+- A call outside the grant answers `insufficient_scope`, and the app sees
+  nothing.
 
 The tokens `lodgectl token issue` prints keep working beside OAuth.
 [lodge's OAuth server](https://github.com/frostyard/lodge/blob/main/docs/specs/oauth.md)

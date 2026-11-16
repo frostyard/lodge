@@ -22,7 +22,7 @@ const Contract = 1
 
 // Reserved are the ids no app may take: they are lodge's own first path
 // segments.
-var reserved = []string{"app", "device", "lodge", "mcp", "nats", "oauth"}
+var reserved = []string{"app", "device", "gateway", "lodge", "mcp", "nats", "oauth"}
 
 var (
 	idPattern     = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
@@ -67,10 +67,14 @@ type Manifest struct {
 	// directory: the capabilities and selectors the consent page shows
 	// (docs/specs/oauth.md, The app's manifest).
 	Hearth string `json:"hearth,omitzero"`
+	// Tools is the file name of the app's tool catalog in its directory: 1
+	// MCP tool for each agent operation of the hearth manifest
+	// (ADR-0024).
+	Tools string `json:"tools,omitzero"`
 }
 
 // ValidID reports whether id may name an app: ^[a-z][a-z0-9]{0,15}$, and
-// not app, device, lodge, mcp, nats or oauth.
+// not app, device, gateway, lodge, mcp, nats or oauth.
 func ValidID(id string) bool {
 	return idPattern.MatchString(id) && !slices.Contains(reserved, id)
 }
@@ -97,7 +101,7 @@ func (m Manifest) Validate() error {
 		bad("contract %d is not a contract major", m.Contract)
 	}
 	if !ValidID(m.ID) {
-		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, lodge, mcp, nats or oauth", m.ID)
+		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, gateway, lodge, mcp, nats or oauth", m.ID)
 	}
 	if n := utf8.RuneCountInString(m.Name); n < 1 || n > 32 || strings.TrimSpace(m.Name) == "" {
 		bad("name must be 1 to 32 characters")
@@ -117,11 +121,23 @@ func (m Manifest) Validate() error {
 	if m.Hearth != "" && !ValidHearthFile(m.Hearth) {
 		bad("hearth %q must match ^[a-z0-9][a-z0-9._-]{0,63}\\.json$ and not be app.json", m.Hearth)
 	}
+	if m.Tools != "" {
+		switch {
+		case !ValidHearthFile(m.Tools):
+			bad("tools %q must match ^[a-z0-9][a-z0-9._-]{0,63}\\.json$ and not be app.json", m.Tools)
+		case m.Tools == m.Hearth:
+			bad("tools %q is its hearth manifest's file", m.Tools)
+		}
+		if m.Hearth == "" {
+			bad("tools needs hearth")
+		}
+	}
 	return errors.Join(errs...)
 }
 
-// ValidHearthFile reports whether name may name an app's hearth manifest: a
-// .json file in the app's directory that is not app.json itself.
+// ValidHearthFile reports whether name may name a file beside app.json in
+// an app's directory: its hearth manifest, or its tool catalog. It is a
+// .json name that is not app.json itself.
 func ValidHearthFile(name string) bool {
 	return hearthPattern.MatchString(name) && name != "app.json"
 }

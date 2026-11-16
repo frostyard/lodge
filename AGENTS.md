@@ -98,7 +98,15 @@ Everything in the map is built.
     ([specs/oauth.md](docs/specs/oauth.md),
     [ADR-0023](docs/adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
   - `internal/control`: the control socket that `lodgectl` uses.
+  - `internal/mcpgw`: the MCP gateway, `/gateway/mcp`: 1 MCP server per
+    principal, its tools from the grants, `request_access`, and the
+    Connect calls to apps on hearth. It is the only package that imports
+    the Go MCP SDK (`internal/repocheck`)
+    ([ADR-0024](docs/adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
   - `internal/apptest`: fake apps on sockets, for tests.
+  - `internal/hearthtest`: hearth's example app, notes-lite, as app
+    `notelite` on a socket, for tests and the development build. Only it and
+    `dev/hearthapp` import `github.com/frostyard/hearth` (`internal/repocheck`).
 - `internal/broker`: the event broker lodge embeds: a NATS server with
   JetStream in lodge's own process, off unless the configuration enables
   it, with no listener of its own. `/run/lodge/nats.sock` admits an app by
@@ -140,8 +148,10 @@ Everything in the map is built.
   builds, attests and publishes it) and an app's unit
   templates. `internal/packagecheck` tests them.
 - `dev/`: the nsl machine's provisioning, `dev/e2e.sh` (the development
-  build with three `dev/fakeapp` apps, one of them the companion, for
-  smoke tests in a browser).
+  build with three `dev/fakeapp` apps, one of them the companion, and
+  `dev/hearthapp`, an app on hearth, for smoke tests in a browser), and
+  `dev/mcp-e2e/` (`make mcp-e2e`, nsl: the MCP gateway driven by pi-mcp and
+  by MCP Inspector, both pinned).
 - `site/`: the user documentation site (ProperDocs and MaterialX, core
   ADR-0070). `make site` builds it (strict) and `make site-serve` previews
   it. `.github/workflows/site.yml` deploys it to
@@ -165,7 +175,9 @@ Everything in the map is built.
   `make client-check`, `make ui-check` and `make shell-check` (nsl). CI runs the same
   targets, plus its `vulncheck` job (`make vulncheck`: govulncheck on both
   modules, pinned in the Makefile; it needs the network, so no gate runs it).
-  Keep it at 0 reachable findings. CI also runs the kit's tests on Windows
+  Keep it at 0 reachable findings. `make mcp-e2e` (nsl) also needs the
+  network: run it before a change to `internal/mcpgw`, the OAuth server or
+  the gateway's routes is complete. CI also runs the kit's tests on Windows
   (`kit-windows`), the only place its `!linux` tests build;
   `internal/workflowcheck` fails without that job.
 - Tests run unfiltered (`go test ./...`, frostyard/core ADR-0038). A test
@@ -189,7 +201,9 @@ These are the app contract's rules
   lodge deletes every `Lodge-*` header a client sends.
 - **Each app runs as its own system user** and cannot read another app's
   state. Agents, the assistant included, reach an app only through
-  `/mcp/<id>` with a token.
+  `/mcp/<id>` with a token, or an app on hearth only through the MCP
+  gateway, `/gateway/mcp`, with an OAuth token of scope `mcp`
+  ([ADR-0024](docs/adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)).
 - **lodge serves every app's web files** from root-owned directories. No
   daemon serves code to the lodge origin.
 - **Untrusted bytes come only from `lodge-content`,** under the sandbox
@@ -227,7 +241,9 @@ them rather than improvising, whichever agent you are:
   `omitzero`, `b.Loop`). Tests use temp dirs, and never sleep to
   synchronize.
 - One package wraps each heavy dependency: `tailscale.com` only in
-  `internal/tailnet`, and the MCP SDK only where the kit needs it.
+  `internal/tailnet`, the MCP SDK only where the kit needs it and in
+  `internal/mcpgw`, and hearth only in `internal/hearthtest` and
+  `dev/hearthapp`.
 - Downloads in scripts are version-pinned and checksum-verified
   (frostyard/core ADR-0023). Workflow actions are pinned to full commit
   SHAs, with `permissions: {}` at the top (ADR-0021, checked by
@@ -290,7 +306,8 @@ them rather than improvising, whichever agent you are:
   `shell/package.json` links `../client` and `../ui`, so lodge always
   builds on its own tree. `kit/go.mod` requires no frostyard module.
   Dependabot (`.github/dependabot.yml`) proposes weekly updates of the
-  actions, both Go modules and the 3 npm packages. Tools stay pinned in
+  actions, both Go modules, the 3 npm packages and the end-to-end tests'
+  pins (`dev/mcp-e2e`). Tools stay pinned in
   `mise.toml` and `mise.lock`, and Node in each workflow's `NODE_VERSION`
   and `dev/nsl/provision.sh`.
 - **Who uses it.** frostnotes, frostmail and Porter pin the
@@ -338,7 +355,8 @@ verify` when one of these files breaks:
   glob that matches no file fails.
 - `.github/dependabot.yml` (B13): 1 entry for each manifest (`go.mod`,
   `kit/go.mod`, `client/package.json`, `ui/package.json`,
-  `shell/package.json`). A new manifest gets an entry.
+  `shell/package.json`, `dev/mcp-e2e/package.json`). A new manifest gets an
+  entry.
 
 `.github/pull_request_template.md` (B7) holds the risk tier.
 Vulnerabilities are reported privately ([SECURITY.md](SECURITY.md), B14).

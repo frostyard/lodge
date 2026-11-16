@@ -1,6 +1,6 @@
 # 0006 — Agents reach each app through its own MCP endpoint
 
-- **Status:** Accepted (2026-10-21)
+- **Status:** Accepted (2026-10-21); superseded for apps on hearth by [0024](0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md)
 - **Date:** 2026-10-18
 
 ## Context

@@ -19,12 +19,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
 	"github.com/frostyard/lodge/internal/apptest"
+	"github.com/frostyard/lodge/internal/hearthtest"
+	"github.com/frostyard/lodge/internal/mcpgw"
 	"github.com/frostyard/lodge/internal/oauth"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
@@ -54,6 +57,15 @@ type oauthHarness struct {
 	notes *fakeApp
 	// seamClient is the client a test's seam works on.
 	seamClient string
+	// transport is the pool of connections to the apps, which the gateway and
+	// the MCP gateway share.
+	transport *http.Transport
+	// mcp is lodge's MCP gateway, which mcpHook holds for the OAuth hooks: a
+	// test may make it again, with other options.
+	mcp     *mcpgw.Gateway
+	mcpHook atomic.Pointer[mcpgw.Gateway]
+	// hearth is hearth's example app, when a test serves it.
+	hearth *hearthtest.App
 }
 
 // setClient names the client a test's OAuth seam works on.
@@ -113,10 +125,16 @@ func newOAuthHarnessWith(t *testing.T, opts func(*oauth.Options)) *oauthHarness 
 		Now:    h.clock.now,
 		OnGrant: func(principal, app string) {
 			h.granted = append(h.granted, [2]string{principal, app})
+			if gw := h.mcpHook.Load(); gw != nil {
+				gw.GrantChanged(principal, app)
+			}
 		},
 		OnRevoke: func(principal string, clients []string) {
 			h.revoked = append(h.revoked, principal)
 			h.revokedClients = append(h.revokedClients, clients)
+			if gw := h.mcpHook.Load(); gw != nil {
+				gw.Revoked(principal, clients)
+			}
 		}}
 	if opts != nil {
 		opts(&options)
@@ -126,8 +144,13 @@ func newOAuthHarnessWith(t *testing.T, opts func(*oauth.Options)) *oauthHarness 
 		t.Fatal(err)
 	}
 	h.tokens = tokens.New(db, h.clock.now)
+	// 1 pool of connections to the apps, for lodge's routes and its MCP
+	// gateway (ADR-0024).
+	h.transport = NewAppTransport(h.apps)
 	h.g = New(Config{Names: TailnetNames(lodgeHost, contentHost), Root: root, Apps: h.apps, Allow: h.allow,
-		Tokens: h.tokens, Sessions: sessions.NewRegistry(), OAuth: h.oauth, Now: h.clock.now})
+		Tokens: h.tokens, Sessions: sessions.NewRegistry(), OAuth: h.oauth, Now: h.clock.now,
+		Transport: h.transport})
+	h.newMCPGateway(nil)
 	h.lodge = start(t, h.g.Lodge(h.who))
 	return h
 }
@@ -1111,6 +1134,60 @@ func TestOAuthRevokePrincipal(t *testing.T) {
 	}
 	if a := h.revoke("client", other.ClientID, csrf, ts); a.status != http.StatusNotFound {
 		t.Errorf("revoking a revoked client: %d %q", a.status, a.body)
+	}
+}
+
+// TestOAuthRemoveGrantItem checks the grants page's removal of 1 item of a
+// grant through lodge: the page holds the item's form, its POST narrows the
+// grant, and a form that names another mix of fields is 400.
+func TestOAuthRemoveGrantItem(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, _ := h.signin("pi-pocket", "mcp")
+	items := marksItems()
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, reqCSRF, reqHash := h.consentPage(req.ID)
+	if a := h.approve(req.ID, reqCSRF, reqHash, url.Values{"item": {"0", "1"},
+		"path.0.folder": {"/Reading"}, "path.1.folder": {"/Reading/Inbox"}}); a.status != http.StatusSeeOther {
+		t.Fatalf("the access approval: %d %q", a.status, a.body)
+	}
+	granted, err := h.oauth.Grant(t.Context(), "chani", "marks")
+	if err != nil || len(granted) != 2 {
+		t.Fatalf("the grant = %+v, %v", granted, err)
+	}
+	hash := oauth.ItemHash(granted[0])
+	page, csrf, ts := h.grantsPage()
+	if !strings.Contains(page.body, `name="item" value="`+hash+`"`) {
+		t.Fatalf("the grants page holds no form for the item %q", hash)
+	}
+	// A form that names another mix of fields is 400, and a wrong CSRF token
+	// is 403.
+	if a := h.do(h.req(http.MethodPost, "/oauth/grants/revoke",
+		url.Values{"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}}.Encode(), formHeaders())); a.status != http.StatusBadRequest {
+		t.Errorf("an item without its hash: %d %q", a.status, a.body)
+	}
+	if a := h.do(h.req(http.MethodPost, "/oauth/grants/revoke",
+		url.Values{"csrf": {"wrong"}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}, "item": {hash}}.Encode(), formHeaders())); a.status != http.StatusForbidden {
+		t.Errorf("a bad CSRF token: %d %q", a.status, a.body)
+	}
+	if a := h.do(h.req(http.MethodPost, "/oauth/grants/revoke",
+		url.Values{"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}, "item": {strings.Repeat("0", 64)}}.Encode(), formHeaders())); a.status != http.StatusNotFound {
+		t.Errorf("an unknown item: %d %q", a.status, a.body)
+	}
+	// The removal narrows the grant, and the hook runs.
+	before := len(h.granted)
+	if a := h.do(h.req(http.MethodPost, "/oauth/grants/revoke",
+		url.Values{"csrf": {csrf}, "ts": {ts}, "principal": {"chani"}, "app": {"marks"}, "item": {hash}}.Encode(), formHeaders())); a.status != http.StatusSeeOther ||
+		a.header.Get("Location") != "/oauth/grants" {
+		t.Fatalf("the removal: %d %q %q", a.status, a.body, a.header.Get("Location"))
+	}
+	if got, err := h.oauth.Grant(t.Context(), "chani", "marks"); err != nil || len(got) != 1 || oauth.ItemHash(got[0]) == hash {
+		t.Errorf("the grant after the removal = %+v, %v", got, err)
+	}
+	if len(h.granted) != before+1 || h.granted[len(h.granted)-1] != [2]string{"chani", "marks"} {
+		t.Errorf("OnGrant was called with %+v, want 1 more call for chani and marks", h.granted)
 	}
 }
 

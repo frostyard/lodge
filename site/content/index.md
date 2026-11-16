@@ -61,7 +61,7 @@ hide:
 
     ---
 
-    An agent gets a token for one app, with a scope, at `/mcp/<id>`. An agent on lodge's host, such as Porter, uses a local agent socket.
+    An agent gets a token for one app, with a scope, at `/mcp/<id>`. An agent on lodge's host, such as Porter, uses a local agent socket. Apps built on hearth share 1 MCP gateway, where an agent signs in with OAuth and sees only what you approved.
 
 </div>
 

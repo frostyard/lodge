@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/mcpgw",
+  "correction": "The Go MCP SDK runs a tool handler on the session's context, not on the HTTP request's: a revocation or a token expiry reaches a call in flight only through a context that the call itself registers under its client (with a set of revoked clients against the check-to-registration race). A handler's hash must cover the operation it captures, 1 sync at a time must span the snapshot and its application, and calls to apps must share the routes' connection pool so that 1 limit covers both.",
+  "evidence": "frostyard/lodge#85 cross-review at d476b58 (openai/gpt-6.1-sol): blocking findings 1 to 4 (revocation did not cancel an app call, a second unbounded app pool, a stale handler after a reload, an older sync snapshot applied last)",
+  "promoted_to": "internal/gateway/mcpgw_test.go TestMCPGatewayRevokeEndsACall, TestMCPGatewayExpiryEndsACall, TestAppTransportIsShared, TestMCPGatewayToolFollowsItsOperation; internal/mcpgw/mcpgw_test.go TestCallContextOfARevokedClient, TestSyncNewestWins"
+}

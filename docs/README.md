@@ -44,6 +44,7 @@ frostyard/core's
 - [0021 — The text tokens reach 4.5:1 on every surface](adr/0021-the-text-tokens-reach-4-5-to-1-on-every-surface.md)
 - [0022 — lodge embeds a NATS broker for app events](adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (Proposed)
 - [0023 — lodge issues agent access through OAuth and a consent page](adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (Proposed)
+- [0024 — Agents reach apps on hearth through 1 MCP gateway](adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (Proposed)
 
 ### Design
 
