@@ -760,6 +760,17 @@ listener of its own.
   explicitly, takes new messages, and a pull expires after at most 60 s
   and takes at most 256. Its metadata names its client, its subscription
   and the topic it asked for.
+  **A pulled message keeps its stream subject.** The server sends it to
+  the subscription of the pull's reply inbox, but with the event's own
+  subject (such as `marks.bookmark.created.folder.pilot`) and the ack
+  subject `$JS.ACK.<stream>.<consumer>.…` as its reply. Only a status
+  reply (404, 408, 409) comes on the inbox's own subject. So a client
+  reads a pull on a subscription of its own and takes what that
+  subscription gets, never by the subject: a request mux that finds its
+  request by the subject's last token, as nats.js `request` does without
+  `noMux`, drops every event and sees only the status replies. The test
+  `TestNatsPullKeepsTheStreamSubject` (`internal/gateway`) drives this over
+  `/nats` with the protocol's own lines.
   **A subscription stays on 1 app:** subscribing the same client and
   subscription name to another app is refused, with an error that asks
   for an unsubscribe first, and that unsubscribe deletes the consumer it
