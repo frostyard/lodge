@@ -347,7 +347,7 @@ func hearth(t *testing.T, dir, name, body string) {
 func TestHearthManifest(t *testing.T) {
 	root := t.TempDir()
 	dir := apptest.Install(t, root, "marks", map[string]any{"hearth": "hearth.json"}, nil)
-	hearth(t, dir, "hearth.json", `{"hearth":1,"app":"marks","capabilities":["marks:read","marks:write"],"selectors":["folder"],"other":[1]}`)
+	hearth(t, dir, "hearth.json", `{"hearth":1,"app":"marks","version":"1.0.0","capabilities":["marks:read","marks:write"],"selectors":["folder"],"other":[1]}`)
 	r := load(t, root)
 	a, ok := r.Get("marks")
 	if !ok || !a.Enabled() {
@@ -362,9 +362,12 @@ func TestHearthManifest(t *testing.T) {
 	if got := strings.Join(a.Hearth.Selectors, " "); got != "folder" {
 		t.Errorf("selectors %q", got)
 	}
+	if a.Hearth.Version != "1.0.0" || a.Hearth.Major != "1" {
+		t.Errorf("version %q, major %q; want 1.0.0 and 1", a.Hearth.Version, a.Hearth.Major)
+	}
 	// A manifest with no members is an empty one, not an error.
 	dir2 := apptest.Install(t, root, "empty", map[string]any{"hearth": "h.json"}, nil)
-	hearth(t, dir2, "h.json", `{"hearth":1,"app":"empty"}`)
+	hearth(t, dir2, "h.json", `{"hearth":1,"app":"empty","version":"1.0.0"}`)
 	if err := r.Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -382,24 +385,35 @@ func TestHearthManifestDisabled(t *testing.T) {
 			reason: "hearth manifest format 2 is not one this lodge reads (1)"},
 		"no format": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{"app":"a"}`) },
 			reason: "hearth manifest format 0 is not one this lodge reads (1)"},
-		"other app": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{"hearth":1,"app":"b"}`) },
+		"other app": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"b","version":"1.0.0"}`)
+		},
 			reason: `names app "b", not "a"`},
 		"not json": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{`) }, reason: "hearth manifest"},
 		"missing":  {files: func(t *testing.T, dir string) {}, reason: "hearth manifest"},
 		"capability without app": {files: func(t *testing.T, dir string) {
-			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["read"]}`)
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0.0","capabilities":["read"]}`)
 		}, reason: "capability"},
 		"capability of another app": {files: func(t *testing.T, dir string) {
-			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["b:read"]}`)
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0.0","capabilities":["b:read"]}`)
 		}, reason: "capability"},
 		"bad capability name": {files: func(t *testing.T, dir string) {
-			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["a:Read"]}`)
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0.0","capabilities":["a:Read"]}`)
 		}, reason: "capability"},
 		"bad selector": {files: func(t *testing.T, dir string) {
-			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","selectors":["Folder"]}`)
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0.0","selectors":["Folder"]}`)
 		}, reason: "selector"},
+		"no version": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a"}`)
+		}, reason: `has version "", not MAJOR.MINOR.PATCH`},
+		"bad version": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0"}`)
+		}, reason: `has version "1.0", not MAJOR.MINOR.PATCH`},
+		"pre-release version": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","version":"1.0.0-rc.1"}`)
+		}, reason: `has version "1.0.0-rc.1", not MAJOR.MINOR.PATCH`},
 		"hidden file": {files: func(t *testing.T, dir string) {
-			hearth(t, dir, ".hearth.json", `{"hearth":1,"app":"a"}`)
+			hearth(t, dir, ".hearth.json", `{"hearth":1,"app":"a","version":"1.0.0"}`)
 		}, reason: "app.json"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -426,10 +440,26 @@ func TestHearthManifestDisabled(t *testing.T) {
 	}
 }
 
+// TestHearthMajor checks the compatibility line of a version, which a grant
+// item is approved for: the major from 1.0.0, and 0.MINOR before it (hearth
+// ADR-0004, Compatibility).
+func TestHearthMajor(t *testing.T) {
+	for version, want := range map[string]string{
+		"0.1.0": "0.1", "0.1.9": "0.1", "0.2.0": "0.2", "0.10.3": "0.10",
+		"1.0.0": "1", "1.4.2": "1", "2.0.0": "2", "12.0.1": "12",
+		"": "", "1": "", "1.0": "", "01.0.0": "", "1.00.0": "", "1.0.0-rc.1": "", "v1.0.0": "", "1.0.0+b": "",
+	} {
+		got, ok := apps.HearthMajor(version)
+		if got != want || ok != (want != "") {
+			t.Errorf("HearthMajor(%q) = %q, %v; want %q", version, got, ok, want)
+		}
+	}
+}
+
 func TestHearthTooLarge(t *testing.T) {
 	root := t.TempDir()
 	dir := apptest.Install(t, root, "a", map[string]any{"hearth": "hearth.json"}, nil)
-	body := `{"hearth":1,"app":"a","selectors":["` + strings.Repeat("s", apps.MaxHearth) + `"]}`
+	body := `{"hearth":1,"app":"a","version":"1.0.0","selectors":["` + strings.Repeat("s", apps.MaxHearth) + `"]}`
 	hearth(t, dir, "hearth.json", body)
 	a, _ := load(t, root).Get("a")
 	if a.Enabled() || !strings.Contains(a.Reason, "larger than") {
@@ -437,7 +467,7 @@ func TestHearthTooLarge(t *testing.T) {
 	}
 	// A symbolic link is not the app's file.
 	dir2 := apptest.Install(t, root, "b", map[string]any{"hearth": "hearth.json"}, nil)
-	hearth(t, dir2, "real.json", `{"hearth":1,"app":"b"}`)
+	hearth(t, dir2, "real.json", `{"hearth":1,"app":"b","version":"1.0.0"}`)
 	os.Symlink(filepath.Join(dir2, "real.json"), filepath.Join(dir2, "hearth.json"))
 	if a, _ := load(t, root).Get("b"); a.Enabled() || !strings.Contains(a.Reason, "regular file") {
 		t.Errorf("a symlinked hearth manifest: %s %q", a.State, a.Reason)
@@ -498,7 +528,7 @@ func writeJSON(t *testing.T, dir, name string, v any) {
 func TestHearthOperationsAndTools(t *testing.T) {
 	root := t.TempDir()
 	dir := apptest.Install(t, root, "notelite", map[string]any{"hearth": "hearth.json", "tools": "tools.json"}, nil)
-	writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite",
+	writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite", "version": "1.0.0",
 		"capabilities": []string{"notelite:read", "notelite:write"}, "selectors": []string{"folder"},
 		"operations": noteOps("notelite"), "events": []any{}})
 	writeJSON(t, dir, "tools.json", map[string]any{"tools": noteTools(), "other": 1})
@@ -598,7 +628,7 @@ func TestHearthOperationDisabled(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := apptest.Install(t, root, "notelite", map[string]any{"hearth": "hearth.json", "tools": "tools.json"}, nil)
-			writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite",
+			writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite", "version": "1.0.0",
 				"capabilities": []string{"notelite:read", "notelite:write"}, "selectors": []string{"folder"},
 				"operations": c.ops})
 			writeJSON(t, dir, "tools.json", map[string]any{"tools": noteTools()})
@@ -708,7 +738,7 @@ func TestToolCatalogDisabled(t *testing.T) {
 			if ops == nil {
 				ops = noteOps(id)
 			}
-			writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": id,
+			writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": id, "version": "1.0.0",
 				"capabilities": []string{id + ":read", id + ":write"}, "operations": ops})
 			switch {
 			case c.raw != "":
@@ -745,7 +775,7 @@ func TestToolCatalogDisabled(t *testing.T) {
 func TestToolCatalogOptionalMembers(t *testing.T) {
 	root := t.TempDir()
 	dir := apptest.Install(t, root, "notelite", map[string]any{"hearth": "hearth.json", "tools": "tools.json"}, nil)
-	writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite",
+	writeJSON(t, dir, "hearth.json", map[string]any{"hearth": 1, "app": "notelite", "version": "1.0.0",
 		"capabilities": []string{"notelite:read", "notelite:write"}, "operations": noteOps("notelite")})
 	tools := noteTools()
 	tools[0]["description"] = ""
@@ -754,7 +784,7 @@ func TestToolCatalogOptionalMembers(t *testing.T) {
 	writeJSON(t, dir, "tools.json", map[string]any{"tools": tools})
 	// An app with no agent operation needs no catalog.
 	dir2 := apptest.Install(t, root, "plain", map[string]any{"hearth": "h.json"}, nil)
-	writeJSON(t, dir2, "h.json", map[string]any{"hearth": 1, "app": "plain", "capabilities": []string{"plain:read"},
+	writeJSON(t, dir2, "h.json", map[string]any{"hearth": 1, "app": "plain", "version": "1.0.0", "capabilities": []string{"plain:read"},
 		"operations": []map[string]any{{"name": "example.plain.v1.PlainService.Get", "permission": "plain:read",
 			"effect": "read", "expose": []string{"ui"}}}})
 	r := load(t, root)

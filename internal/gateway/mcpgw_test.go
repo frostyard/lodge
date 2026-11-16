@@ -509,6 +509,92 @@ func TestMCPGatewayGrantNarrowing(t *testing.T) {
 	}
 }
 
+// TestMCPGatewayNewMajorNeedsConsent checks that a grant is in force only for
+// the app's major version that it was approved for: after the app's next
+// major version, the old grant gives no tool and no call, an old request
+// cannot be approved, and a new consent through request_access gives the tool
+// back to the open session (docs/specs/oauth.md, Principals, clients and
+// grants; hearth ADR-0004, Compatibility).
+func TestMCPGatewayNewMajorNeedsConsent(t *testing.T) {
+	h := newOAuthHarness(t)
+	h.serveHearth(nil)
+	client, tok := h.signin("pi-pocket", "mcp")
+	items := []oauth.Item{{Cap: "notelite:write", Sel: map[string]string{"folder": "/Work"}}}
+	h.grant(client.ClientID, "notelite", items)
+	// A request made on the old line, which waits for a decision.
+	old, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := make(chan struct{}, 4)
+	s := h.connectMCP(tok.AccessToken, changed)
+	if created := callTool(t, s, "notelite_create_note", map[string]any{"folder": "/Work", "title": "x"}); created.IsError {
+		t.Fatalf("the call on the approved version: %s", resultText(t, created))
+	}
+	principal, grant := h.hearth.LastCaller()
+
+	// The app's next major version: 0.1.0 to 0.2.0. A reload tells the
+	// session, whose tool goes.
+	next := strings.Replace(string(notelite.Manifest), `"version": "0.1.0"`, `"version": "0.2.0"`, 1)
+	if next == string(notelite.Manifest) {
+		t.Fatal("the example's manifest is not at version 0.1.0")
+	}
+	h.serveHearth([]byte(next))
+	if a, _ := h.apps.Get("notelite"); a.Hearth == nil || a.Hearth.Version != "0.2.0" {
+		t.Fatalf("notelite = %+v", a.Hearth)
+	}
+	awaitToolChange(t, changed)
+	if got := tools(t, s); got["notelite_create_note"] != nil {
+		t.Fatalf("the session's tools on the next major version are %v", toolNames(got))
+	}
+	// The call is refused by lodge, and the app sees nothing.
+	res := callTool(t, s, "notelite_create_note", map[string]any{"folder": "/Work", "title": "y"})
+	want := "insufficient_scope: principal chani holds no notelite:write for app notelite: call request_access to ask for it"
+	if !res.IsError || resultText(t, res) != want {
+		t.Errorf("a call on the next major version = %q, want %q", resultText(t, res), want)
+	}
+	if again, againGrant := h.hearth.LastCaller(); again != principal || againGrant != grant {
+		t.Errorf("the app saw a call of the old grant: %q, %q", again, againGrant)
+	}
+	// The grants page keeps the item, and says that it waits for a consent.
+	if page, _, _ := h.grantsPage(); page.status != http.StatusOK ||
+		!strings.Contains(page.body, "not in force: approved for version line 0.1, and the app needs a new consent") {
+		t.Errorf("the grants page: %d %q", page.status, page.body)
+	}
+	// The request made on the old line cannot be approved.
+	page, csrf, hash := h.consentPage(old.ID)
+	stale := "app notelite is at version 0.2.0, and this request was made for 0.1: decline it, and ask again"
+	if page.status != http.StatusOK || !strings.Contains(page.body, stale) {
+		t.Errorf("the old request's page: %d %q", page.status, page.body)
+	}
+	if a := h.approve(old.ID, csrf, hash, url.Values{"item": {"0"}}); a.status != http.StatusConflict || a.body != stale+"\n" {
+		t.Errorf("approving the old request: %d %q, want 409 %q", a.status, a.body, stale)
+	}
+	if granted, err := h.oauth.Grant(t.Context(), "chani", "notelite"); err != nil || len(granted) != 0 {
+		t.Errorf("the grant after the refused approval = %+v, %v", granted, err)
+	}
+
+	// A new consent: the agent asks again, and the admin approves.
+	asked := callTool(t, s, "request_access", map[string]any{"app": "notelite",
+		"items": []any{map[string]any{"cap": "notelite:write", "sel": map[string]any{"folder": "/Work"}}}})
+	if asked.IsError {
+		t.Fatalf("request_access: %s", resultText(t, asked))
+	}
+	object, _ := asked.StructuredContent.(map[string]any)
+	id, _ := object["request"].(string)
+	h.approveAccess(id, items)
+	awaitToolChange(t, changed)
+	if got := tools(t, s); got["notelite_create_note"] == nil {
+		t.Fatalf("the session's tools after the new consent are %v", toolNames(got))
+	}
+	if created := callTool(t, s, "notelite_create_note", map[string]any{"folder": "/Work", "title": "z"}); created.IsError {
+		t.Fatalf("the call after the new consent: %s", resultText(t, created))
+	}
+	if again, _ := h.hearth.LastCaller(); again != "chani" {
+		t.Errorf("the app saw %q, want chani", again)
+	}
+}
+
 // formBody is a form's body, as a browser sends it.
 func formBody(fields map[string]string) string {
 	v := url.Values{}
@@ -551,11 +637,25 @@ func TestMCPGatewayRefusesUngrantedTool(t *testing.T) {
 	}
 }
 
-// narrowTo writes a principal's grant for an app as items, without the hook a
+// narrowTo writes a principal's grant for an app as items, approved for the
+// app's major version now, as an approval stores them, without the hook a
 // change through lodge's pages runs.
 func narrowTo(t *testing.T, h *oauthHarness, principal, app string, items []oauth.Item) {
 	t.Helper()
-	b, err := json.Marshal(items)
+	a, ok := h.apps.Get(app)
+	if !ok || a.Hearth == nil {
+		t.Fatalf("app %s is not installed with a hearth manifest", app)
+	}
+	type stored struct {
+		Cap   string            `json:"cap"`
+		Sel   map[string]string `json:"sel,omitzero"`
+		Major string            `json:"major"`
+	}
+	rows := make([]stored, 0, len(items))
+	for _, it := range items {
+		rows = append(rows, stored{Cap: it.Cap, Sel: it.Sel, Major: a.Hearth.Major})
+	}
+	b, err := json.Marshal(rows)
 	if err != nil {
 		t.Fatal(err)
 	}

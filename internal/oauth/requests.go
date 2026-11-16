@@ -47,17 +47,20 @@ type Item struct {
 
 // Request is what the consent page shows and an admin decides.
 type Request struct {
-	ID        string    `json:"id"`
-	Kind      Kind      `json:"kind"`
-	Client    string    `json:"client"`
-	Principal string    `json:"principal"`
-	App       string    `json:"app"`
-	Scopes    []string  `json:"scopes"`
-	Items     []Item    `json:"items"`
-	Created   time.Time `json:"created"`
-	Expires   time.Time `json:"expires"`
-	Decided   time.Time `json:"decided,omitzero"`
-	Decision  string    `json:"decision,omitzero"`
+	ID        string   `json:"id"`
+	Kind      Kind     `json:"kind"`
+	Client    string   `json:"client"`
+	Principal string   `json:"principal"`
+	App       string   `json:"app"`
+	Scopes    []string `json:"scopes"`
+	Items     []Item   `json:"items"`
+	// Major is an access request's app compatibility line when it was made
+	// (apps.HearthMajor): an approval grants its items for that line only.
+	Major    string    `json:"major,omitzero"`
+	Created  time.Time `json:"created"`
+	Expires  time.Time `json:"expires"`
+	Decided  time.Time `json:"decided,omitzero"`
+	Decision string    `json:"decision,omitzero"`
 	// URL is where the request is decided: ISSUER/oauth/consent/<id>.
 	URL string `json:"url,omitzero"`
 	// Query is a sign-in's authorization request, as it is stored.
@@ -197,11 +200,11 @@ func (s *Server) createRequest(ctx context.Context, req Request) error {
 		query = string(b)
 	}
 	statement := `INSERT INTO consent_requests
-		(id, kind, client_id, principal, app, scopes, items, query, created_at, expires_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		(id, kind, client_id, principal, app, scopes, items, query, major, created_at, expires_at)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE EXISTS (SELECT 1 FROM oauth_clients WHERE id = ? AND revoked_at IS NULL`
 	args := []any{req.ID, string(req.Kind), req.Client, req.Principal, req.App, string(scopesJSON), string(itemsJSON),
-		query, stamp(req.Created), stamp(req.Expires), req.Client}
+		query, req.Major, stamp(req.Created), stamp(req.Expires), req.Client}
 	if req.Kind == KindAccess {
 		statement += ` AND principal = ?`
 		args = append(args, req.Principal)
@@ -249,9 +252,9 @@ func (s *Server) request(ctx context.Context, id string) (Request, error) {
 	var req Request
 	var kind, scopesJSON, itemsJSON, query, created, expires string
 	var decided, decision sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, kind, client_id, principal, app, scopes, items, query, created_at, expires_at, decided_at, decision
+	err := s.db.QueryRowContext(ctx, `SELECT id, kind, client_id, principal, app, scopes, items, query, major, created_at, expires_at, decided_at, decision
 		FROM consent_requests WHERE id = ?`, id).Scan(&req.ID, &kind, &req.Client, &req.Principal, &req.App,
-		&scopesJSON, &itemsJSON, &query, &created, &expires, &decided, &decision)
+		&scopesJSON, &itemsJSON, &query, &req.Major, &created, &expires, &decided, &decision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Request{}, ErrNotFound
 	} else if err != nil {
@@ -332,8 +335,8 @@ func (s *Server) deleteRequests(ctx context.Context, q querier, clientID string)
 }
 
 // RequestAccess makes an access request: a bound, live client asks for items
-// of an installed, enabled app with a hearth manifest
-// (docs/specs/oauth.md, Requests).
+// of an installed, enabled app with a hearth manifest, for the app's current
+// compatibility line (docs/specs/oauth.md, Requests).
 func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items []Item) (Request, error) {
 	a, ok := s.apps.Get(app)
 	if !ok || !a.Enabled() || a.Hearth == nil {
@@ -366,7 +369,7 @@ func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items 
 	}
 	now := s.now().UTC()
 	req := Request{ID: id, Kind: KindAccess, Client: clientID, Principal: c.Principal, App: app, Scopes: []string{},
-		Items: normalize(items), Created: now, Expires: now.Add(RequestLifespan), URL: s.Issuer() + "/oauth/consent/" + id}
+		Items: normalize(items), Major: a.Hearth.Major, Created: now, Expires: now.Add(RequestLifespan), URL: s.Issuer() + "/oauth/consent/" + id}
 	// The insert re-checks the client, its binding and the principal, so a
 	// revocation between the check and it leaves no request.
 	if err := s.createRequest(ctx, req); err != nil {

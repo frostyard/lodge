@@ -280,6 +280,12 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		if gw := mcpGateway.Load(); gw != nil {
 			gw.AppsChanged()
 		}
+		// It can also change what a grant reads, or take a grant out of
+		// force with an app's new major version: every event subscription
+		// is refiltered at once.
+		if svc := eventsSvc.Load(); svc != nil {
+			svc.AppsChanged()
+		}
 		return nil
 	}
 

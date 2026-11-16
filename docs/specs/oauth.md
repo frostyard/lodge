@@ -174,6 +174,20 @@ token revokes its family: every token of the approval that issued it
     with G and `/`.
   - An approval adds its items to the grant; an exact duplicate is not
     added twice.
+  - **Each item holds for 1 line of the app's version**: lodge stores
+    with it `major`, the request's [line](#the-apps-manifest), as in
+    `{"cap": "marks:read", "sel": {"folder": "/Reading"}, "major": "0.1"}`.
+    An item is **in force** only while the app's line is its `major`.
+    The gateway, the broker and every other reader of a grant see only
+    the items in force; an app that is not installed with a hearth
+    manifest has none. An item with no `major`, stored before lodge
+    recorded it, is in force for no line. An approval of an item the
+    grant holds already sets its `major` to the request's, which puts it
+    in force again.
+  - An app's new line takes the old items out of force at the reload
+    that loads it: the gateway tells the principal's sessions that its
+    tools changed, and every event subscription is refiltered at once
+    ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
 - **Effective access is the principal's grant limited by the client's
   scope.** The gateway uses the grant only for a token with scope `mcp`,
   the broker only for one with scope `events`, where a grant's read items
@@ -197,15 +211,22 @@ that file in the app's directory:
 | --- | --- |
 | `hearth` | the format major; lodge reads `1` |
 | `app` | the app's ID |
+| `version` | the app's version, `MAJOR.MINOR.PATCH`, each a number without a leading zero |
 | `capabilities` | strings `<app>:<name>`, `name` matching `^[a-z][a-z0-9_]*$` |
 | `selectors` | strings matching `^[a-z][a-z0-9_]*$` |
 | `events` | the app's events, each `{type, message, topic, selector, read_permission}`: `topic` of 3 or more tokens matching `^[a-z][a-z0-9_]*$`, the first the app's ID, and ending in `.<selector>` when `selector` is set; `selector` one of `selectors` or absent; `read_permission` one of `capabilities`; no 2 events with the same `type` or `topic` |
 
 lodge ignores the other members
 ([hearth's schema](https://github.com/frostyard/hearth/blob/main/schema/manifest-v1.json)).
-A manifest that cannot be read, or whose format or app is not these,
-disables the app, with the reason. For an unknown format the reason names
+A manifest that cannot be read, or whose format, app or version is not
+these, disables the app, with the reason. For an unknown format the reason names
 both versions: `hearth manifest format 2 is not one this lodge reads (1)`.
+
+**The app's line** is `MAJOR` of its `version` from `1.0.0`, and
+`0.MINOR` before it: `1.4.2` is on line `1`, `0.1.7` on line `0.1`. It is
+the range in which hearth allows no breaking change of the manifest
+([hearth ADR-0004](https://github.com/frostyard/hearth/blob/main/docs/adr/0004-generate-the-manifest-from-protobuf-options.md)),
+so a grant item holds for 1 line ([above](#principals-clients-and-grants)).
 
 ### Requests
 
@@ -223,7 +244,8 @@ A request is what the consent page shows and an admin decides.
 - **An access request** needs a bound, live client, and an installed,
   enabled app with a hearth manifest. Each item's `cap` is one of the
   app's capabilities, each selector name one of its selectors, and each
-  path valid. `RequestAccess` returns the request's ID and its URL,
+  path valid. The request records the app's line when it is made.
+  `RequestAccess` returns the request's ID and its URL,
   `https://LODGE/oauth/consent/<id>`.
 - **At most 64 requests are pending** at once. A 65th is refused: the
   authorization answers 429 with one line, and `RequestAccess` returns an
@@ -248,8 +270,10 @@ A request is what the consent page shows and an admin decides.
 [consent checks](lodge-http.md#oauth-routes).
 
 - **The page shows** the client's name and ID, its redirect URI's origin (a
-  sign-in), the principal, the app's name and ID (an access request), and
-  each scope or item. An item shows its capability and each selector's
+  sign-in), the principal, the app's name, ID and version (an access
+  request), and each scope or item. An access request made on another
+  line than the app's now shows, above its items, the line of the
+  refusal below. An item shows its capability and each selector's
   name and path, as the app's manifest names them; an item without a
   selector shows `everything`.
 - **The form** holds `csrf`, the request's CSRF token, and `hash`, the
@@ -268,8 +292,9 @@ A request is what the consent page shows and an admin decides.
   `item` with value `i`, all checked, and a text field `path.<i>.<selector>`
   for each selector of the item, filled with its path.
   - Approving needs 1 or more checked items. Each path is valid and covered
-    by the path asked for: an admin may narrow a path, never widen it. lodge
-    adds the approved items to the principal's grant for the app, and
+    by the path asked for: an admin may narrow a path, never widen it. The
+    app is on the line the request was made on. lodge adds the approved
+    items to the principal's grant for the app, for that line, and
     answers 303 to `/oauth/grants`.
   - Declining answers 303 to `/oauth/grants`.
 - **A refused decision changes nothing,** answers with one line, and
@@ -285,6 +310,7 @@ A request is what the consent page shows and an admin decides.
   | the request was decided | 409 |
   | the request expired | 410 |
   | a field breaks a rule above: principal, scopes, items, paths, or a decision that is neither `approve` nor `decline` | 400 |
+  | an access request was made on another line than the app's now: `app APP is at version V, and this request was made for LINE: decline it, and ask again` | 409 |
   | the client is bound to another principal than the request's | 409 |
   | the client or the principal was revoked after the request | 410 |
 - **A sign-in whose client is bound to another principal than the one the
@@ -297,7 +323,9 @@ A request is what the consent page shows and an admin decides.
 `GET /oauth/grants`, after the consent checks, lists:
 
 - each live principal: its name, when it was made, its last use, its grant
-  per app (each item as on the consent page), and its live clients, each
+  per app (the app's version, and each item as on the consent page; an
+  item that is not in force says why: `not in force: approved for version
+  line LINE, and the app needs a new consent`), and its live clients, each
   with its name, ID, scope, when it registered, and its last use;
 - each pending request: its kind, client, principal, app, when it was made
   and when it expires, and a link to its consent page.
@@ -339,8 +367,8 @@ All of it is in lodge's database in `/var/lib/lodge/`:
 | `principals` | name, created, revoked |
 | `oauth_clients` | ID, name, redirect URIs, principal, scope, registered, last use, revoked |
 | `oauth_sessions` | 1 row per code, access token, refresh token and PKCE session: its HMAC signature, kind, request ID (the family), client, the stored request and session, its expiry, and whether it is active |
-| `grants` | principal, app, items, updated |
-| `consent_requests` | the requests and their decisions |
+| `grants` | principal, app, items (each with its line), updated |
+| `consent_requests` | the requests, the app's line of an access request, and their decisions |
 
 - No row holds a token, a code or a CSRF token: only signatures.
 - Every hour lodge deletes expired sessions, unbound clients older than

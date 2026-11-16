@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ory/fosite"
+
+	"github.com/frostyard/lodge/internal/apps"
 )
 
 //go:embed consent.html grants.html
@@ -86,6 +88,10 @@ type itemChoice struct {
 	Hash       string
 	Everything bool
 	Selectors  []selectorChoice
+	// Waiting, on the grants page, says why an item is not in force: it
+	// was approved for another major version of the app, and waits for a
+	// new consent.
+	Waiting string
 }
 
 // consentData is what the consent page shows.
@@ -105,10 +111,15 @@ type consentData struct {
 	IsAccess bool
 	App      string
 	AppID    string
-	Scopes   []scopeChoice
-	Items    []itemChoice
-	Created  string
-	Expires  string
+	// Version is the app's version now, from its hearth manifest.
+	Version string
+	// Stale says why an access request cannot be approved: the app is on
+	// another major version than the one it was made for.
+	Stale   string
+	Scopes  []scopeChoice
+	Items   []itemChoice
+	Created string
+	Expires string
 }
 
 // itemView is an item as the pages show it.
@@ -174,6 +185,12 @@ func (s *Server) consentPage(w http.ResponseWriter, r *http.Request, id string) 
 		data.App = a.Manifest.Name
 		data.Items = itemViews(req.Items)
 		data.IsAccess = true
+		if a.Hearth != nil {
+			data.Version = a.Hearth.Version
+		}
+		if err := sameMajor(a, req); err != nil {
+			data.Stale = err.Error()
+		}
 	default:
 		// A sign-in's form goes to the client's redirect URI, so its policy
 		// admits that origin.
@@ -306,6 +323,14 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			writeOneLine(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// The consent is for the app's compatibility line that the request
+		// was made for: a request made before a new major version of the
+		// app grants nothing for it.
+		a, _ := s.apps.Get(req.App)
+		if err := sameMajor(a, req); err != nil {
+			writeOneLine(w, http.StatusConflict, oneLine(err.Error()))
+			return
+		}
 		if err := s.refuse(w, req, s.inTx(ctx, func(tx *sql.Tx) error {
 			// The client and the principal may have been revoked between
 			// the request and this decision.
@@ -315,7 +340,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 			if ok, derr := s.decide(ctx, tx, req.ID, DecisionApprove); !ok {
 				return notDecidedError{derr}
 			}
-			return s.addGrant(ctx, tx, req.Principal, req.App, items)
+			return s.addGrant(ctx, tx, req.Principal, req.App, items, req.Major)
 		})); err != nil {
 			return
 		}
@@ -329,6 +354,23 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request, req Request, ad
 	default:
 		writeOneLine(w, http.StatusBadRequest, "no request kind "+string(req.Kind))
 	}
+}
+
+// sameMajor reports, as an error, an access request that was made for
+// another compatibility line than app a's now: it can only be declined.
+func sameMajor(a apps.App, req Request) error {
+	if a.Hearth != nil && a.Hearth.Major != "" && req.Major == a.Hearth.Major {
+		return nil
+	}
+	made := req.Major
+	if made == "" {
+		made = "no version"
+	}
+	now := "no version"
+	if a.Hearth != nil && a.Hearth.Version != "" {
+		now = a.Hearth.Version
+	}
+	return fmt.Errorf("app %s is at version %s, and this request was made for %s: decline it, and ask again", req.App, now, made)
 }
 
 // notDecidedError is a decision another one won, or one that came too late.
@@ -540,7 +582,35 @@ type clientData struct {
 // grantData is a grant as the grants page shows it.
 type grantData struct {
 	App, AppName string
-	Items        []itemChoice
+	// Version is the app's version now, or "" when it is not installed with
+	// a hearth manifest.
+	Version string
+	Items   []itemChoice
+}
+
+// grantViews are a grant's stored items as the grants page shows them: each
+// one that was approved for another compatibility line than major, the
+// app's now, says that it waits for a new consent.
+func grantViews(stored []grantItem, major string) []itemChoice {
+	items := make([]Item, 0, len(stored))
+	for _, it := range stored {
+		items = append(items, it.item())
+	}
+	views := itemViews(items)
+	for i, it := range stored {
+		if major != "" && it.Major == major {
+			continue
+		}
+		made := "an earlier version"
+		if it.Major != "" {
+			made = "version line " + it.Major
+		}
+		views[i].Waiting = "not in force: approved for " + made + ", and the app needs a new consent"
+		if major == "" {
+			views[i].Waiting = "not in force: the app is not installed with a hearth manifest"
+		}
+	}
+	return views
 }
 
 // principalData is a principal as the grants page shows it.
@@ -603,9 +673,12 @@ func (s *Server) grantsPage(w http.ResponseWriter, r *http.Request, admin string
 		}
 		sortStrings(apps)
 		for _, app := range apps {
-			g := grantData{App: app, AppName: app, Items: itemViews(granted[app])}
+			g := grantData{App: app, AppName: app, Items: grantViews(granted[app], s.appMajor(app))}
 			if a, ok := s.apps.Get(app); ok {
 				g.AppName = a.Manifest.Name
+				if a.Hearth != nil {
+					g.Version = a.Hearth.Version
+				}
 			}
 			pd.Grants = append(pd.Grants, g)
 		}

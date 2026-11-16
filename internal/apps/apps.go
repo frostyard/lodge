@@ -45,6 +45,12 @@ func ValidID(id string) bool { return manifest.ValidID(id) }
 // Hearth is an app's hearth manifest: what an agent may be granted for it,
 // for the consent page (docs/specs/oauth.md, The app's manifest).
 type Hearth struct {
+	// Version is the app's semantic version, MAJOR.MINOR.PATCH, as its
+	// manifest states it.
+	Version string `json:"version"`
+	// Major is the version's compatibility line, which a grant item is
+	// approved for: MAJOR, or 0.MINOR for a version 0.y.z (HearthMajor).
+	Major string `json:"major"`
 	// Capabilities are the app's capabilities, each <app>:<name>.
 	Capabilities []string `json:"capabilities"`
 	// Selectors are the app's selector names, such as folder.
@@ -138,6 +144,26 @@ const MaxHearth = 1 << 20
 
 // hearthName is the form of a capability's name and of a selector.
 var hearthName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// hearthVersion is the form of a hearth manifest's version: MAJOR.MINOR.PATCH,
+// with no leading zero (hearth's schema/manifest-v1.json).
+var hearthVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+// HearthMajor is the compatibility line of an app's version: MAJOR for a
+// version 1.0.0 or later, and 0.MINOR for a version 0.y.z, where a breaking
+// change takes the next minor (hearth ADR-0004, Compatibility). A grant item
+// is approved for 1 line, and a new line needs a new consent. It reports
+// false for a version that is not MAJOR.MINOR.PATCH.
+func HearthMajor(version string) (string, bool) {
+	m := hearthVersion.FindStringSubmatch(version)
+	if m == nil {
+		return "", false
+	}
+	if m[1] != "0" {
+		return m[1], true
+	}
+	return "0." + m[2], true
+}
 
 // operationName is the form of an operation's full name.
 var operationName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
@@ -470,7 +496,7 @@ func (r *Registry) loadOne(id string) App {
 }
 
 // loadsHearth reads and checks app id's hearth manifest, name, from dir into
-// a.Hearth: its format major, its app, its capabilities and its selectors
+// a.Hearth: its format major, its app, its version, its capabilities and its selectors
 // (docs/specs/oauth.md, The app's manifest). A manifest it cannot read or
 // use is an error, which becomes the app's reason.
 func loadHearth(dir, name, id string, a *App) error {
@@ -497,6 +523,7 @@ func loadHearth(dir, name, id string, a *App) error {
 	var m struct {
 		Hearth       int         `json:"hearth"`
 		App          string      `json:"app"`
+		Version      string      `json:"version"`
 		Capabilities []string    `json:"capabilities"`
 		Selectors    []string    `json:"selectors"`
 		Operations   []Operation `json:"operations"`
@@ -510,6 +537,10 @@ func loadHearth(dir, name, id string, a *App) error {
 		return fmt.Errorf("hearth manifest format %d is not one this lodge reads (%d)", m.Hearth, HearthFormat)
 	case m.App != id:
 		return fmt.Errorf("its hearth manifest %s names app %q, not %q", name, m.App, id)
+	}
+	major, ok := HearthMajor(m.Version)
+	if !ok {
+		return fmt.Errorf("its hearth manifest %s has version %q, not MAJOR.MINOR.PATCH", name, m.Version)
 	}
 	for _, cap := range m.Capabilities {
 		prefix, cn, ok := strings.Cut(cap, ":")
@@ -528,7 +559,7 @@ func loadHearth(dir, name, id string, a *App) error {
 	if err := checkEvents(name, id, m.Events, m.Selectors, m.Capabilities); err != nil {
 		return err
 	}
-	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors, Operations: m.Operations, Events: m.Events}
+	a.Hearth = &Hearth{Version: m.Version, Major: major, Capabilities: m.Capabilities, Selectors: m.Selectors, Operations: m.Operations, Events: m.Events}
 	return nil
 }
 

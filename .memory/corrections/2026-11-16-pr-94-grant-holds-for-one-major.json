@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth, internal/apps, internal/events: grants of apps on hearth",
+  "correction": "A grant stored its items with no version of the app, so an app's next major version, whose manifest diff calls a changed capability, selector or topic breaking, kept every grant that an admin had approved for the old meaning. lodge now reads the hearth manifest's version, stores the app's line (MAJOR, or 0.MINOR) with each approved item, and gives the gateway and the broker only the items of the app's current line; a request made on an old line can only be declined, and a reload refilters the event subscriptions at once.",
+  "evidence": "T1913 whole-plan check, round 1, finding on t7 at lodge main 789ed5d: internal/oauth/grants.go Grant returned the stored items whatever the app's version, and apps.loadHearth did not read the manifest's version",
+  "promoted_to": "internal/gateway TestMCPGatewayNewMajorNeedsConsent; internal/oauth TestGrantMajor and TestGrantWithoutMajor; internal/events TestAppsChangedRefilters; docs/adr/0023 and docs/specs/oauth.md, a grant item holds for 1 line of its app"
+}

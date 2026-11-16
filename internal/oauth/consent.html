@@ -33,6 +33,7 @@
   button { font: inherit; padding: .6rem 1.1rem; border-radius: .5rem; border: 1px solid #c9d6e3;
            background: #fff; color: #1d2733; cursor: pointer; }
   button.approve { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
+  .stale { padding: .6rem .8rem; border: 1px solid #d9a3a3; border-radius: .5rem; color: #8a2f2f; }
   .foot { margin-top: 1.5rem; color: #6b7a8c; font-size: .85rem; }
 </style>
 </head>
@@ -52,7 +53,7 @@
       <dd>{{.Client}}<br><code>{{.ClientID}}</code></dd>
       {{if .IsAccess}}
       <dt>App</dt>
-      <dd>{{.App}}<br><code>{{.AppID}}</code></dd>
+      <dd>{{.App}}<br><code>{{.AppID}}</code>{{if .Version}} version <code>{{.Version}}</code>{{end}}</dd>
       <dt>Principal</dt>
       <dd><code>{{.Principal}}</code></dd>
       {{else}}
@@ -73,6 +74,7 @@
     <input type="hidden" name="hash" value="{{.Hash}}">
 
     {{if .IsAccess}}
+    {{if .Stale}}<p class="stale">{{.Stale}}</p>{{end}}
     <h2>What it may do</h2>
     <ul class="items">
       {{range $item := .Items}}

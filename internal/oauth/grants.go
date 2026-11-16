@@ -157,8 +157,47 @@ func (s *Server) Live(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
-// Grant returns the principal's items for app: the grant that limits what a
-// client of the principal may do there.
+// grantItem is 1 stored item of a grant: the item, and the app's
+// compatibility line that its approval was for (apps.HearthMajor). An item
+// stored before lodge recorded the line has none, and is in force for no
+// line.
+type grantItem struct {
+	Cap   string            `json:"cap"`
+	Sel   map[string]string `json:"sel,omitzero"`
+	Major string            `json:"major,omitzero"`
+}
+
+// item is the stored item without its line: what a grant gives.
+func (g grantItem) item() Item { return Item{Cap: g.Cap, Sel: g.Sel} }
+
+// decodeGrant decodes a grant's stored items.
+func decodeGrant(text string) ([]grantItem, error) {
+	var items []grantItem
+	if err := jsonUnmarshal([]byte(text), &items); err != nil {
+		return nil, fmt.Errorf("oauth: decode a grant: %w", err)
+	}
+	if items == nil {
+		items = []grantItem{}
+	}
+	return items, nil
+}
+
+// appMajor is app's current compatibility line, or "" when it is not
+// installed with a hearth manifest.
+func (s *Server) appMajor(app string) string {
+	a, ok := s.apps.Get(app)
+	if !ok || a.Hearth == nil {
+		return ""
+	}
+	return a.Hearth.Major
+}
+
+// Grant returns the principal's items for app that are in force: the grant
+// that limits what a client of the principal may do there. An item is in
+// force only for the app's compatibility line that its approval was for: a
+// new major version of the app needs a new consent (docs/specs/oauth.md,
+// Principals, clients and grants). An app that is not installed with a
+// hearth manifest has no item in force.
 func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, error) {
 	var text string
 	err := s.store.queryRow(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
@@ -167,14 +206,26 @@ func (s *Server) Grant(ctx context.Context, principal, app string) ([]Item, erro
 	} else if err != nil {
 		return nil, fmt.Errorf("oauth: read a grant: %w", err)
 	}
-	var items []Item
-	if err := jsonUnmarshal([]byte(text), &items); err != nil {
-		return nil, fmt.Errorf("oauth: decode a grant: %w", err)
+	stored, err := decodeGrant(text)
+	if err != nil {
+		return nil, err
 	}
-	if items == nil {
-		items = []Item{}
+	return inForce(stored, s.appMajor(app)), nil
+}
+
+// inForce returns the items approved for the compatibility line major; none
+// when major is "".
+func inForce(stored []grantItem, major string) []Item {
+	items := []Item{}
+	if major == "" {
+		return items
 	}
-	return items, nil
+	for _, it := range stored {
+		if it.Major == major {
+			items = append(items, it.item())
+		}
+	}
+	return items
 }
 
 // Client returns the live client id: an OAuth client of lodge, revoked or
@@ -183,33 +234,39 @@ func (s *Server) Client(ctx context.Context, id string) (Client, error) {
 	return s.store.clientRow(ctx, id)
 }
 
-// grants returns every grant of a principal, by app.
-func (s *storage) grants(ctx context.Context, principal string) (map[string][]Item, error) {
+// grants returns every grant of a principal, by app, as stored: the items
+// that are in force and the ones that wait for a new consent.
+func (s *storage) grants(ctx context.Context, principal string) (map[string][]grantItem, error) {
 	rows, err := s.query(ctx, `SELECT app, items FROM grants WHERE principal = ? ORDER BY app`, principal)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read the grants: %w", err)
 	}
 	defer rows.Close()
-	out := map[string][]Item{}
+	out := map[string][]grantItem{}
 	for rows.Next() {
 		var app, text string
 		if err := rows.Scan(&app, &text); err != nil {
 			return nil, err
 		}
-		var items []Item
-		if err := jsonUnmarshal([]byte(text), &items); err != nil {
-			return nil, fmt.Errorf("oauth: decode a grant: %w", err)
+		items, err := decodeGrant(text)
+		if err != nil {
+			return nil, err
 		}
 		out[app] = items
 	}
 	return out, rows.Err()
 }
 
-// addGrant adds items to the principal's grant for app in q, without adding
-// an exact duplicate twice. An approval calls it in the request's own
-// transaction, so the decision and the grant go together.
-func (s *Server) addGrant(ctx context.Context, q querier, principal, app string, items []Item) error {
-	have := []Item{}
+// addGrant adds items, approved for the app's compatibility line major, to
+// the principal's grant for app in q, without adding an exact duplicate
+// twice: an item that is stored already takes major, so a new consent puts
+// it in force again for the app's new major version. An approval calls it in
+// the request's own transaction, so the decision and the grant go together.
+func (s *Server) addGrant(ctx context.Context, q querier, principal, app string, items []Item, major string) error {
+	if major == "" {
+		return fmt.Errorf("an approval needs the app's major version: %w", ErrInvalid)
+	}
+	have := []grantItem{}
 	var text string
 	err := q.QueryRowContext(ctx, `SELECT items FROM grants WHERE principal = ? AND app = ?`, principal, app).Scan(&text)
 	switch {
@@ -217,14 +274,17 @@ func (s *Server) addGrant(ctx context.Context, q querier, principal, app string,
 	case err != nil:
 		return fmt.Errorf("oauth: read a grant: %w", err)
 	default:
-		if err := jsonUnmarshal([]byte(text), &have); err != nil {
-			return fmt.Errorf("oauth: decode a grant: %w", err)
+		if have, err = decodeGrant(text); err != nil {
+			return err
 		}
 	}
 	for _, it := range normalize(items) {
-		if !slices.ContainsFunc(have, func(h Item) bool { return sameItem(h, it) }) {
-			have = append(have, it)
+		i := slices.IndexFunc(have, func(h grantItem) bool { return sameItem(h.item(), it) })
+		if i < 0 {
+			have = append(have, grantItem{Cap: it.Cap, Sel: it.Sel, Major: major})
+			continue
 		}
+		have[i].Major = major
 	}
 	encoded, err := jsonMarshal(have)
 	if err != nil {
@@ -270,13 +330,13 @@ func (s *Server) RemoveGrantItem(ctx context.Context, principal, app, hash strin
 		case err != nil:
 			return fmt.Errorf("oauth: read a grant: %w", err)
 		}
-		var stored []Item
-		if err := jsonUnmarshal([]byte(text), &stored); err != nil {
-			return fmt.Errorf("oauth: decode a grant: %w", err)
+		stored, err := decodeGrant(text)
+		if err != nil {
+			return err
 		}
-		kept, found := make([]Item, 0, len(stored)), false
+		kept, found := make([]grantItem, 0, len(stored)), false
 		for _, it := range stored {
-			if ItemHash(it) == hash {
+			if ItemHash(it.item()) == hash {
 				found = true
 				continue
 			}

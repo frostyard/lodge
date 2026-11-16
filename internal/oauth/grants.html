@@ -35,6 +35,7 @@
   .danger { border-color: #d9a3a3; color: #8a2f2f; }
   .foot { margin-top: 2rem; color: #6b7a8c; font-size: .85rem; }
   .muted { color: #6b7a8c; }
+  .waiting { color: #8a2f2f; font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -66,7 +67,7 @@
     {{if .Grants}}
     {{range .Grants}}
     {{$g := .}}
-    <p class="muted"><strong>{{.AppName}}</strong> <code>{{.App}}</code></p>
+    <p class="muted"><strong>{{.AppName}}</strong> <code>{{.App}}</code>{{if .Version}} version <code>{{.Version}}</code>{{end}}</p>
     <ul class="items">
       {{range $item := .Items}}
       <li>
@@ -79,6 +80,7 @@
           <input type="hidden" name="item" value="{{$item.Hash}}">
           <button type="submit">Remove</button>
         </form>
+        {{if $item.Waiting}}<div class="waiting">{{$item.Waiting}}</div>{{end}}
         {{if $item.Selectors}}
         <ul class="paths">
           {{range $sel := $item.Selectors}}
