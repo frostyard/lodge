@@ -1340,12 +1340,11 @@ func TestAppTransportIsShared(t *testing.T) {
 	h.serveHearth(nil)
 	client, tok := h.signin("pi-a", "mcp")
 	h.grant(client.ClientID, "notelite", []oauth.Item{{Cap: "notelite:read"}})
-	// 1 pool of 2 connections to the app, for the route and the gateway, before
-	// a session is opened on it.
-	tr := NewAppTransport(h.apps)
-	tr.MaxConnsPerHost = 2
-	h.g.transport = tr
-	h.newMCPGateway(func(o *mcpgw.Options) { o.Transport = tr })
+	// The harness gives its 1 pool to the gateway through Config.Transport and
+	// to the MCP gateway through Options.Transport, as lodge's main does: it
+	// holds 2 connections to the app from now on, before any request uses it.
+	h.transport.MaxConnsPerHost = 2
+	h.newMCPGateway(nil)
 	s := h.connectMCP(tok.AccessToken, nil)
 	hold := make(chan struct{})
 	started, _ := h.hearth.Hold(hold)
