@@ -3,5 +3,5 @@
   "scope": "internal/broker",
   "correction": "Activating a subscription and removing it when that fails are 1 operation: a refilter that takes the client's lifecycle lock, and a cleanup that takes it again, leave a window where another request deletes the subscription and puts a replacement in its place, and the cleanup then deletes the replacement. Broker.Activate takes the lock once, runs the refilter, and removes the subscription under the same lock, except when it is already gone, when a revoke deletes it, or when a revoke took the consumer the refilter wrote.",
   "evidence": "frostyard/lodge#91 cross-review re-review 3 at cb92cf6 (openai/gpt-6.1-sol): blocking finding 1, activation cleanup can delete a replacement subscription",
-  "promoted_to": "internal/broker/subscribe_test.go TestActivateCleansUpUnderOneLock; internal/events/acceptance_test.go TestAReplacementDuringActivationStays"
+  "promoted_to": "internal/broker/subscribe_test.go TestActivateCleansUpUnderOneLock; internal/events/acceptance_test.go TestAFailedActivationKeepsAReplacement; internal/broker/subscribe_test.go TestActivateCleansUpAfterItsBudget"
 }

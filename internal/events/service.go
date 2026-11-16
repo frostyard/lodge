@@ -240,13 +240,18 @@ func (s *Service) activate(access oauth.Access) func(ctx context.Context, app, t
 
 // liveClient checks that the client of access is still the 1 OAuth serves: it
 // exists, it is bound, it holds the events scope and it belongs to the token's
-// principal. It answers ErrNotFound, which the gateway answers as 404: the
-// client was revoked after lodge's token check, so there is no subscription
-// for it.
+// principal. A client that fails a check answers ErrNotFound, which the
+// gateway answers as 404: it was revoked after lodge's token check, so there
+// is no subscription for it. A lookup that fails for another reason, such as
+// a store that does not answer, says nothing about the client: its error goes
+// back as it is, which the gateway answers as 503.
 func (s *Service) liveClient(ctx context.Context, access oauth.Access) error {
 	c, err := s.o.OAuth.Client(ctx, access.Client)
-	if err != nil {
+	if errors.Is(err, oauth.ErrNotFound) {
 		return fmt.Errorf("the OAuth client of the token is gone: %w: %w", ErrNotFound, err)
+	}
+	if err != nil {
+		return fmt.Errorf("read the OAuth client of the token: %w", err)
 	}
 	switch {
 	case !c.Bound():

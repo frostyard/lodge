@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": ".memory/corrections",
+  "correction": "A record whose promoted_to is filled is never changed, also inside the PR that adds it, once a commit holds it: when a test that it names is removed or renamed, a new record names the tests that replace it. Here, 2026-11-16-pr-91-activation-cleanup-one-lock.json names TestAFailedActivationKeepsAReplacement, which was removed when activation moved into SubscribeWith's lifecycle lock; its guards are now internal/broker/subscribe_test.go TestNoGapBetweenRegistrationAndActivation and TestActivateCleansUpUnderOneLock, and internal/events/acceptance_test.go TestAReplacementDuringActivationStays.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 5 at 1498766 (openai/gpt-6.1-sol): blocking finding 2, the filled promoted_to of 2026-11-16-pr-91-activation-cleanup-one-lock.json was rewritten",
+  "promoted_to": "AGENTS.md Repository baseline (a record is permanent; change only an empty promoted_to); internal/broker/subscribe_test.go TestNoGapBetweenRegistrationAndActivation, TestActivateCleansUpUnderOneLock; internal/events/acceptance_test.go TestAReplacementDuringActivationStays"
+}

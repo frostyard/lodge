@@ -874,8 +874,9 @@ consumer itself.
   and gives the consumer its filters. A grant change or a revoke that
   comes after that read finds the subscription, so a subscription cannot
   keep a grant the change narrowed. When the check or the second read
-  fails, the subscription is deleted before the lock is released, and a
-  client whose OAuth client is gone gets 404.
+  fails, the subscription is deleted before the lock is released. A
+  client whose OAuth client is gone gets 404; a lookup that fails for
+  another reason gets 503.
 - **A grant change refilters.** When a principal's grant for an app
   changes, lodge computes each of its clients' subscriptions on that app
   again and updates the consumer in place. The events not yet delivered

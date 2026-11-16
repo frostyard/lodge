@@ -891,8 +891,10 @@ func TestAReplacementDuringActivationStays(t *testing.T) {
 				replaced <- serr
 			}()
 			select {
-			case <-replaced:
+			case err := <-replaced:
 				completedWhileActivated = true
+				// The result stays for the check below.
+				replaced <- err
 			case <-time.After(300 * time.Millisecond):
 			}
 		}()
@@ -943,6 +945,41 @@ func TestARevokedClientGetsNoSubscription(t *testing.T) {
 	}
 	if !errors.Is(err, events.ErrNotFound) {
 		t.Errorf("the PUT answered %v, want an error that wraps ErrNotFound", err)
+	}
+	client, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(client); len(subs) != 0 {
+		t.Errorf("the broker holds the subscriptions %+v", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1"); err == nil {
+		t.Errorf("the broker holds the consumer %q", client+"-s1")
+	}
+}
+
+// TestAClientLookupFailureDuringActivationIs503 checks that an OAuth client
+// lookup that fails for a reason other than a missing client, during a
+// subscription's activation, is not taken for a revoked client: its error
+// wraps no ErrNotFound, so the gateway answers 503, and the subscription goes.
+func TestAClientLookupFailureDuringActivationIs503(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	var first atomic.Bool
+	events.SetBeforeActivate(h.svc, func() {
+		if first.CompareAndSwap(false, true) {
+			h.auth.failClients(1, errors.New("the store did not answer"))
+		}
+	})
+	_, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err == nil {
+		t.Fatal("a subscription whose client could not be read was admitted")
+	}
+	for _, sentinel := range []error{events.ErrNotFound, events.ErrInvalid, events.ErrNothing, events.ErrConflict} {
+		if errors.Is(err, sentinel) {
+			t.Errorf("the PUT answered %v, which wraps %v: want an error the gateway answers as 503", err, sentinel)
+		}
 	}
 	client, ok := events.ClientName(id)
 	if !ok {
