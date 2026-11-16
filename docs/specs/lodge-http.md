@@ -584,8 +584,8 @@ listener of its own.
   subscription name to another app is refused, with an error that asks
   for an unsubscribe first, and that unsubscribe deletes the consumer it
   has. Subscribing it again to the same app updates its filters. A
-  client's subscribe, unsubscribe and revoke run 1 at a time, so the check
-  and the consumer it makes are 1 step.
+  client's subscribe and unsubscribe run 1 at a time, so the check and the
+  consumer it makes are 1 step.
 - **A subscription change reconnects the client:** its permission names
   its consumers.
 - **Revoking a client closes it first.** lodge takes the client out of
@@ -602,6 +602,14 @@ listener of its own.
   deletes the kept consumers first, and fails while 1 stays, so that no
   ref outlives it to delete a consumer it makes or to orphan one on
   another app.
+- **A revoke never waits for a subscription.** Revoking takes no
+  per-client lock: it counts an epoch for the client, removes it, closes
+  it and deletes its consumers within its 1 s budget, whatever a
+  subscription under way is doing. A subscribe that a revoke overtakes
+  sees the new epoch, deletes the consumer it made, and fails with an
+  error that says the client was revoked during the subscription; if that
+  deletion fails, it is kept for the client's next revoke. So no consumer
+  is left that nobody deletes.
 - **Connections.** An app or a client holds at most 64 connections at
   once; past that a connection is refused. The socket's
   [limits](#connections) do not apply to it: the broker counts an

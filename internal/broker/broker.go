@@ -178,9 +178,13 @@ type Broker struct {
 	// its next revoke, or a subscription for it, deletes. Check never
 	// reads it: a revoked client is out of clients.
 	revoking map[string]map[consumerRef]bool
-	// lifecycles make a client's subscribe, unsubscribe and revoke run 1 at
-	// a time, so that its subscription stays on 1 app.
+	// lifecycles make a client's subscribe and unsubscribe run 1 at a time,
+	// so that its subscription stays on 1 app.
 	lifecycles map[string]*sync.Mutex
+	// epochs count each client's revokes, so that a subscription a revoke
+	// overtakes sees it and deletes the consumer it made. A revoke takes
+	// no lifecycle lock, and never waits for a subscription under way.
+	epochs map[string]uint64
 	// afterOneAppCheck, when set, is a test's barrier: it runs once a
 	// subscription's one-app check has passed, and before its consumer is
 	// made.
@@ -213,6 +217,7 @@ func New(o Options) *Broker {
 		clients:    map[string]*clientState{},
 		revoking:   map[string]map[consumerRef]bool{},
 		lifecycles: map[string]*sync.Mutex{},
+		epochs:     map[string]uint64{},
 		accounts:   map[string]*server.Account{},
 		exports:    map[string]map[string]bool{},
 		imports:    map[string]map[string]bool{},
@@ -418,6 +423,7 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	unlock := b.lifecycle(client)
 	defer unlock()
 	b.mu.Lock()
+	epoch := b.epochs[client]
 	ready := b.apps[app]
 	// A subscription stays on 1 app: its name is 1 consumer's, and a
 	// second durable would leave the first one with nobody to read it.
@@ -462,14 +468,29 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 	}); err != nil {
 		return fmt.Errorf("subscribe %s to %s: %w", client, app, err)
 	}
+	// A revoke that ran meanwhile took the client and its consumers: this
+	// one is nobody's, and it goes again.
 	b.mu.Lock()
-	c := b.clients[client]
-	if c == nil {
-		c = &clientState{subs: map[string]*consumerRef{}}
-		b.clients[client] = c
+	moved := b.epochs[client] != epoch
+	if !moved {
+		c := b.clients[client]
+		if c == nil {
+			c = &clientState{subs: map[string]*consumerRef{}}
+			b.clients[client] = c
+		}
+		c.subs[sub] = &ref
 	}
-	c.subs[sub] = &ref
 	b.mu.Unlock()
+	if moved {
+		dctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+		defer cancel()
+		kept, err := b.deleteRefs(dctx, []consumerRef{ref})
+		b.keepRefs(client, kept)
+		if err != nil {
+			return fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription, and its consumer is kept: %w", client, app, err)
+		}
+		return fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription", client, app)
+	}
 	b.closeConns(identity{kind: kindClient, name: client}.key())
 	return nil
 }
@@ -486,6 +507,7 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	unlock := b.lifecycle(client)
 	defer unlock()
 	b.mu.Lock()
+	epoch := b.epochs[client]
 	c := b.clients[client]
 	var ref *consumerRef
 	if c != nil {
@@ -498,9 +520,13 @@ func (b *Broker) Unsubscribe(ctx context.Context, client, sub string) error {
 	if err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return fmt.Errorf("unsubscribe %s/%s: %w", client, sub, err)
 	}
+	// A revoke that ran meanwhile removed the client, so there is nothing
+	// left to take out of the index.
 	b.mu.Lock()
-	if c := b.clients[client]; c != nil {
-		delete(c.subs, sub)
+	if b.epochs[client] == epoch {
+		if c := b.clients[client]; c != nil {
+			delete(c.subs, sub)
+		}
 	}
 	b.mu.Unlock()
 	b.closeConns(identity{kind: kindClient, name: client}.key())
@@ -519,23 +545,18 @@ func (b *Broker) Revoke(ctx context.Context, client string) error {
 	if err := validateName("client", client); err != nil {
 		return err
 	}
-	// The connections go first: a revoked client does not wait for a
-	// consumer's deletion, nor for a subscription that is under way.
+	// The whole revoke has 1 budget, and it waits for nothing: a
+	// subscription that is under way sees the new epoch and deletes the
+	// consumer it makes.
+	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
 	b.mu.Lock()
-	taken := b.clients[client]
-	delete(b.clients, client)
-	b.mu.Unlock()
-	b.closeConns(identity{kind: kindClient, name: client}.key())
-
-	unlock := b.lifecycle(client)
-	defer unlock()
-	// A subscription that finished meanwhile may have refilled the client,
-	// so the refs are read again here, over those taken before.
-	b.mu.Lock()
-	refs := b.refsLocked(client, taken)
+	b.epochs[client]++
+	refs := b.refsLocked(client)
 	delete(b.clients, client)
 	delete(b.revoking, client)
 	b.mu.Unlock()
+	b.closeConns(identity{kind: kindClient, name: client}.key())
 	if len(refs) == 0 {
 		return nil
 	}
@@ -559,10 +580,9 @@ func (b *Broker) lifecycle(client string) func() {
 	return m.Unlock
 }
 
-// refsLocked answers every consumer a client's revoke must delete: those of
-// the state it took before, its subscriptions now, and those a failed revoke
-// kept. b.mu must be held.
-func (b *Broker) refsLocked(client string, taken *clientState) []consumerRef {
+// refsLocked answers every consumer a client's revoke must delete: its
+// subscriptions' and those a failed revoke kept. b.mu must be held.
+func (b *Broker) refsLocked(client string) []consumerRef {
 	seen := map[consumerRef]bool{}
 	var refs []consumerRef
 	add := func(ref consumerRef) {
@@ -571,10 +591,7 @@ func (b *Broker) refsLocked(client string, taken *clientState) []consumerRef {
 			refs = append(refs, ref)
 		}
 	}
-	for _, c := range []*clientState{taken, b.clients[client]} {
-		if c == nil {
-			continue
-		}
+	if c := b.clients[client]; c != nil {
 		for _, ref := range c.subs {
 			add(*ref)
 		}
@@ -585,11 +602,9 @@ func (b *Broker) refsLocked(client string, taken *clientState) []consumerRef {
 	return refs
 }
 
-// deleteRefs deletes consumers concurrently, within revokeTimeout, and
-// answers the ones that are still there.
+// deleteRefs deletes consumers concurrently, within the budget of the ctx it
+// is given, and answers the ones that are still there.
 func (b *Broker) deleteRefs(ctx context.Context, refs []consumerRef) ([]consumerRef, error) {
-	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
-	defer cancel()
 	var (
 		mu   sync.Mutex
 		wg   sync.WaitGroup
@@ -648,7 +663,9 @@ func (b *Broker) retryRevoke(ctx context.Context, client string) error {
 	if len(refs) == 0 {
 		return nil
 	}
-	kept, err := b.deleteRefs(ctx, refs)
+	dctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
+	kept, err := b.deleteRefs(dctx, refs)
 	b.keepRefs(client, kept)
 	if err != nil {
 		return fmt.Errorf("subscribe %s: a consumer its revoke kept is still there: %w", client, err)

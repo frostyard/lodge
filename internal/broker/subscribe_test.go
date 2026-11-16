@@ -90,3 +90,81 @@ func TestSubscribeIsSerialized(t *testing.T) {
 		t.Errorf("the 2 streams hold %d consumers, want 1", total)
 	}
 }
+
+// A revoke never waits for a subscription under way: it returns within its 1
+// s budget, closes the client, and the subscription it overtook fails and
+// deletes the consumer it made.
+func TestRevokeDoesNotWaitForASubscribe(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	closed := make(chan struct{})
+	nc, _ := h.clientOpts(t, "chani", "tok-chani", natsClosed(closed))
+	noErr(t, nc.Flush())
+
+	// A second subscription stops after its one-app check, and holds its
+	// client's lifecycle lock until the test lets it go.
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var enteredOnce, released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	h.b.afterOneAppCheck = func() {
+		enteredOnce.Do(func() { close(entered) })
+		<-proceed
+	}
+	results := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		results <- h.b.Subscribe(t.Context(), "chani", "s2", "marks", []string{"marks.>"})
+	}()
+	// Never leave that goroutine, or the test, hanging.
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	})
+	<-entered
+
+	// The revoke comes while the subscription holds its client's lock.
+	start := time.Now()
+	revoked := make(chan error, 1)
+	go func() { revoked <- h.b.Revoke(t.Context(), "chani") }()
+	select {
+	case <-revoked:
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatal("the revoke did not return while a subscription was under way")
+	}
+	if d := time.Since(start); d >= time.Second {
+		t.Errorf("the revoke took %s, want under 1 s", d)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		release()
+		t.Fatal("the client's connection is still open 1 s after its revoke")
+	}
+	t.Logf("revoked after %s", time.Since(start))
+
+	// The subscription it overtook fails, and leaves no consumer of its
+	// client behind.
+	release()
+	if err := <-results; err == nil {
+		t.Fatal("the subscription that a revoke overtook answered no error")
+	}
+	h.b.mu.Lock()
+	_, kept := h.b.clients["chani"]
+	h.b.mu.Unlock()
+	if kept {
+		t.Error("the subscription put its revoked client back in the index")
+	}
+	wait(t, func() ([]string, error) {
+		names := h.names(t, "app_marks")
+		if len(names) > 0 {
+			return nil, errNotYet
+		}
+		return names, nil
+	})
+}

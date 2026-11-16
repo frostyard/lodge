@@ -102,10 +102,10 @@
     subscribing the same client and subscription name to another app is
     refused, with an error that asks for an unsubscribe first. Subscribing
     it again to the same app updates its filters.
-  - **A client's subscription operations run 1 at a time.** A per-client
-    lock holds a subscribe, an unsubscribe and a revoke, so the one-app
-    check and the consumer it makes are 1 step: 2 subscribes of the same
-    client and subscription leave 1 consumer, not 1 per app.
+  - **A client's subscriptions run 1 at a time.** A per-client lock holds
+    a subscribe and an unsubscribe, so the one-app check and the consumer
+    it makes are 1 step: 2 subscribes of the same client and subscription
+    leave 1 consumer, not 1 per app. A revoke takes no such lock.
 - **Permissions are fixed when a connection opens.** A subscription,
   an unsubscribe and a revoke close the client's connections, so it
   reconnects with the new permissions.
@@ -124,6 +124,12 @@
   - A subscription of that client waits for the kept consumers to go
     first, and fails rather than create a consumer that a kept ref could
     delete later or orphan on another app.
+  - **A revoke never waits for a subscription under way.** It takes no
+    per-client lock: it counts an epoch for the client, and a subscription
+    that a revoke overtakes sees the new epoch, deletes the consumer it
+    made, and fails. So a revoke finishes within its 1 s budget however
+    long a subscription's JetStream calls take, and no consumer is left
+    that nobody deletes.
 - **lodge issues no event token yet.** `/nats` answers every client with
   `-ERR 'Authorization Violation'` until lodge has a token to issue: the
   door, the proxy and the accounts are the whole of it for now.
