@@ -332,3 +332,111 @@ func TestPlaceholderIcon(t *testing.T) {
 		t.Errorf("notes: enabled %v, notes %q", a.Enabled(), a.Notes)
 	}
 }
+
+// hearth writes a hearth manifest to dir.
+func hearth(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHearthManifest(t *testing.T) {
+	root := t.TempDir()
+	dir := apptest.Install(t, root, "marks", map[string]any{"hearth": "hearth.json"}, nil)
+	hearth(t, dir, "hearth.json", `{"hearth":1,"app":"marks","capabilities":["marks:read","marks:write"],"selectors":["folder"],"other":[1]}`)
+	r := load(t, root)
+	a, ok := r.Get("marks")
+	if !ok || !a.Enabled() {
+		t.Fatalf("marks = %+v, enabled %v", a, ok)
+	}
+	if a.Hearth == nil {
+		t.Fatal("marks has no hearth manifest")
+	}
+	if got := strings.Join(a.Hearth.Capabilities, " "); got != "marks:read marks:write" {
+		t.Errorf("capabilities %q", got)
+	}
+	if got := strings.Join(a.Hearth.Selectors, " "); got != "folder" {
+		t.Errorf("selectors %q", got)
+	}
+	// A manifest with no members is an empty one, not an error.
+	dir2 := apptest.Install(t, root, "empty", map[string]any{"hearth": "h.json"}, nil)
+	hearth(t, dir2, "h.json", `{"hearth":1,"app":"empty"}`)
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := r.Get("empty"); !a.Enabled() || a.Hearth == nil || len(a.Hearth.Capabilities) != 0 {
+		t.Errorf("empty = %+v", a)
+	}
+}
+
+func TestHearthManifestDisabled(t *testing.T) {
+	for name, c := range map[string]struct {
+		files  func(t *testing.T, dir string)
+		reason string
+	}{
+		"format 2": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{"hearth":2,"app":"a"}`) },
+			reason: "hearth manifest format 2 is not one this lodge reads (1)"},
+		"no format": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{"app":"a"}`) },
+			reason: "hearth manifest format 0 is not one this lodge reads (1)"},
+		"other app": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{"hearth":1,"app":"b"}`) },
+			reason: `names app "b", not "a"`},
+		"not json": {files: func(t *testing.T, dir string) { hearth(t, dir, "hearth.json", `{`) }, reason: "hearth manifest"},
+		"missing":  {files: func(t *testing.T, dir string) {}, reason: "hearth manifest"},
+		"capability without app": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["read"]}`)
+		}, reason: "capability"},
+		"capability of another app": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["b:read"]}`)
+		}, reason: "capability"},
+		"bad capability name": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","capabilities":["a:Read"]}`)
+		}, reason: "capability"},
+		"bad selector": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, "hearth.json", `{"hearth":1,"app":"a","selectors":["Folder"]}`)
+		}, reason: "selector"},
+		"hidden file": {files: func(t *testing.T, dir string) {
+			hearth(t, dir, ".hearth.json", `{"hearth":1,"app":"a"}`)
+		}, reason: "app.json"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			file := "hearth.json"
+			if name == "hidden file" {
+				file = ".hearth.json"
+			}
+			dir := apptest.Install(t, root, "a", map[string]any{"hearth": file}, nil)
+			c.files(t, dir)
+			apptest.Install(t, root, "other", nil, nil)
+			r := load(t, root)
+			a, ok := r.Get("a")
+			if !ok {
+				t.Fatal("a is not listed")
+			}
+			if a.Enabled() || !strings.Contains(a.Reason, c.reason) {
+				t.Errorf("state %s, reason %q; want disabled, mentioning %q", a.State, a.Reason, c.reason)
+			}
+			if o, _ := r.Get("other"); !o.Enabled() {
+				t.Errorf("another app is disabled too: %q", o.Reason)
+			}
+		})
+	}
+}
+
+func TestHearthTooLarge(t *testing.T) {
+	root := t.TempDir()
+	dir := apptest.Install(t, root, "a", map[string]any{"hearth": "hearth.json"}, nil)
+	body := `{"hearth":1,"app":"a","selectors":["` + strings.Repeat("s", apps.MaxHearth) + `"]}`
+	hearth(t, dir, "hearth.json", body)
+	a, _ := load(t, root).Get("a")
+	if a.Enabled() || !strings.Contains(a.Reason, "larger than") {
+		t.Errorf("a huge hearth manifest: %s %q", a.State, a.Reason)
+	}
+	// A symbolic link is not the app's file.
+	dir2 := apptest.Install(t, root, "b", map[string]any{"hearth": "hearth.json"}, nil)
+	hearth(t, dir2, "real.json", `{"hearth":1,"app":"b"}`)
+	os.Symlink(filepath.Join(dir2, "real.json"), filepath.Join(dir2, "hearth.json"))
+	if a, _ := load(t, root).Get("b"); a.Enabled() || !strings.Contains(a.Reason, "regular file") {
+		t.Errorf("a symlinked hearth manifest: %s %q", a.State, a.Reason)
+	}
+}

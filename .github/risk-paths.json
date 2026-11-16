@@ -83,6 +83,16 @@
       "why": "auth: each route kind's checks, the Lodge-* headers, the proxy to app sockets, and the web files and content node's sandbox"
     },
     {
+      "glob": "internal/oauth/**",
+      "level": "L1",
+      "why": "auth: the OAuth server, its token storage and rotation, the consent and grants pages that issue and revoke access, and their CSRF checks (ADR-0023)"
+    },
+    {
+      "glob": "internal/gateway/oauth.go",
+      "level": "L1",
+      "why": "auth: the OAuth and consent routes' checks: origin, fetch metadata, identity and the admin list"
+    },
+    {
       "glob": "internal/{agents,control}/**",
       "level": "L1",
       "why": "auth: the agent socket's peer-uid admission, and the control socket that issues tokens and allows logins and nodes"

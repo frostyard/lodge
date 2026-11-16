@@ -83,6 +83,15 @@ func (s *Server) call(ctx context.Context, method string, p jsontext.Value) (any
 		return s.allowLogin(ctx, p)
 	case "lodge.disallowLogin":
 		return s.disallowLogin(ctx, p)
+	case "lodge.admins":
+		if err := params(p, &struct{}{}); err != nil {
+			return nil, err
+		}
+		return s.d.Allow.Admins(ctx)
+	case "lodge.allowAdmin":
+		return s.allowAdmin(ctx, p)
+	case "lodge.disallowAdmin":
+		return s.disallowAdmin(ctx, p)
 	case "lodge.nodes":
 		if err := params(p, &struct{}{}); err != nil {
 			return nil, err
@@ -176,6 +185,42 @@ func (s *Server) disallowLogin(ctx context.Context, p jsontext.Value) (any, erro
 	n := s.d.Sessions.EndLogin(in.Login)
 	s.d.Log.Info("login disallowed", "login", in.Login, "sessions closed", n)
 	return Closed{n}, nil
+}
+
+func (s *Server) allowAdmin(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Login string `json:"login"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	switch err := s.d.Allow.AllowAdmin(ctx, in.Login); {
+	case errors.Is(err, allow.ErrInvalid):
+		return nil, errorf(CodeInvalidParams, "a login is 1 to 256 bytes of UTF-8 without control characters")
+	case errors.Is(err, allow.ErrConflict):
+		return nil, errorf(CodeConflict, "login %s is already an admin", in.Login)
+	case err != nil:
+		return nil, err
+	}
+	s.d.Log.Info("admin allowed", "login", in.Login)
+	return struct{}{}, nil
+}
+
+func (s *Server) disallowAdmin(ctx context.Context, p jsontext.Value) (any, error) {
+	var in struct {
+		Login string `json:"login"`
+	}
+	if err := params(p, &in); err != nil {
+		return nil, err
+	}
+	switch err := s.d.Allow.DisallowAdmin(ctx, in.Login); {
+	case errors.Is(err, allow.ErrNotFound):
+		return nil, errorf(CodeNotFound, "login %s is not an admin", in.Login)
+	case err != nil:
+		return nil, err
+	}
+	s.d.Log.Info("admin disallowed", "login", in.Login)
+	return struct{}{}, nil
 }
 
 // resolveNode finds node, a StableNodeID or a name, among the lodge

@@ -21,6 +21,7 @@ import (
 
 	"github.com/frostyard/lodge/internal/allow"
 	"github.com/frostyard/lodge/internal/apps"
+	"github.com/frostyard/lodge/internal/oauth"
 	"github.com/frostyard/lodge/internal/peer"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/tokens"
@@ -48,8 +49,11 @@ type Config struct {
 	Allow    *allow.Lists
 	Tokens   *tokens.Store
 	Sessions *sessions.Registry
-	Log      *slog.Logger     // [discard]
-	Now      func() time.Time // [time.Now]
+	// OAuth is lodge's OAuth server and its pages; nil serves none of its
+	// routes.
+	OAuth *oauth.Server
+	Log   *slog.Logger     // [discard]
+	Now   func() time.Time // [time.Now]
 	// BodyTimeout bounds each read of a device request's body, so a peer
 	// that stalls a body cannot hold a connection to an app [30 s].
 	BodyTimeout time.Duration
@@ -230,6 +234,8 @@ func (g *Gateway) Lodge(who peer.WhoIs) http.Handler {
 			g.mcp(w, r, who, segs[1])
 		case first == "device" && len(segs) >= 2 && apps.ValidID(segs[1]):
 			g.device(w, r, who, segs[1], rest(escaped, 2))
+		case first == ".well-known", first == "oauth":
+			g.oauthRoute(w, r, who, escaped, segs)
 		case apps.ValidID(first):
 			g.shellPage(w, r, who, first)
 		default:

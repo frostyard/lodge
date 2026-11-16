@@ -113,6 +113,18 @@ func TestAllowAndList(t *testing.T) {
 	if code, out, _ := lodgectl(t, root, "--json", "logins"); code != 0 || !strings.HasPrefix(out, `[{"login":"alice@example.com"`) {
 		t.Errorf("logins --json: %d %q", code, out)
 	}
+	if code, out, errs := lodgectl(t, root, "allow", "admin", "alice@example.com"); code != 0 || !strings.Contains(out, "allow admin alice@example.com") {
+		t.Fatalf("allow admin: %d %q %q", code, out, errs)
+	}
+	if code, out, _ := lodgectl(t, root, "admins"); code != 0 || !regexp.MustCompile(`LOGIN\s+ADDED`).MatchString(out) || !strings.Contains(out, "alice@example.com") {
+		t.Errorf("admins: %d %q", code, out)
+	}
+	if code, out, _ := lodgectl(t, root, "disallow", "admin", "alice@example.com"); code != 0 || !strings.Contains(out, "disallow admin alice@example.com") {
+		t.Errorf("disallow admin: %d %q", code, out)
+	}
+	if code, _, errs := lodgectl(t, root, "disallow", "admin", "alice@example.com"); code != 1 || !strings.Contains(errs, "not an admin") {
+		t.Errorf("disallowing twice: %d %q", code, errs)
+	}
 	if code, out, _ := lodgectl(t, root, "apps"); code != 0 || !regexp.MustCompile(`notes\s+Notes\s+1.0.0\s+n\s+down\s+mcp`).MatchString(out) {
 		t.Errorf("apps: %d %q", code, out)
 	}

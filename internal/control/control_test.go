@@ -145,6 +145,33 @@ func TestLogins(t *testing.T) {
 	}
 }
 
+func TestAdmins(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	if err := f.c.Call(ctx, "lodge.allowAdmin", map[string]string{"login": "alice@example.com"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Call(ctx, "lodge.allowAdmin", map[string]string{"login": "alice@example.com"}, nil); code(err) != CodeConflict {
+		t.Errorf("allowing twice: %v, want conflict", err)
+	}
+	if err := f.c.Call(ctx, "lodge.allowAdmin", map[string]string{"login": "a\x00b"}, nil); code(err) != CodeInvalidParams {
+		t.Errorf("a bad login: %v, want invalidParams", err)
+	}
+	var admins []allow.Admin
+	if err := f.c.Call(ctx, "lodge.admins", nil, &admins); err != nil || len(admins) != 1 || admins[0].Login != "alice@example.com" {
+		t.Errorf("admins = %+v, %v", admins, err)
+	}
+	if err := f.c.Call(ctx, "lodge.disallowAdmin", map[string]string{"login": "alice@example.com"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Call(ctx, "lodge.disallowAdmin", map[string]string{"login": "alice@example.com"}, nil); code(err) != CodeNotFound {
+		t.Errorf("disallowing an absent admin: %v, want notFound", err)
+	}
+	if admins, err := f.allow.Admins(ctx); err != nil || len(admins) != 0 {
+		t.Errorf("admins after disallowing = %+v, %v", admins, err)
+	}
+}
+
 func TestNodes(t *testing.T) {
 	peers := []peer.Peer{{NodeID: "nPhone", NodeName: "phone"}, {NodeID: "nTwin1", NodeName: "twin"}, {NodeID: "nTwin2", NodeName: "twin"}}
 	f := newFixture(t, peers)
