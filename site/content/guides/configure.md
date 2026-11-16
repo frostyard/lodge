@@ -105,6 +105,34 @@ sudo lodgectl token revoke NAME   # refuse it and close its streams
 [MCP tokens and scope](https://github.com/frostyard/lodge/blob/main/docs/specs/app-contract.md#mcp-tokens-and-scope)
 in the app contract has the details.
 
+## Admins, consent and grants
+
+An MCP client that speaks OAuth signs in to lodge itself, with no token
+copied by hand. It finds lodge at `https://LODGE`, registers, and opens a
+sign-in link in your browser. lodge shows a **consent page**: the client,
+the principal it acts for (such as `chani`), and what it asks for. You
+narrow it, approve it, or decline it. An agent that needs more later asks
+again, and the request opens the same page.
+
+Only an admin approves. Add your login first:
+
+```sh
+sudo lodgectl allow admin alice@example.com
+sudo lodgectl admins                          # list the admins
+sudo lodgectl disallow admin alice@example.com
+```
+
+An admin must also be on the allowed logins, on an allowed device.
+
+`https://LODGE/oauth/grants` is the **grants page**. It lists each
+principal, its clients, its grants, when each was last used, and the
+requests that wait for you. It revokes a client or a whole principal,
+and their tokens stop at once.
+
+The tokens `lodgectl token issue` prints keep working beside OAuth.
+[lodge's OAuth server](https://github.com/frostyard/lodge/blob/main/docs/specs/oauth.md)
+has the details.
+
 ## Provider credentials
 
 The configuration never holds a key. lodge keeps every credential in its

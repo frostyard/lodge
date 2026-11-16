@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "A hash over JSON that holds a map must be taken with deterministic encoding, so that its keys are sorted; and every check-then-insert, including the creation of a request after its client is checked, must be 1 transaction or 1 statement.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) of head dbe8771, batch 3 findings 1 to 3",
+  "promoted_to": "internal/oauth/oauth_test.go TestRequestHashIsDeterministic and TestRequestAccessLimitRace; internal/gateway/oauth_test.go TestOAuthAccessAfterRevocation"
+}

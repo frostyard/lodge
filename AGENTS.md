@@ -92,6 +92,11 @@ Everything in the map is built.
   - `internal/agents`: the agents on lodge's host and their socket,
     `/run/lodge/agent.sock`, admitted by peer uid
     ([ADR-0014](docs/adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md)).
+  - `internal/oauth`: lodge's OAuth 2.1 server on `github.com/ory/fosite`
+    (the only package that imports it), the consent and grants pages,
+    principals, clients and grants
+    ([specs/oauth.md](docs/specs/oauth.md),
+    [ADR-0023](docs/adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
   - `internal/control`: the control socket that `lodgectl` uses.
   - `internal/apptest`: fake apps on sockets, for tests.
 - `internal/broker`: the event broker lodge embeds: a NATS server with
@@ -195,8 +200,14 @@ These are the app contract's rules
 - **A contract-major mismatch disables that one app.** The others keep
   running.
 - **lodge never parses an app's JSON-RPC.** It moves frames.
-- **Identity comes from WhoIs alone.** No browser route writes. Issuing a
-  token and allowing a login or a node happen only on the control socket.
+- **Identity comes from WhoIs alone.** No browser route writes, except the
+  consent routes, and only for an admin's login: `/oauth/authorize` records
+  a pending request, which grants nothing; a decision is a `POST` from
+  lodge's own page with that request's CSRF token and hash; a revocation is
+  a `POST` from lodge's grants page with its CSRF token. Issuing an `lgm_` token,
+  allowing a login or a node, and making an admin happen only on the
+  control socket; an OAuth token only after an admin's approval
+  ([ADR-0023](docs/adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
 
 ## Skills (follow these for common tasks)
 

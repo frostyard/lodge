@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lodge · consent</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.5rem 1rem 3rem; background: #f5f8fb; color: #1d2733;
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; }
+  h1 { margin: 0 0 .25rem; font-size: 1.5rem; }
+  h2 { margin: 1.5rem 0 .5rem; font-size: 1.1rem; }
+  .lead { margin: 0 0 1.25rem; color: #4a5768; }
+  .card { background: #fff; border: 1px solid #dbe4ee; border-radius: .75rem; padding: 1rem 1.25rem; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 0; }
+  dt { color: #4a5768; font-size: .9rem; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  code { font: .9rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .accent { color: #3577c4; }
+  ul.items { list-style: none; margin: 0; padding: 0; }
+  ul.items > li { border-top: 1px solid #e6edf4; padding: .75rem 0; }
+  ul.items > li:first-child { border-top: 0; }
+  label.check { display: flex; gap: .6rem; align-items: flex-start; font-weight: 500; }
+  .paths { margin: .5rem 0 0 1.75rem; display: grid; gap: .5rem; }
+  .paths label { font-size: .9rem; color: #4a5768; display: grid; gap: .2rem; }
+  ul.scopes { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+  input[type=text] { width: 100%; padding: .4rem .5rem; border: 1px solid #c9d6e3; border-radius: .4rem;
+                     font: inherit; background: #fff; }
+  input[readonly] { background: #eef2f7; color: #4a5768; }
+  .buttons { display: flex; gap: .75rem; margin-top: 1.5rem; flex-wrap: wrap; }
+  button { font: inherit; padding: .6rem 1.1rem; border-radius: .5rem; border: 1px solid #c9d6e3;
+           background: #fff; color: #1d2733; cursor: pointer; }
+  button.approve { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
+  .foot { margin-top: 1.5rem; color: #6b7a8c; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  {{if .IsAccess}}
+  <h1>Grant access?</h1>
+  <p class="lead"><strong>{{.Client}}</strong> asks for part of <strong>{{.App}}</strong>.</p>
+  {{else}}
+  <h1>Sign in?</h1>
+  <p class="lead"><strong>{{.Client}}</strong> asks to act for a principal.</p>
+  {{end}}
+
+  <section class="card">
+    <dl>
+      <dt>Client</dt>
+      <dd>{{.Client}}<br><code>{{.ClientID}}</code></dd>
+      {{if .IsAccess}}
+      <dt>App</dt>
+      <dd>{{.App}}<br><code>{{.AppID}}</code></dd>
+      <dt>Principal</dt>
+      <dd><code>{{.Principal}}</code></dd>
+      {{else}}
+      <dt>Redirect</dt>
+      <dd><code>{{.Origin}}</code></dd>
+      <dt>Principal</dt>
+      <dd><code>{{.Principal}}</code></dd>
+      {{end}}
+      <dt>Asked</dt>
+      <dd>{{.Created}}</dd>
+      <dt>Expires</dt>
+      <dd>{{.Expires}}</dd>
+    </dl>
+  </section>
+
+  <form method="post" action="/oauth/consent/{{.ID}}">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="hash" value="{{.Hash}}">
+
+    {{if .IsAccess}}
+    <h2>What it may do</h2>
+    <ul class="items">
+      {{range $item := .Items}}
+      <li>
+        <label class="check">
+          <input type="checkbox" name="item" value="{{$item.Index}}" checked>
+          <span><code class="accent">{{$item.Cap}}</code>{{if $item.Everything}} &mdash; everything{{end}}</span>
+        </label>
+        {{if $item.Selectors}}
+        <div class="paths">
+          {{range $sel := $item.Selectors}}
+          <label>{{$sel.Name}}
+            <input type="text" name="path.{{$item.Index}}.{{$sel.Name}}" value="{{$sel.Path}}" autocomplete="off" spellcheck="false">
+          </label>
+          {{end}}
+        </div>
+        {{end}}
+      </li>
+      {{end}}
+    </ul>
+    {{else}}
+    <h2>Principal</h2>
+    <label>the name it acts for
+      <input type="text" name="principal" value="{{.Principal}}" {{if .Bound}}readonly{{end}}
+             autocomplete="off" spellcheck="false">
+    </label>
+    <h2>Scopes</h2>
+    <ul class="scopes">
+      {{range .Scopes}}
+      <li>
+        <label class="check">
+          <input type="checkbox" name="scope" value="{{.Name}}" checked>
+          <span><code class="accent">{{.Name}}</code> &mdash; {{.About}}</span>
+        </label>
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+
+    <div class="buttons">
+      <button class="approve" type="submit" name="decision" value="approve">Approve</button>
+      <button type="submit" name="decision" value="decline">Decline</button>
+    </div>
+  </form>
+
+  <p class="foot">lodge grants nothing by default. Only an admin decides, and a request is decided once.</p>
+</main>
+</body>
+</html>

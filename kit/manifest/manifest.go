@@ -22,12 +22,13 @@ const Contract = 1
 
 // Reserved are the ids no app may take: they are lodge's own first path
 // segments.
-var reserved = []string{"app", "device", "lodge", "mcp", "nats"}
+var reserved = []string{"app", "device", "lodge", "mcp", "nats", "oauth"}
 
 var (
-	idPattern   = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
-	userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
-	keyPattern  = regexp.MustCompile(`^[a-z]$`)
+	idPattern     = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
+	userPattern   = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	keyPattern    = regexp.MustCompile(`^[a-z]$`)
+	hearthPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}\.json$`)
 )
 
 // Manifest is app.json. A missing bool is false.
@@ -62,10 +63,14 @@ type Manifest struct {
 	// current app and told its context (ADR-0013). lodge makes at most one
 	// app the companion: when two manifests set it, neither is.
 	Companion bool `json:"companion,omitzero"`
+	// Hearth is the file name of the app's hearth manifest in its
+	// directory: the capabilities and selectors the consent page shows
+	// (docs/specs/oauth.md, The app's manifest).
+	Hearth string `json:"hearth,omitzero"`
 }
 
 // ValidID reports whether id may name an app: ^[a-z][a-z0-9]{0,15}$, and
-// not app, device, lodge, mcp or nats.
+// not app, device, lodge, mcp, nats or oauth.
 func ValidID(id string) bool {
 	return idPattern.MatchString(id) && !slices.Contains(reserved, id)
 }
@@ -92,7 +97,7 @@ func (m Manifest) Validate() error {
 		bad("contract %d is not a contract major", m.Contract)
 	}
 	if !ValidID(m.ID) {
-		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, lodge, mcp or nats", m.ID)
+		bad("id %q must match ^[a-z][a-z0-9]{0,15}$ and not be app, device, lodge, mcp, nats or oauth", m.ID)
 	}
 	if n := utf8.RuneCountInString(m.Name); n < 1 || n > 32 || strings.TrimSpace(m.Name) == "" {
 		bad("name must be 1 to 32 characters")
@@ -109,7 +114,16 @@ func (m Manifest) Validate() error {
 	if m.Key != "" && !keyPattern.MatchString(m.Key) {
 		bad("key %q must be one letter, a to z", m.Key)
 	}
+	if m.Hearth != "" && !ValidHearthFile(m.Hearth) {
+		bad("hearth %q must match ^[a-z0-9][a-z0-9._-]{0,63}\\.json$ and not be app.json", m.Hearth)
+	}
 	return errors.Join(errs...)
+}
+
+// ValidHearthFile reports whether name may name an app's hearth manifest: a
+// .json file in the app's directory that is not app.json itself.
+func ValidHearthFile(name string) bool {
+	return hearthPattern.MatchString(name) && name != "app.json"
 }
 
 // checkIcon admits a relative, clean path to an .svg file.

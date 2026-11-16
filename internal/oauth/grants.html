@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lodge · access</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.5rem 1rem 3rem; background: #f5f8fb; color: #1d2733;
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { margin: 0 0 .25rem; font-size: 1.5rem; }
+  h2 { margin: 2rem 0 .75rem; font-size: 1.1rem; }
+  h3 { margin: 0; font-size: 1rem; }
+  .lead { margin: 0 0 1.25rem; color: #4a5768; }
+  .card { background: #fff; border: 1px solid #dbe4ee; border-radius: .75rem; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .card > header { display: flex; gap: .75rem; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; margin: .75rem 0 0; }
+  dt { color: #4a5768; font-size: .9rem; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  code { font: .9rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .accent { color: #3577c4; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  ul.items > li { border-top: 1px solid #e6edf4; padding: .5rem 0; }
+  ul.items > li:first-child { border-top: 0; }
+  .paths { margin: .25rem 0 0 1.5rem; display: grid; gap: .2rem; color: #4a5768; font-size: .9rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .95rem; }
+  th, td { text-align: left; padding: .4rem .5rem; border-top: 1px solid #e6edf4; vertical-align: top; }
+  th { color: #4a5768; font-size: .85rem; font-weight: 500; }
+  button { font: inherit; padding: .35rem .8rem; border-radius: .5rem; border: 1px solid #c9d6e3;
+           background: #fff; color: #1d2733; cursor: pointer; }
+  .danger { border-color: #d9a3a3; color: #8a2f2f; }
+  .foot { margin-top: 2rem; color: #6b7a8c; font-size: .85rem; }
+  .muted { color: #6b7a8c; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Access</h1>
+  <p class="lead">Principals hold the grants. A client acts for its principal, limited by its scope.</p>
+
+  <h2>Principals</h2>
+  {{range .Principals}}
+  <section class="card">
+    <header>
+      <h3><code class="accent">{{.Name}}</code></h3>
+      <form method="post" action="/oauth/grants/revoke">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="ts" value="{{$.TS}}">
+        <input type="hidden" name="principal" value="{{.Name}}">
+        <button class="danger" type="submit">Revoke the principal</button>
+      </form>
+    </header>
+    <dl>
+      <dt>Made</dt>
+      <dd>{{.Created}}</dd>
+      <dt>Last use</dt>
+      <dd>{{.LastUsed}}</dd>
+    </dl>
+
+    <h3 style="margin-top:1rem">Grants</h3>
+    {{if .Grants}}
+    {{range .Grants}}
+    <p class="muted"><strong>{{.AppName}}</strong> <code>{{.App}}</code></p>
+    <ul class="items">
+      {{range $item := .Items}}
+      <li>
+        <code class="accent">{{$item.Cap}}</code>{{if $item.Everything}} &mdash; everything{{end}}
+        {{if $item.Selectors}}
+        <ul class="paths">
+          {{range $sel := $item.Selectors}}
+          <li>{{$sel.Name}} <code>{{$sel.Path}}</code></li>
+          {{end}}
+        </ul>
+        {{end}}
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+    {{else}}
+    <p class="muted">No grant.</p>
+    {{end}}
+
+    <h3 style="margin-top:1rem">Clients</h3>
+    {{if .Clients}}
+    <table>
+      <thead><tr><th>Name</th><th>ID</th><th>Scope</th><th>Registered</th><th>Last use</th><th></th></tr></thead>
+      <tbody>
+        {{range .Clients}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td><code>{{.ID}}</code></td>
+          <td>{{if .Scope}}<code>{{.Scope}}</code>{{else}}<span class="muted">none</span>{{end}}</td>
+          <td>{{.Registered}}</td>
+          <td>{{.LastUsed}}</td>
+          <td>
+            <form method="post" action="/oauth/grants/revoke">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="ts" value="{{$.TS}}">
+              <input type="hidden" name="client" value="{{.ID}}">
+              <button class="danger" type="submit">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="muted">No client.</p>
+    {{end}}
+  </section>
+  {{else}}
+  <p class="muted">No principal yet: the first approved sign-in makes one.</p>
+  {{end}}
+
+  <h2>Requests waiting</h2>
+  {{if .Requests}}
+  <section class="card">
+    <table>
+      <thead><tr><th>Kind</th><th>Client</th><th>Principal</th><th>App</th><th>Made</th><th>Expires</th><th></th></tr></thead>
+      <tbody>
+        {{range .Requests}}
+        <tr>
+          <td>{{.Kind}}</td>
+          <td>{{.ClientName}}<br><code>{{.Client}}</code></td>
+          <td><code>{{.Principal}}</code></td>
+          <td>{{if .App}}{{.App}}{{else}}<span class="muted">none</span>{{end}}</td>
+          <td>{{.Created}}</td>
+          <td>{{.Expires}}</td>
+          <td><a href="{{.URL}}">Decide</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </section>
+  {{else}}
+  <p class="muted">No request waits for a decision.</p>
+  {{end}}
+
+  <p class="foot">A revocation ends the client's or the principal's tokens at once, and the next check of one refuses it.</p>
+</main>
+</body>
+</html>

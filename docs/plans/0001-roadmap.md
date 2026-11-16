@@ -388,11 +388,45 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
   - Porter, built in frostyard/porter from its
     [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md), can start on these pieces.
 
+## Phase 7 — OAuth, consent and grants
+
+lodge issues agent access itself: MCP clients sign in with OAuth 2.1, and an
+admin approves each request on a consent page. The first part of lodge as
+the hub for apps on frostyard/hearth; the MCP gateway and grant-driven
+events follow. Implements [oauth.md](../specs/oauth.md) and
+[lodge-http.md](../specs/lodge-http.md#oauth-routes)
+([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)),
+and design/overview.md's [agents](../design/overview.md#agents).
+
+- **`internal/oauth`:** fosite with lodge's storage, the metadata,
+  registration, authorization, token and revocation endpoints, the
+  requests, the consent and grants pages, and `Check`, `Grant` and
+  `RequestAccess` for the gateway and the broker.
+- **The admin list:** `lodgectl admins`, `allow admin` and
+  `disallow admin`.
+- **`kit/manifest`:** the reserved ID `oauth` and the `hearth` member;
+  **`internal/apps`** reads the hearth manifest's capabilities and
+  selectors.
+- **A migration** of lodge's database for admins, principals, clients,
+  sessions, grants and requests.
+- **Done when:**
+  - an MCP client discovers lodge, registers, and signs in with PKCE on a
+    loopback port it picked, and an admin approves it on the consent page;
+  - a refresh rotates its token, and a reused refresh token revokes its
+    family;
+  - only an admin's login decides, and a decision without lodge's origin,
+    `Sec-Fetch-Site: same-origin`, the CSRF token or the request hash, a
+    second decision and an expired request are refused, each with a test;
+  - the grants page revokes a client or a principal, and its tokens stop
+    at once;
+  - `/mcp/<id>` with `lgm_` tokens works as before.
+
 ## Later / ideas
 
 - One aggregated `/mcp` for clients that want a single connector.
-- claude.ai and the Claude apps, which need a public endpoint and OAuth 2.1.
-  This is ruled out while lodge stays on the tailnet.
+- claude.ai and the Claude apps, which need a public endpoint as well as
+  OAuth 2.1 ([Phase 7](#phase-7--oauth-consent-and-grants)). This is ruled
+  out while lodge stays on the tailnet.
 - Badges in the rail, such as unread mail. Proposed on 2026-11-02 in
   [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md):
   lodge's side (the `/health` member, the rail's field, the shell's badges
@@ -461,6 +495,6 @@ and design/overview.md's [shell](../design/overview.md#the-shell) and
 
 ## References
 
-- Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
-- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md), [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Accepted); [ADR-0017](../adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md) and [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md) (Accepted); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
+- Implements: [design/overview.md](../design/overview.md), [specs/app-contract.md](../specs/app-contract.md), [specs/lodge-http.md](../specs/lodge-http.md), [specs/oauth.md](../specs/oauth.md), [specs/lodge-client.md](../specs/lodge-client.md), [specs/shell.md](../specs/shell.md)
+- Decisions: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0015](../adr/0015-codex-uses-the-owners-chatgpt-plan-through-sign-in-with-chatgpt.md), [ADR-0016](../adr/0016-copilot-uses-the-owners-copilot-plan-through-githubs-device-sign-in.md) (Accepted); [ADR-0017](../adr/0017-the-kit-guards-outbound-fetches-against-inside-addresses.md) and [ADR-0018](../adr/0018-a-ui-package-beside-the-client.md) (Accepted); [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
 - Related: Porter's [ADR-0003](https://github.com/frostyard/porter/blob/main/docs/adr/0003-porter-is-a-lodge-app-that-owns-no-data.md) to [ADR-0006](https://github.com/frostyard/porter/blob/main/docs/adr/0006-one-continuous-thread.md), [design/overview.md](https://github.com/frostyard/porter/blob/main/docs/design/overview.md), [specs/routines.md](https://github.com/frostyard/porter/blob/main/docs/specs/routines.md) and [roadmap](https://github.com/frostyard/porter/blob/main/docs/plans/0001-roadmap.md); frostnotes' [roadmap](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0002-roadmap.md), [plan 0006](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0006-m4-notes-inside-lodge.md), [ADR-0028](https://github.com/frostyard/frostnotes/blob/main/docs/adr/0028-an-agents-scope-can-limit-writes-to-folders.md) and [plan 0007](https://github.com/frostyard/frostnotes/blob/main/docs/plans/0007-folder-scopes-for-agents.md); frostmail [plan 0012](https://github.com/frostyard/frostmail/blob/main/docs/plans/0012-calendar-tasks-and-contacts-for-agents.md), [ADR-0002](https://github.com/frostyard/frostmail/blob/main/docs/adr/0002-daemon-and-thin-clients.md), [ADR-0013](https://github.com/frostyard/frostmail/blob/main/docs/adr/0013-app-as-a-local-flatpak.md)

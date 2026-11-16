@@ -39,9 +39,12 @@ const usage = `usage: lodgectl [--root DIR] [--json] COMMAND
   status                                   lodge's nodes, apps, sessions, providers and agent socket
   apps                                     each app's manifest, state and reason
   reload                                   reread the manifests and the configuration
-  logins | nodes                           the allowed logins or nodes
+  logins | nodes | admins                  the allowed logins, nodes or admins
   allow login LOGIN | allow node NODE      allow one (NODE: an ID, or a peer's name)
+  allow admin LOGIN                        make a login an admin: one may approve a
+                                           consent request and revoke access
   disallow login LOGIN | disallow node NODE  remove one, closing its sessions
+  disallow admin LOGIN                     remove one from the admin list
   tokens                                   the MCP tokens
   token issue NAME --app ID --scope SCOPE [--agent USER]
                                            print a new token on stdout, once; with
@@ -163,6 +166,8 @@ func parse(args []string, stdin io.Reader) (command, error) {
 		return command{method: "lodge.reload", show: showApps}, need(1)
 	case "logins":
 		return command{method: "lodge.logins", show: showLogins}, need(1)
+	case "admins":
+		return command{method: "lodge.admins", show: showAdmins}, need(1)
 	case "nodes":
 		return command{method: "lodge.nodes", show: showNodes}, need(1)
 	case "tokens":
@@ -170,12 +175,15 @@ func parse(args []string, stdin io.Reader) (command, error) {
 	case "sessions":
 		return command{method: "lodge.sessions", show: showSessions}, need(1)
 	case "allow", "disallow":
-		if len(args) != 3 || (args[1] != "login" && args[1] != "node") {
-			return command{}, fmt.Errorf("%s login LOGIN, or %s node NODE", args[0], args[0])
+		if len(args) != 3 || (args[1] != "login" && args[1] != "node" && args[1] != "admin") {
+			return command{}, fmt.Errorf("%s login LOGIN, %s node NODE, or %s admin LOGIN", args[0], args[0], args[0])
 		}
 		method := map[string]string{"allow login": "lodge.allowLogin", "allow node": "lodge.allowNode",
-			"disallow login": "lodge.disallowLogin", "disallow node": "lodge.disallowNode"}[args[0]+" "+args[1]]
-		return command{method: method, params: map[string]string{args[1]: args[2]}, show: showDone(args[0] + " " + args[1] + " " + args[2])}, nil
+			"allow admin": "lodge.allowAdmin", "disallow login": "lodge.disallowLogin",
+			"disallow node": "lodge.disallowNode", "disallow admin": "lodge.disallowAdmin"}[args[0]+" "+args[1]]
+		// An admin is a login, so the control socket's member is login.
+		key := map[string]string{"login": "login", "node": "node", "admin": "login"}[args[1]]
+		return command{method: method, params: map[string]string{key: args[2]}, show: showDone(args[0] + " " + args[1] + " " + args[2])}, nil
 	case "token":
 		if len(args) >= 2 && args[1] == "issue" {
 			return parseIssue(args[2:])
@@ -417,6 +425,12 @@ func showApps(o *out, raw []byte) error {
 func showLogins(o *out, raw []byte) error {
 	return showList(o, raw, "LOGIN\tADDED", func(l allow.Login) []string {
 		return []string{l.Login, when(l.Added)}
+	})
+}
+
+func showAdmins(o *out, raw []byte) error {
+	return showList(o, raw, "LOGIN\tADDED", func(a allow.Admin) []string {
+		return []string{a.Login, when(a.Added)}
 	})
 }
 

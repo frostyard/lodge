@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "A limit and its insert must be one statement, and a CSRF token and the time it covers must come from one read of the clock.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) of head 4b50c66, findings 3 and 4",
+  "promoted_to": "internal/gateway/oauth_test.go TestOAuthRegisterLimitRace and internal/oauth/oauth_test.go TestGrantsPageOneClockRead"
+}

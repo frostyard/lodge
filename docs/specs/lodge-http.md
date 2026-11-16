@@ -125,6 +125,10 @@ On `LODGE`:
 | `/mcp/<id>` | `POST`, `GET`, `DELETE` | agent | `Bearer` MCP token | the app's `/mcp` |
 | `/device/<id>/<path>` | any | device | the app's own | the app's `/device/<path>` |
 | `/nats` | `GET` (WebSocket) | broker | the token in the `CONNECT` line | the event broker ([below](#the-broker)) |
+| `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/gateway/mcp` | `GET`, `HEAD` | OAuth | none | lodge's OAuth metadata ([below](#oauth-routes)) |
+| `/oauth/register`, `/oauth/token`, `/oauth/revoke` | `POST` | OAuth | none, or the client's grant | lodge's OAuth server |
+| `/oauth/authorize`, `/oauth/consent/<id>`, `/oauth/grants` | `GET`, `HEAD`; `POST` on `/oauth/consent/<id>` | consent | tailnet identity, an admin's login | the consent and grants pages |
+| `/oauth/grants/revoke` | `POST` | consent | tailnet identity, an admin's login | revokes a client or a principal |
 
 On `CONTENT`:
 
@@ -623,6 +627,72 @@ listener of its own.
   and logs no message. Its index is which client has which consumers, and
   it is rebuilt from the consumers' metadata at the next start.
 
+### OAuth routes
+
+lodge's OAuth server and its consent and grants pages
+([oauth.md](oauth.md),
+[ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
+`oauth` is a reserved app ID.
+
+**OAuth** routes (`/.well-known/oauth-…`, `/oauth/register`,
+`/oauth/token`, `/oauth/revoke`) are for MCP clients. The checks, in
+order:
+
+1. **Host:** `Host` is `LODGE` or `LODGE:443`, else 403.
+2. **Origin:** a request with an `Origin` header is 403.
+3. **Method:** `GET` or `HEAD` on the metadata, `POST` on the others,
+   else 405.
+4. **Peer:** identity checks a and b, else 403. Tags and allow-lists are
+   not consulted.
+
+lodge then answers itself, with JSON, `Cache-Control: no-store` and the
+[confined set](#device-routes) of device responses, without
+`Cross-Origin-Resource-Policy`. Errors past these checks are OAuth's JSON
+errors ([oauth.md](oauth.md)), not one line.
+
+**Consent** routes are the pages an admin uses. The checks, in order:
+
+1. **Host:** `Host` is `LODGE` or `LODGE:443`.
+2. **Origin:** on a `GET` or `HEAD`, an `Origin` header, when present, is
+   exactly `https://LODGE`; on a `POST`, it is present and exactly that.
+3. **Fetch metadata:** on a `GET` or `HEAD`, `Sec-Fetch-Site`, when
+   present, is `same-origin` or `none`, except that a top-level navigation
+   (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) passes from any
+   site, as on a shell page. On a `POST`, `Sec-Fetch-Site` is present and
+   `same-origin`.
+4. **Method:** as the route table says, else 405.
+5. **Identity:** every [identity check](#identity), a to e.
+6. **Admin:** the login is on the admin list, else `login LOGIN is not an
+   admin: lodgectl allow admin LOGIN`.
+
+A failure is 403 unless it says otherwise, with one line. Then a `POST` to
+`/oauth/consent/<id>` needs that request's CSRF token and its hash
+([oauth.md](oauth.md#the-consent-page)), and a `POST` to
+`/oauth/grants/revoke` needs the grants page's CSRF token, which covers the
+admin's login and a time ([oauth.md](oauth.md#the-grants-page)). The
+status of each refusal is in oauth.md.
+
+Every consent response, errors included, carries:
+
+| Header | Value |
+| --- | --- |
+| `Content-Security-Policy` | `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'[ REDIRECT]; frame-ancestors 'none'; base-uri 'none'` |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `same-origin` |
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Cross-Origin-Resource-Policy` | `same-origin` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
+| `Cache-Control` | `no-store` |
+
+`Referrer-Policy` is `same-origin`, not `no-referrer`, because a browser
+sends `Origin: null` with a page's `POST` under `no-referrer`, and the
+`POST` needs lodge's origin. No referrer leaves for another origin.
+
+`REDIRECT` is the origin of a sign-in's redirect URI, on that request's
+consent page only, because a browser checks `form-action` against the
+redirect that follows the form.
+
 ### Device routes
 
 `/device/<id>/<path>`, any method, WebSocket upgrades included:
@@ -681,6 +751,7 @@ For every kind, before a request goes to an app's socket:
 | MCP token | `lgm_` + 43 base64url characters (32 random bytes from `crypto/rand`) | SHA-256, hex, with its name, app, scope, creation, last use and revocation; the agent user it is bound to, or none |
 | allowed login | a tailnet login, 1 to 256 bytes of UTF-8 without control characters | as given, with when it was added |
 | allowed node | a StableNodeID | the ID, the node's name when it was allowed, and when |
+| admin | a tailnet login, as an allowed login | as given, with when it was added |
 
 - A token's name is 1 to 64 characters from `[A-Za-z0-9@._-]`, unique
   among live tokens. A revoked token's row stays for the log, and its name
@@ -701,7 +772,9 @@ For every kind, before a request goes to an app's socket:
 `/run/lodge/control.sock` (owner `lodge`, 0600) serves JSON-RPC 2.0, one
 message per line. It accepts a connection only from uid 0 or lodge's own
 uid, so `lodgectl` runs as root (`sudo lodgectl …`). It is the only place
-that issues credentials. lodge serves it from its start, before its nodes have
+that issues `lgm_` tokens, allows a login or a node, or makes an admin;
+OAuth tokens come from an admin's approval on the consent page
+([OAuth routes](#oauth-routes)). lodge serves it from its start, before its nodes have
 joined the tailnet, so a first start without an auth key can be checked
 and allowed while the nodes wait for their login.
 
@@ -716,6 +789,9 @@ and allowed while the nodes wait for their login.
 | `lodgectl nodes` | `lodge.nodes` | the allowed nodes |
 | `lodgectl allow node NODE` | `lodge.allowNode` | adds one; `conflict` if listed; `notFound` or `invalidParams` for a name that matches no peer or several |
 | `lodgectl disallow node NODE` | `lodge.disallowNode` | removes it and closes its sessions |
+| `lodgectl admins` | `lodge.admins` | the admin logins |
+| `lodgectl allow admin LOGIN` | `lodge.allowAdmin` | adds one; `conflict` if listed; `invalidParams` for a login that breaks an allowed login's form |
+| `lodgectl disallow admin LOGIN` | `lodge.disallowAdmin` | removes it; `notFound` if absent |
 | `lodgectl tokens` | `lodge.tokens` | the tokens: name, app, scope, creation, last use, revocation; the agent user |
 | `lodgectl token issue NAME --app ID --scope SCOPE [--agent USER]` | `lodge.issueToken` | prints the token alone on stdout, and on stderr how to add it to Claude Code; `conflict` for a live name, `notFound` for an app without MCP. `--agent` binds it to the agent socket and that user, and `invalidParams` answers a user the configuration does not list; the hint on stderr then names the socket |
 | `lodgectl token revoke NAME` | `lodge.revokeToken` | revokes it and closes its streams; `notFound` if absent |
@@ -734,14 +810,23 @@ repository.
 - lodge serves nothing on a non-loopback address except through its two
   tailnet nodes, and nothing through Funnel.
 - No browser route writes, and no request to one reads identity from
-  anything but WhoIs.
+  anything but WhoIs. The one exception is the consent routes, under every
+  [consent check](#oauth-routes)
+  ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)):
+  `/oauth/authorize` records a pending request, which grants nothing; a
+  decision, a `POST` to `/oauth/consent/<id>`, carries that request's CSRF
+  token and hash; a revocation, a `POST` to `/oauth/grants/revoke`, carries
+  the grants page's CSRF token. They still read identity from WhoIs alone,
+  and set no cookie.
 - Every browser and content check has a test that fails it. Each finding
   of lodge's security review, and of M4's review that lodge took over, has a
   test.
 - Forged `Lodge-*`, `Tailscale-*` and forwarding headers change nothing.
   A test sends each.
-- Issuing a token and allowing a login or a node happen only on the
-  control socket.
+- Issuing an `lgm_` token, allowing a login or a node, and making an admin
+  happen only on the control socket. An OAuth token is issued only after
+  an admin's approval on the consent page
+  ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md)).
 - Only the agents lodge's configuration names connect to the
   agent socket, and a token works only on the route it was issued for.
   Each has a test that fails it.
@@ -763,7 +848,7 @@ repository.
 
 ## References
 
-- Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed)
+- Rationale: [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and the consent routes), [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md), [ADR-0004](../adr/0004-lodge-stays-on-the-tailnet-and-joins-it-itself.md), [ADR-0005](../adr/0005-browsers-sign-in-with-their-tailnet-identity.md), [ADR-0006](../adr/0006-agents-reach-each-app-through-its-own-mcp-endpoint.md), [ADR-0007](../adr/0007-lodge-serves-every-apps-web-build-from-disk.md), [ADR-0008](../adr/0008-lodge-installs-as-one-home-screen-app.md), [ADR-0009](../adr/0009-apps-switch-in-frames-that-stay-loaded.md), [ADR-0010](../adr/0010-untrusted-bytes-come-from-a-second-node.md), [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (the rail's `badge`, Proposed), [ADR-0022](../adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (the broker, Proposed)
 - Context: [design/overview.md](../design/overview.md)
-- Related: [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
+- Related: [oauth.md](oauth.md), [app-contract.md](app-contract.md), [lodge-client.md](lodge-client.md), [shell.md](shell.md); frostnotes' [lodge-app.md](https://github.com/frostyard/frostnotes/blob/main/docs/specs/lodge-app.md) (notes' side)
 - Built in: [roadmap — Phase 2](../plans/0001-roadmap.md#phase-2--lodge-v1-with-notes-as-its-only-app); the agent socket in [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket)

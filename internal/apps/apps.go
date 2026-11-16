@@ -42,6 +42,24 @@ type Manifest = manifest.Manifest
 // ValidID reports whether id may name an app.
 func ValidID(id string) bool { return manifest.ValidID(id) }
 
+// Hearth is an app's hearth manifest: what an agent may be granted for it,
+// for the consent page (docs/specs/oauth.md, The app's manifest).
+type Hearth struct {
+	// Capabilities are the app's capabilities, each <app>:<name>.
+	Capabilities []string `json:"capabilities"`
+	// Selectors are the app's selector names, such as folder.
+	Selectors []string `json:"selectors"`
+}
+
+// HearthFormat is the hearth manifest format major this lodge reads.
+const HearthFormat = 1
+
+// MaxHearth bounds a hearth manifest.
+const MaxHearth = 1 << 20
+
+// hearthName is the form of a capability's name and of a selector.
+var hearthName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
 // PlaceholderIcon marks the new-lodge-app scaffold's icon
 // (.agents/skills/new-lodge-app/template/web/public/icon.svg.tmpl). An app
 // that still ships it stays enabled, with a note and a warning in the log.
@@ -92,6 +110,9 @@ type App struct {
 	// /health answer gave, capped at MaxBadge; 0 when it has none or is not
 	// up (ADR-0020).
 	Badge int `json:"badge"`
+	// Hearth is the app's hearth manifest, when its manifest names one and
+	// lodge reads it (docs/specs/oauth.md, The app's manifest).
+	Hearth *Hearth `json:"hearth,omitzero"`
 	// uid is the manifest user's, which must serve the app's socket; -1
 	// when the user does not exist.
 	uid int
@@ -312,7 +333,13 @@ func (r *Registry) loadOne(id string) App {
 			a.uid = uid
 		}
 	}
+	// Its hearth manifest, when it names one: the capabilities and the
+	// selectors the consent page shows.
 	web := filepath.Join(dir, "web")
+	var hearthErr error
+	if m.Hearth != "" {
+		hearthErr = loadHearth(dir, m.Hearth, id, &a)
+	}
 	switch {
 	case a.uid < 0 && r.devUID < 0:
 		a.Reason = fmt.Sprintf("system user %s does not exist", m.User)
@@ -322,6 +349,8 @@ func (r *Registry) loadOne(id string) App {
 		a.Reason = "web/index.html is not a regular file"
 	case !servable.MatchString(m.Icon) || !regularFile(web, m.Icon):
 		a.Reason = fmt.Sprintf("its icon web/%s cannot be served", m.Icon)
+	case hearthErr != nil:
+		a.Reason = hearthErr.Error()
 	default:
 		a.Key = m.Key
 		a.State, a.Reason = Down, "not polled yet"
@@ -331,6 +360,61 @@ func (r *Registry) loadOne(id string) App {
 		}
 	}
 	return a
+}
+
+// loadsHearth reads and checks app id's hearth manifest, name, from dir into
+// a.Hearth: its format major, its app, its capabilities and its selectors
+// (docs/specs/oauth.md, The app's manifest). A manifest it cannot read or
+// use is an error, which becomes the app's reason.
+func loadHearth(dir, name, id string, a *App) error {
+	p := filepath.Join(dir, name)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return fmt.Errorf("its hearth manifest %s: %w", name, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("its hearth manifest %s is not a regular file", name)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return fmt.Errorf("its hearth manifest %s: %w", name, err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxHearth+1))
+	if err != nil {
+		return fmt.Errorf("its hearth manifest %s: %w", name, err)
+	}
+	if len(b) > MaxHearth {
+		return fmt.Errorf("its hearth manifest %s is larger than 1 MiB", name)
+	}
+	var m struct {
+		Hearth       int      `json:"hearth"`
+		App          string   `json:"app"`
+		Capabilities []string `json:"capabilities"`
+		Selectors    []string `json:"selectors"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("its hearth manifest %s: %w", name, err)
+	}
+	switch {
+	case m.Hearth != HearthFormat:
+		return fmt.Errorf("hearth manifest format %d is not one this lodge reads (%d)", m.Hearth, HearthFormat)
+	case m.App != id:
+		return fmt.Errorf("its hearth manifest %s names app %q, not %q", name, m.App, id)
+	}
+	for _, cap := range m.Capabilities {
+		prefix, cn, ok := strings.Cut(cap, ":")
+		if !ok || prefix != id || !hearthName.MatchString(cn) {
+			return fmt.Errorf("its hearth manifest %s has capability %q, not %s:<name>", name, cap, id)
+		}
+	}
+	for _, sel := range m.Selectors {
+		if !hearthName.MatchString(sel) {
+			return fmt.Errorf("its hearth manifest %s has selector %q, not a name", name, sel)
+		}
+	}
+	a.Hearth = &Hearth{Capabilities: m.Capabilities, Selectors: m.Selectors}
+	return nil
 }
 
 // placeholder reports whether the icon at rel under dir is the scaffold's.

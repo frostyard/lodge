@@ -57,6 +57,12 @@ func TestValidateRefusesEachConstraint(t *testing.T) {
 		"bad user":       func(m *Manifest) { m.User = "Frost" },
 		"two-letter key": func(m *Manifest) { m.Key = "nn" },
 		"uppercase key":  func(m *Manifest) { m.Key = "N" },
+		"oauth id":       func(m *Manifest) { m.ID = "oauth" },
+		"hearth app":     func(m *Manifest) { m.Hearth = "app.json" },
+		"hearth upper":   func(m *Manifest) { m.Hearth = "Hearth.json" },
+		"hearth dir":     func(m *Manifest) { m.Hearth = "a/hearth.json" },
+		"hearth suffix":  func(m *Manifest) { m.Hearth = "hearth.json5" },
+		"hearth long":    func(m *Manifest) { m.Hearth = strings.Repeat("h", 65) + ".json" },
 	} {
 		m := ok
 		edit(&m)
@@ -68,6 +74,31 @@ func TestValidateRefusesEachConstraint(t *testing.T) {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("Parse(%s): no error", bad)
 		}
+	}
+}
+
+func TestHearth(t *testing.T) {
+	m := Manifest{Contract: 1, ID: "notes", Name: "Notes", Icon: "icon.svg", Version: "0.5.0", User: "frostnotes"}
+	for _, name := range []string{"hearth.json", "marks.hearth.json", "a.json", "0.json", "a_b-c.d.json"} {
+		m.Hearth = name
+		if err := m.Validate(); err != nil {
+			t.Errorf("hearth %q: %v", name, err)
+		}
+		if !ValidHearthFile(name) {
+			t.Errorf("ValidHearthFile(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"app.json", "App.json", "", ".json", ".hidden.json", "a/b.json", "a b.json", "a.jsonx"} {
+		if ValidHearthFile(name) {
+			t.Errorf("ValidHearthFile(%q) = true", name)
+		}
+	}
+	if ValidID("oauth") || ValidHearthFile("app.json") {
+		t.Error("oauth is an app ID, or app.json a hearth manifest")
+	}
+	got, err := Parse([]byte(`{"contract":1,"id":"notes","name":"Notes","icon":"icon.svg","version":"1","user":"frostnotes","hearth":"hearth.json","other":2}`))
+	if err != nil || got.Hearth != "hearth.json" {
+		t.Errorf("Parse with hearth = %+v, %v", got, err)
 	}
 }
 

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/oauth",
+  "correction": "A reused token family must be revoked in one transaction: in the transaction that detects a concurrent reuse, or in a transaction of its own before a used code is reported, so that no token of the family can be issued between the writes and no in-memory state can be lost or raced. A check that guards an insert belongs in the insert statement.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) re-reviews 2 and 3 of heads 9f0590a and 77214f5, findings R1.1, R2.1, R3.1 and the B3.1 guard",
+  "promoted_to": "internal/oauth/oauth_test.go TestUsedCodeRevokesItsFamilyFirst, TestReuseRevokesInTheTransaction and TestRequestAccessLimitRace; internal/gateway/oauth_test.go TestOAuthCodeSingleUse, TestOAuthRefreshSingleUse, TestOAuthRequestRevokedDuringCreation, TestOAuthGrantHookAfterCommit and TestOAuthRevokePrincipalIsAtomic"
+}

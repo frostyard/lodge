@@ -31,6 +31,7 @@ import (
 	"github.com/frostyard/lodge/internal/control"
 	"github.com/frostyard/lodge/internal/gateway"
 	"github.com/frostyard/lodge/internal/inference"
+	"github.com/frostyard/lodge/internal/oauth"
 	"github.com/frostyard/lodge/internal/sessions"
 	"github.com/frostyard/lodge/internal/store"
 	"github.com/frostyard/lodge/internal/tailnet"
@@ -173,6 +174,19 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	al := allow.New(db, nil)
 	tk := tokens.New(db, nil)
 
+	// lodge's origin, which changes once the nodes have joined the tailnet:
+	// the gateway, the MCP hint and the OAuth issuer all read it.
+	var base atomic.Value
+	base.Store(names.LodgeOrigin)
+
+	// lodge's OAuth server, its consent page and its grants page
+	// (docs/specs/oauth.md).
+	oauthSrv, err := oauth.New(ctx, oauth.Options{DB: db, Apps: reg,
+		Issuer: func() string { return base.Load().(string) }, Log: log.With("part", "oauth")})
+	if err != nil {
+		return err
+	}
+
 	// The inference layer (docs/specs/inference.md). Under --root every app
 	// runs as the developer, whose uid then names its app in Lodge-App.
 	devUID := -1
@@ -241,17 +255,16 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	// The gateway exists before the nodes join, for the agent socket, which
 	// names no node; the nodes' listeners start, and its names are set,
 	// once they have joined.
-	gcfg := gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss, Log: log}
+	gcfg := gateway.Config{Names: names, Root: o.root, Apps: reg, Allow: al, Tokens: tk, Sessions: ss,
+		OAuth: oauthSrv, Log: log}
 	if br != nil {
 		gcfg.Broker = br
 	}
 	g := gateway.New(gcfg)
-	var mcpBase atomic.Value
-	mcpBase.Store(names.LodgeOrigin)
 	deps := control.Deps{
 		Allow: al, Tokens: tk, Sessions: ss, Apps: reg, Reload: reload, Log: log, Inference: inf, Agents: ag,
 		EndToken: g.EndToken,
-		MCPURL:   func(id string) string { return mcpBase.Load().(string) + "/mcp/" + id },
+		MCPURL:   func(id string) string { return base.Load().(string) + "/mcp/" + id },
 		Nodes: func(ctx context.Context) []control.Node {
 			var out []control.Node
 			for _, n := range []*tailnet.Node{lodgeNode, contentNode} {
@@ -293,6 +306,7 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 	}()
 	wg.Go(func() { reg.Run(ctx) })
 	wg.Go(func() { g.Run(ctx) })
+	wg.Go(func() { oauthSrv.Run(ctx) })
 	wg.Go(func() {
 		if err := control.New(deps).Serve(ctx, ctlLn); err != nil {
 			errs <- err
@@ -391,7 +405,7 @@ func serve(ctx context.Context, o options, log *slog.Logger) error {
 		}
 		names = gateway.TailnetNames(lodgeNode.DNSName(), contentNode.DNSName())
 		g.SetNames(names)
-		mcpBase.Store(names.LodgeOrigin)
+		base.Store(names.LodgeOrigin)
 	}
 
 	type listener struct {

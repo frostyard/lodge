@@ -1,6 +1,7 @@
 // Package allow keeps the allowed logins and nodes (docs/specs/lodge-http.md,
-// Identity, checks d and e). The gateway reads them on every request, so a
-// change made through the control socket applies to the next one.
+// Identity, checks d and e), and the admin logins that decide a consent
+// request (docs/specs/oauth.md). The gateway reads them on every request, so
+// a change made through the control socket applies to the next one.
 package allow
 
 import (
@@ -27,6 +28,12 @@ var (
 
 // Login is one allowed login.
 type Login struct {
+	Login string    `json:"login"`
+	Added time.Time `json:"added"`
+}
+
+// Admin is one admin login.
+type Admin struct {
 	Login string    `json:"login"`
 	Added time.Time `json:"added"`
 }
@@ -70,6 +77,45 @@ var nodeIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // ValidNodeID reports whether id has a StableNodeID's form.
 func ValidNodeID(id string) bool { return nodeIDRE.MatchString(id) }
+
+// AdminAllowed reports whether login may decide a consent request, byte for
+// byte.
+func (l *Lists) AdminAllowed(ctx context.Context, login string) (bool, error) {
+	return l.exists(ctx, `SELECT 1 FROM admins WHERE login = ?`, login)
+}
+
+// AllowAdmin adds login to the admin list.
+func (l *Lists) AllowAdmin(ctx context.Context, login string) error {
+	if !ValidLogin(login) {
+		return fmt.Errorf("login %q: %w", login, ErrInvalid)
+	}
+	return l.insert(ctx, `INSERT INTO admins (login, added_at) VALUES (?, ?)`, login, l.stamp())
+}
+
+// DisallowAdmin removes login from the admin list.
+func (l *Lists) DisallowAdmin(ctx context.Context, login string) error {
+	return l.delete(ctx, `DELETE FROM admins WHERE login = ?`, login)
+}
+
+// Admins returns the admin logins, sorted.
+func (l *Lists) Admins(ctx context.Context) ([]Admin, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT login, added_at FROM admins ORDER BY login`)
+	if err != nil {
+		return nil, fmt.Errorf("read the admin list: %w", err)
+	}
+	defer rows.Close()
+	out := []Admin{}
+	for rows.Next() {
+		var x Admin
+		var added string
+		if err := rows.Scan(&x.Login, &added); err != nil {
+			return nil, err
+		}
+		x.Added = parseTime(added)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
 
 // LoginAllowed reports whether login is on the list, byte for byte.
 func (l *Lists) LoginAllowed(ctx context.Context, login string) (bool, error) {

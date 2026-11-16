@@ -27,6 +27,9 @@ lodgectl [--root DIR] [--json] COMMAND
 | `allow node NODE` | allows a device: its ID, or a name that matches exactly 1 peer |
 | `disallow login LOGIN` | removes a login and closes its sessions |
 | `disallow node NODE` | removes a device and closes its sessions |
+| `admins` | lists the admins, the logins that approve on the consent page |
+| `allow admin LOGIN` | makes a login an admin |
+| `disallow admin LOGIN` | removes an admin |
 | `tokens` | lists the MCP tokens, never their secrets |
 | `token issue NAME --app ID --scope SCOPE [--agent USER]` | prints a new token on stdout, once; with `--agent`, the token works only on the agent socket, from `USER` |
 | `token revoke NAME` | revokes a token and closes its streams |
