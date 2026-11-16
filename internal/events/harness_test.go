@@ -288,9 +288,12 @@ type fakeOAuth struct {
 	armed   bool
 	read    chan struct{}
 	release chan struct{}
-	// failing and grantErr make the next grant reads fail.
-	failing  int
-	grantErr error
+	// failing and grantErr make the next grant reads fail, and lookups the
+	// next client reads.
+	failing   int
+	grantErr  error
+	lookups   int
+	lookupErr error
 }
 
 func newFakeOAuth() *fakeOAuth {
@@ -396,6 +399,13 @@ func (f *fakeOAuth) blockNextGrant() (read, release chan struct{}) {
 	return read, release
 }
 
+// failClients makes the next n client reads fail with err.
+func (f *fakeOAuth) failClients(n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookups, f.lookupErr = n, err
+}
+
 // failGrants makes the next n grant reads fail with err.
 func (f *fakeOAuth) failGrants(n int, err error) {
 	f.mu.Lock()
@@ -406,6 +416,10 @@ func (f *fakeOAuth) failGrants(n int, err error) {
 func (f *fakeOAuth) Client(_ context.Context, id string) (oauth.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.lookups > 0 {
+		f.lookups--
+		return oauth.Client{}, f.lookupErr
+	}
 	c, ok := f.clients[id]
 	if !ok || !c.Revoked.IsZero() {
 		return oauth.Client{}, oauth.ErrNotFound

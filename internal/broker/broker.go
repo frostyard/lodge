@@ -487,6 +487,13 @@ type Spec struct {
 	// Topic is the requested prefix of the subjects it takes, whose first
 	// token is App.
 	Topic string
+	// Inactive makes the consumer without the callback's filters: it takes
+	// its resync subject alone, and delivers nothing until the caller
+	// activates it with Refilter. A caller that reads a grant outside the
+	// broker's lock uses it, so that the subscription is registered before
+	// its filters are read: a grant change that runs after that read then
+	// finds it.
+	Inactive bool
 }
 
 // Subscribe gives client's subscription sub the messages of app that its
@@ -503,9 +510,11 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 // that its filters take: 1 durable pull consumer, and one-time permissions
 // that name it. filters runs inside the client's lifecycle lock, after the
 // one-app check and before any consumer is made: its error, or an empty
-// answer, stops the call there. It answers the consumer's filters: those the
-// callback gave, and the subscription's own resync subject. The client's
-// connections close, so that it reconnects with them.
+// answer, stops the call there, and so does a filter list that the broker
+// cannot install. It answers the consumer's filters: those the callback gave,
+// and the subscription's own resync subject, or that subject alone for an
+// inactive subscription. The client's connections close, so that it
+// reconnects with them.
 func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx context.Context) ([]string, error)) ([]string, error) {
 	client, sub, app := spec.Client, spec.Sub, spec.App
 	if err := validateName("client", client); err != nil {
@@ -565,9 +574,15 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 	}
 	// A consumer's filters are never empty, which would mean every subject:
 	// its resync subject is always one of them, and the count includes it.
-	fs = append(fs, ResyncSubject(app, client+"-"+sub))
+	resync := ResyncSubject(app, client+"-"+sub)
+	fs = append(fs, resync)
 	if err := validateCount(fs); err != nil {
 		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	}
+	if spec.Inactive {
+		// The callback's answer is the precheck; the filters go in when the
+		// caller activates the subscription, which reads the grant again.
+		fs = []string{resync}
 	}
 	// A revoke that could not delete a consumer kept it for this client,
 	// and it stays first: a kept ref of this subscription's app would

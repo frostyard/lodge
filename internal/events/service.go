@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/frostyard/lodge/internal/apps"
@@ -102,14 +101,10 @@ type Service struct {
 	o   Options
 	log *slog.Logger
 
-	// mu guards gens.
-	mu sync.Mutex
-	// gens count the changes of each (principal, app) grant. A change
-	// increments it before it reads the subscriptions, so that a subscription
-	// that read the grant before the change sees it and refilters its
-	// consumer: a change that runs while a subscription is made enumerates
-	// the subscriptions before that 1 is registered.
-	gens map[string]uint64
+	// beforeActivate, when set, runs between a new subscription's
+	// registration and the read that gives it its filters. A test sets it to
+	// look at the subscription in that window.
+	beforeActivate func()
 }
 
 // Subscription is 1 event subscription of a client.
@@ -134,21 +129,7 @@ func New(o Options) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{o: o, log: log, gens: map[string]uint64{}}
-}
-
-// generation is the current generation of principal's grant for app.
-func (s *Service) generation(principal, app string) uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.gens[principal+"\x00"+app]
-}
-
-// nextGeneration records a change of principal's grant for app.
-func (s *Service) nextGeneration(principal, app string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.gens[principal+"\x00"+app]++
+	return &Service{o: o, log: log}
 }
 
 // now is the service's clock.
@@ -194,13 +175,13 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	if !ok {
 		return Subscription{}, fmt.Errorf("%q is not an OAuth client's id: %w", access.Client, ErrNotFound)
 	}
-	// gen is the grant's generation when the filters were read below.
-	var gen uint64
-	_, err = s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic},
+	// The subscription is made inactive, and its filters are installed after
+	// it is registered: a grant that changes between the 2 is read again
+	// here, and a change that runs later finds the subscription and refilters
+	// it through the same lock.
+	_, err = s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic,
+		Inactive: true},
 		func(ctx context.Context) ([]string, error) {
-			// The generation is read before the grant: a change that runs
-			// while this subscription is made is seen after it.
-			gen = s.generation(access.Principal, app)
 			filters, err := s.readFilters(ctx, access.Principal, app, topic)
 			if err != nil {
 				return nil, err
@@ -220,18 +201,37 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 		return Subscription{}, err
 	}
 	out := Subscription{Name: sub, App: app, Topic: topic, Stream: "app_" + app, Consumer: client + "-" + sub}
-	// A grant change that ran while this subscription was made read the
-	// subscriptions before this one was registered, so it did not refilter
-	// it: the consumer is refiltered here, from the grant as it is now.
-	if s.generation(access.Principal, app) != gen {
-		if err := s.o.Broker.Refilter(ctx, client, sub, s.refilter(access.Principal)); err != nil {
+	if s.beforeActivate != nil {
+		s.beforeActivate()
+	}
+	// The subscription is registered, so this read is the last word on its
+	// filters: a grant change that runs after it refilters the consumer
+	// through the same lifecycle lock.
+	if err := s.o.Broker.Refilter(ctx, client, sub, s.refilter(access.Principal)); err != nil {
+		// It delivers nothing yet, so a subscription that cannot be
+		// activated goes with it: its consumer, and then its client when
+		// even that fails.
+		if uerr := s.unsubscribe(ctx, client, sub); uerr != nil {
+			s.log.Warn("unsubscribe a subscription that could not be activated", "client", client, "sub", sub,
+				"err", uerr)
 			s.revoke(client)
-			return Subscription{}, fmt.Errorf("subscribe %s to %s: the grant changed while the subscription was made, so its client is revoked: %w",
-				sub, app, err)
 		}
+		if errors.Is(err, broker.ErrTooManyFilters) {
+			return Subscription{}, fmt.Errorf("%w: the grant is too wide for 1 subscription, and a subscription takes at most %d filters; narrow the topic: %w",
+				ErrInvalid, broker.MaxFilters, err)
+		}
+		return Subscription{}, fmt.Errorf("subscribe %s to %s: its filters are not installed: %w", sub, app, err)
 	}
 	out.Filters = s.consumerFilters(ctx, out)
 	return out, nil
+}
+
+// unsubscribe deletes 1 subscription within its own budget, so that a failure
+// of the call that follows it does not take its time.
+func (s *Service) unsubscribe(ctx context.Context, client, sub string) error {
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
+	defer cancel()
+	return s.o.Broker.Unsubscribe(uctx, client, sub)
 }
 
 // consumerFilters answers the filters that a subscription's consumer has: the
@@ -291,10 +291,6 @@ func (s *Service) List(access oauth.Access) []Subscription {
 // refilter that fails revokes the client, so that its delivery cannot outlive
 // its grant.
 func (s *Service) GrantChanged(principal, app string) {
-	// The generation goes first: a subscription that read the grant before
-	// this change, and registers after it, sees the new generation and
-	// refilters itself.
-	s.nextGeneration(principal, app)
 	for _, sub := range s.o.Broker.Subscriptions() {
 		if sub.App != app {
 			continue
@@ -302,15 +298,26 @@ func (s *Service) GrantChanged(principal, app string) {
 		// Each subscription has its own budget: 1 that hangs does not take
 		// the others' time.
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
-		err := error(nil)
-		if s.belongsTo(ctx, sub.Client, principal) {
-			err = s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(principal))
-		}
+		err := s.refilterOne(ctx, sub, principal)
 		cancel()
 		if err != nil {
 			s.failClosed(sub.Client, sub.Sub, err)
 		}
 	}
+}
+
+// refilterOne refilters 1 subscription when it belongs to principal. A
+// failure to name its client is an error: a subscription that may be
+// principal's is never left with the filters it had.
+func (s *Service) refilterOne(ctx context.Context, sub broker.Subscription, principal string) error {
+	mine, err := s.belongsTo(ctx, sub.Client, principal)
+	if err != nil {
+		return err
+	}
+	if !mine {
+		return nil
+	}
+	return s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(principal))
 }
 
 // failClosed answers a failed refilter. A subscription that is gone, a client
@@ -341,18 +348,19 @@ func (s *Service) revoke(client string) {
 	}
 }
 
-// belongsTo reports whether the client's OAuth client is bound to principal.
-func (s *Service) belongsTo(ctx context.Context, client, principal string) bool {
+// belongsTo reports whether the client's OAuth client is bound to principal,
+// and why it cannot be read when it cannot be: a subscription whose client
+// cannot be named is never left with the filters it had.
+func (s *Service) belongsTo(ctx context.Context, client, principal string) (bool, error) {
 	id, ok := ClientID(client)
 	if !ok {
-		return false
+		return false, fmt.Errorf("client %q is not an OAuth client's id: %w", client, ErrNotFound)
 	}
 	c, err := s.o.OAuth.Client(ctx, id)
 	if err != nil {
-		s.log.Warn("read a subscription's OAuth client", "client", client, "err", err)
-		return false
+		return false, fmt.Errorf("read the OAuth client of %s: %w", client, err)
 	}
-	return c.Principal == principal
+	return c.Principal == principal, nil
 }
 
 // refilter is the callback of a refilter: the principal's current grant of

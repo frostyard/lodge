@@ -64,9 +64,13 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 	}
 	// fail stops the consumer's delivery and answers the refilter's error: a
 	// refilter that cannot install the grant's filters must never leave the
-	// events that the grant no longer reads.
+	// events that the grant no longer reads. The write that stops it must not
+	// outlive a revoke either: the check after it is the success path's.
 	fail := func(err error) error {
 		b.stopDelivery(ctx, info.Config, app, ref)
+		if rerr := b.deleteAfterRevoke(ctx, client, epoch, ref); rerr != nil {
+			return fmt.Errorf("refilter %s/%s: %w", client, sub, rerr)
+		}
 		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
 	fs, err := filters(ctx, app, topic)
@@ -98,22 +102,33 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 	if _, err := b.js.CreateOrUpdateConsumer(ctx, ref.stream, cfg); err != nil {
 		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
-	// A revoke that ran meanwhile took the client and deleted its consumers:
-	// this one is nobody's, and it goes again.
+	if err := b.deleteAfterRevoke(ctx, client, epoch, ref); err != nil {
+		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+	}
+	return tooMany
+}
+
+// errRefilterRevoked is a refilter that a revoke of its client overtook.
+var errRefilterRevoked = errors.New("the client was revoked during the refilter")
+
+// deleteAfterRevoke deletes ref when a revoke of client has run since epoch:
+// the consumer a refilter just wrote is then nobody's, and a revoke that
+// already deleted it must not leave the copy this call made.
+func (b *Broker) deleteAfterRevoke(ctx context.Context, client string, epoch uint64, ref consumerRef) error {
 	b.mu.Lock()
 	moved := b.epochs[client] != epoch
 	b.mu.Unlock()
-	if moved {
-		dctx, cancel := context.WithTimeout(ctx, revokeTimeout)
-		defer cancel()
-		kept, err := b.deleteRefs(dctx, []consumerRef{ref})
-		b.keepRefs(client, kept)
-		if err != nil {
-			return fmt.Errorf("refilter %s/%s: the client was revoked during the refilter, and its consumer is kept: %w", client, sub, err)
-		}
-		return fmt.Errorf("refilter %s/%s: the client was revoked during the refilter", client, sub)
+	if !moved {
+		return nil
 	}
-	return tooMany
+	dctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
+	kept, err := b.deleteRefs(dctx, []consumerRef{ref})
+	b.keepRefs(client, kept)
+	if err != nil {
+		return fmt.Errorf("%w, and its consumer is kept: %w", errRefilterRevoked, err)
+	}
+	return errRefilterRevoked
 }
 
 // stopDelivery sets a consumer's filters to its resync subject alone, so that

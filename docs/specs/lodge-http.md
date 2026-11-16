@@ -867,19 +867,20 @@ consumer itself.
   app's is 409, and so is one during a revoke of the client. An unknown
   `<sub>` on `DELETE` is 404. A broker that fails is 503.
 - **lodge reads the grant inside the client's lock,** so a subscription
-  and a grant change of the same client run 1 after the other. A grant
-  change counts a generation for its principal and app before it looks
-  for subscriptions; a subscription that read the grant before that count
-  moved computes its filters again once it is registered, so it cannot
-  keep a grant the change narrowed.
+  and a grant change of the same client run 1 after the other. A new
+  consumer starts with its resync subject alone and is registered; then
+  lodge reads the grant again and gives the consumer its filters. A grant
+  change that comes after that read finds the subscription and filters it
+  again, so a subscription cannot keep a grant the change narrowed. When
+  that second read fails, the subscription is deleted.
 - **A grant change refilters.** When a principal's grant for an app
   changes, lodge computes each of its clients' subscriptions on that app
   again and updates the consumer in place. The events not yet delivered
   are filtered again; a grant that gives nothing leaves the consumer only
   its resync subject. An event that was delivered and not acknowledged may
   come again. **A refilter that fails fails closed:** when lodge cannot
-  read the grant or update the consumer, it revokes that client in the
-  broker, which closes its connections and deletes its consumers; the
+  read the grant or the client, or update the consumer, it revokes that
+  client in the broker, which closes its connections and deletes its consumers; the
   client subscribes again.
 - **A revoke ends delivery.** Revoking a client or a principal revokes
   each of its clients in the broker: connections first, then consumers,

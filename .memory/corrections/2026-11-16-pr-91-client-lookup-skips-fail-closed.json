@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events",
+  "correction": "Answering a failed OAuth client lookup with false, as a grant-change hook did, skips the subscription and leaves the filters the grant no longer gives: a client that cannot be read is unknown, not another principal's. belongsTo answers an error with its answer, and an error in a hook goes to the fail-closed path, which revokes the broker client.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 1 at 6ab694f (openai/gpt-6.1-sol): blocking finding 2, a client lookup failure skips fail-closed",
+  "promoted_to": "internal/events/acceptance_test.go TestAClientLookupFailureRevokesItsClient"
+}

@@ -412,3 +412,49 @@ func TestRefilterStopsDeliveryWhenTheGrantFails(t *testing.T) {
 		t.Error("a refilter whose callback failed closed the client's connection")
 	}
 }
+
+// A refilter that a revoke overtakes leaves no consumer: the delivery it stops
+// is not written after the revoke deleted the consumer.
+func TestAFailedRefilterAfterARevokeLeavesNoConsumer(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.a", "marks.b"}))
+
+	// The refilter stops in its callback, which holds the client's lifecycle
+	// lock, and the revoke comes while it is there: a revoke never waits for
+	// a subscription.
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var released sync.Once
+	release := func() { released.Do(func() { close(proceed) }) }
+	t.Cleanup(release)
+	failure := errors.New("the store did not answer")
+	done := make(chan error, 1)
+	go func() {
+		done <- h.b.Refilter(t.Context(), "chani", "s1", func(context.Context, string, string) ([]string, error) {
+			close(entered)
+			<-proceed
+			return nil, failure
+		})
+	}()
+	<-entered
+	revoked := make(chan error, 1)
+	go func() { revoked <- h.b.Revoke(t.Context(), "chani") }()
+	select {
+	case err := <-revoked:
+		noErr(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the revoke did not return while a refilter was under way")
+	}
+	release()
+	if err := <-done; !errors.Is(err, errRefilterRevoked) {
+		t.Fatalf("the refilter answered %v, want the revoke's error", err)
+	}
+	// The write that stopped the delivery is nobody's: the revoke took it.
+	wait(t, func() ([]string, error) {
+		names := h.names(t, "app_marks")
+		if len(names) > 0 {
+			return nil, errNotYet
+		}
+		return names, nil
+	})
+}

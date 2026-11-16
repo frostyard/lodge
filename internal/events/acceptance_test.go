@@ -649,3 +649,116 @@ func TestUnsubscribeRefusesABadName(t *testing.T) {
 		t.Errorf("Unsubscribe of a subscription that is not there answered %v, want ErrNotFound", err)
 	}
 }
+
+// TestANewSubscriptionDeliversNothingBeforeItsGrantIsRead checks the window a
+// new subscription opens: it is registered before its grant is read, and it
+// delivers nothing until then, so a grant that narrows in between cannot be
+// overtaken by the events of the wider 1.
+func TestANewSubscriptionDeliversNothingBeforeItsGrantIsRead(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	// The grant is wide when the subscription's precheck reads it, and
+	// narrow when the read that installs the filters runs.
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	client, _, ok := h.svc.Tokens(t.Context(), token)
+	if !ok {
+		t.Fatal("the service refuses the token")
+	}
+	hooks := 0
+	events.SetBeforeActivate(h.svc, func() {
+		hooks++
+		// The grant narrows, and an event of another folder is published
+		// while the consumer waits for its filters.
+		h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+		h.publish(t, "marks.bookmark.created.folder.f1")
+		state, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1")
+		if err != nil {
+			t.Errorf("the consumer before its activation: %v", err)
+			return
+		}
+		want := []string{"lodge.marks.resync." + client + "-s1"}
+		if !slices.Equal(state.Filters, want) {
+			t.Errorf("the consumer's filters before its activation are %q, want %q", state.Filters, want)
+		}
+		nc := h.subscribed(t, token)
+		if msgs := pull(t, nc, "app_marks", client+"-s1", 10, 300*time.Millisecond); len(msgs) != 0 {
+			t.Errorf("the pull before the activation answered %d messages, want none", len(msgs))
+		}
+	})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if hooks != 1 {
+		t.Fatalf("the hook ran %d times, want 1", hooks)
+	}
+
+	// The subscription is active with the grant as it is now.
+	state, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(state.Filters, "marks.bookmark.created.folder.f3") ||
+		slices.Contains(state.Filters, "marks.bookmark.created.folder.>") {
+		t.Fatalf("the consumer's filters are %q, want f3's alone", state.Filters)
+	}
+	// An event of the grant arrives, and the 1 of another folder never does.
+	nc := h.subscribed(t, token)
+	h.publish(t, "marks.bookmark.created.folder.f3")
+	msgs := pull(t, nc, "app_marks", sub.Consumer, 10, 500*time.Millisecond)
+	if len(msgs) != 1 || !strings.HasSuffix(msgs[0].Subject, ".folder.f3") {
+		t.Fatalf("the pull answered %d messages, want the f3 event alone", len(msgs))
+	}
+}
+
+// TestAClientLookupFailureRevokesItsClient checks that a refilter hook which
+// cannot name a subscription's client revokes it, instead of leaving the
+// filters the grant no longer gives.
+func TestAClientLookupFailureRevokesItsClient(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	closed := make(chan struct{})
+	nc, err := h.connect(t, token)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	nc.SetClosedHandler(func(*nats.Conn) { close(closed) })
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The grant narrows, and the client cannot be read: the hook revokes it.
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	h.auth.failClients(1, errors.New("the store did not answer"))
+	h.svc.GrantChanged("chani", marksApp)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client's connection is still open after its client could not be read")
+	}
+	wait(t, func() (bool, error) {
+		if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err == nil {
+			return false, errNotYet
+		}
+		return true, nil
+	})
+
+	// It keeps no subscription, and an event outside the grant has no
+	// consumer to reach.
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	h.publish(t, "marks.bookmark.created.folder.f1")
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 0 {
+		t.Errorf("the broker keeps the subscriptions %+v", subs)
+	}
+	if subs := h.svc.List(h.access(t, token)); len(subs) != 0 {
+		t.Errorf("the client lists the subscriptions %+v, want none", subs)
+	}
+}
