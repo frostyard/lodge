@@ -260,6 +260,10 @@ type Broker struct {
 	// subscription's one-app check has passed, and before its consumer is
 	// made.
 	afterOneAppCheck func()
+	// beforeActivate, when set, is a test's barrier: it runs once a new
+	// subscription is registered, and before its activation, inside the
+	// client's lifecycle lock.
+	beforeActivate func()
 	// accounts, exports and imports are what is registered, so that
 	// nothing is registered twice.
 	accounts map[string]*server.Account
@@ -487,15 +491,14 @@ type Spec struct {
 	// Topic is the requested prefix of the subjects it takes, whose first
 	// token is App.
 	Topic string
-	// Inactive makes a new subscription's consumer without the callback's
-	// filters: it takes its resync subject alone, and delivers nothing until
-	// the caller activates it with Refilter. A caller that reads a grant
-	// outside the broker's lock uses it, so that the subscription is
-	// registered before its filters are read: a grant change that runs after
-	// that read then finds it. It applies to a new subscription only: 1 that
-	// is registered already keeps the callback's filters, because its
-	// consumer may hold events that its grant allows it to read.
-	Inactive bool
+	// Activate installs a new subscription's filters after it is registered,
+	// still inside the client's lifecycle lock, and answers them. A caller
+	// whose filters come from a store outside the broker uses it, so that the
+	// subscription exists before its filters are read: a change of them that
+	// runs after that read finds it. It runs for a new subscription only: 1
+	// that is registered already keeps the callback's filters, because its
+	// consumer may hold events that its filters let it read.
+	Activate func(ctx context.Context, app, topic string) ([]string, error)
 }
 
 // Subscribe gives client's subscription sub the messages of app that its
@@ -513,9 +516,11 @@ func (b *Broker) Subscribe(ctx context.Context, client, sub, app string, filters
 // that name it. filters runs inside the client's lifecycle lock, after the
 // one-app check and before any consumer is made: its error, or an empty
 // answer, stops the call there, and so does a filter list that the broker
-// cannot install. It answers the consumer's filters: those the callback gave,
-// and the subscription's own resync subject, or that subject alone for an
-// inactive subscription. The client's connections close, so that it
+// cannot install. With spec.Activate, a new subscription's consumer is made
+// with its resync subject alone, and spec.Activate's filters are installed
+// after it is registered, still under the client's lifecycle lock; a failed
+// activation removes the subscription. It answers the filters the consumer
+// holds when it returns. The client's connections close, so that it
 // reconnects with them.
 func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx context.Context) ([]string, error)) ([]string, error) {
 	client, sub, app := spec.Client, spec.Sub, spec.App
@@ -581,12 +586,12 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 	if err := validateCount(fs); err != nil {
 		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
 	}
-	if spec.Inactive && on == nil {
+	if spec.Activate != nil && on == nil {
 		// It is a new subscription: the callback's answer is the precheck,
-		// and the filters go in when the caller activates it, which reads the
-		// grant again. A subscription that is registered already keeps them
-		// now: its consumer may hold events that its grant lets it read, and
-		// a narrower filter in between would move it past them.
+		// and its filters go in below, after it is registered and still under
+		// this lock. A subscription that is registered already keeps them
+		// now: its consumer may hold events that its filters let it read, and
+		// a narrower 1 in between would move it past them.
 		fs = []string{resync}
 	}
 	// A revoke that could not delete a consumer kept it for this client,
@@ -638,8 +643,42 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 		}
 		return nil, fmt.Errorf("subscribe %s to %s: the client was revoked during the subscription", client, app)
 	}
+	// The filters go in here, still under the client's lifecycle lock: a
+	// request that deletes this subscription and puts another 1 in its place
+	// cannot slip between its registration and its activation, which would
+	// let this call clean up the replacement. A subscription that is
+	// registered already skipped that, above.
+	if spec.Activate != nil && on == nil {
+		if hook := b.beforeActivate; hook != nil {
+			hook()
+		}
+		installed, err := b.refilterLocked(ctx, client, sub, spec.Activate)
+		if err != nil {
+			return nil, b.cleanUpActivation(ctx, client, sub, err)
+		}
+		fs = installed
+	}
 	b.closeConns(identity{kind: kindClient, name: client}.key())
 	return fs, nil
+}
+
+// cleanUpActivation removes the subscription of an activation that failed, and
+// answers the activation's error. A subscription that is gone, a revoke under
+// way and a revoke that overtook the activation leave nothing to remove; a
+// cleanup that fails answers its error with ErrCleanup.
+func (b *Broker) cleanUpActivation(ctx context.Context, client, sub string, err error) error {
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrConflict), errors.Is(err, errRefilterRevoked):
+		return err
+	}
+	// The activation may have failed because its budget ran out: the cleanup
+	// has a budget of its own.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+	defer cancel()
+	if uerr := b.unsubscribeLocked(cctx, client, sub); uerr != nil && !errors.Is(uerr, ErrNotFound) {
+		return fmt.Errorf("%w: %w: %w", err, ErrCleanup, uerr)
+	}
+	return err
 }
 
 // Unsubscribe deletes client's subscription sub and its consumer, and

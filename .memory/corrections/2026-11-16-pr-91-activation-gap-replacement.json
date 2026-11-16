@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker",
+  "correction": "Registering a subscription and activating it must be 1 lifecycle operation, not 2: when the registration releases the lock and the activation takes it again, another request can delete the subscription and put a new 1 in its place, and the first request's activation then reads the replacement's consumer and its cleanup deletes the replacement. Broker.SubscribeWith takes Activate, installs a new subscription's consumer with its resync subject alone, registers it, and runs the activation and any cleanup under the same lock it has held since the start.",
+  "evidence": "frostyard/lodge#91 cross-review re-review 4 at 9f74d8f (openai/gpt-6.1-sol): blocking finding 1, activation outside the registration lock could delete a replacement",
+  "promoted_to": "internal/broker/subscribe_test.go TestNoGapBetweenRegistrationAndActivation; internal/broker/subscribe_test.go TestActivateCleansUpUnderOneLock; internal/events/acceptance_test.go TestAReplacementDuringActivationStays"
+}

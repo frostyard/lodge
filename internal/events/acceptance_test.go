@@ -4,18 +4,16 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
-
-	"github.com/frostyard/lodge/internal/apps"
 
 	"github.com/frostyard/lodge/internal/broker"
 	"github.com/frostyard/lodge/internal/events"
@@ -769,7 +767,8 @@ func TestAClientLookupFailureRevokesItsClient(t *testing.T) {
 
 // TestARePutKeepsTheBacklog checks that subscribing a registered subscription
 // again keeps the filters its consumer has: it may hold events that its grant
-// allows it to read, and an inactive consumer in between would pull past them.
+// allows it to read, and a consumer that starts with its resync subject alone
+// would pull past them.
 func TestARePutKeepsTheBacklog(t *testing.T) {
 	h := newHarness(t)
 	_, token := h.auth.newClient(t, "chani", "events")
@@ -781,31 +780,17 @@ func TestARePutKeepsTheBacklog(t *testing.T) {
 	for range 3 {
 		h.publish(t, "marks.bookmark.created.folder.f0")
 	}
-	// The same subscription is made again, with the same topic: in the window
-	// before its activation it keeps the filters that its grant gives.
-	client, _, ok := h.svc.Tokens(t.Context(), token)
-	if !ok {
-		t.Fatal("the service refuses the token")
-	}
-	hooks := 0
-	events.SetBeforeActivate(h.svc, func() {
-		hooks++
-		state, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1")
-		if err != nil {
-			t.Errorf("the consumer of a subscription made again: %v", err)
-			return
-		}
-		if want := []string{"marks.bookmark.created.folder", "marks.bookmark.created.folder.>"}; !slices.Contains(state.Filters, want[0]) ||
-			!slices.Contains(state.Filters, want[1]) {
-			t.Errorf("the consumer's filters are %q, want the grant's %q, not its resync subject alone",
-				state.Filters, want)
-		}
-	})
-	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err != nil {
+	// The same subscription is made again, with the same topic: it keeps the
+	// filters that its grant gives, and no activation runs for it.
+	again, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
 		t.Fatalf("Subscribe again: %v", err)
 	}
-	if hooks != 1 {
-		t.Fatalf("the hook ran %d times, want 1", hooks)
+	want := []string{"marks.bookmark.created.folder", "marks.bookmark.created.folder.>"}
+	for _, filter := range want {
+		if !slices.Contains(again.Filters, filter) {
+			t.Errorf("the subscription's filters are %q, want %q", again.Filters, want)
+		}
 	}
 
 	// The 3 events that the subscription was allowed to read all come.
@@ -817,7 +802,7 @@ func TestARePutKeepsTheBacklog(t *testing.T) {
 }
 
 // TestAnUnsubscribeDuringActivationKeepsTheOthers checks that a subscription
-// which is removed while it is activated leaves its client's other
+// that another request removes while it is activated leaves its client's other
 // subscriptions, and their delivery, alone: the client is not revoked.
 func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
 	h := newHarness(t)
@@ -827,25 +812,26 @@ func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe keep: %v", err)
 	}
-	hooks := 0
+	// The new subscription is asked to go while it is activated: the
+	// unsubscribe waits for the lock, and finds the subscription once the
+	// activation has installed its filters.
+	unsubscribed := make(chan error, 1)
+	var once sync.Once
 	events.SetBeforeActivate(h.svc, func() {
-		hooks++
-		// The new subscription goes while it is activated.
-		if err := h.svc.Unsubscribe(t.Context(), h.access(t, token), "new"); err != nil {
-			t.Errorf("Unsubscribe new: %v", err)
-		}
+		once.Do(func() {
+			go func() { unsubscribed <- h.svc.Unsubscribe(t.Context(), h.access(t, token), "new") }()
+		})
 	})
-	_, err = h.svc.Subscribe(t.Context(), h.access(t, token), "new", "marks.bookmark.created")
-	if hooks != 1 {
-		t.Fatalf("the hook ran %d times, want 1", hooks)
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "new", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe new: %v", err)
 	}
-	if !errors.Is(err, events.ErrNotFound) {
-		t.Fatalf("the PUT answered %v, want an error that wraps ErrNotFound", err)
+	if err := <-unsubscribed; err != nil {
+		t.Fatalf("Unsubscribe new: %v", err)
 	}
 
-	// The client keeps its other subscription and its consumer: it is not
-	// revoked. The PUT closed its connection, as every subscribe does, so a
-	// new 1 takes the pulled events of the subscription it kept.
+	// The subscription the other request removed is gone, and the client
+	// keeps its other subscription and its delivery.
 	client, _, ok := h.svc.Tokens(t.Context(), token)
 	if !ok {
 		t.Fatal("the service refuses the token")
@@ -853,6 +839,9 @@ func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
 	subs := h.b.ClientSubscriptions(client)
 	if len(subs) != 1 || subs[0].Sub != "keep" {
 		t.Errorf("the client's subscriptions are %+v, want keep alone", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err == nil {
+		t.Errorf("the removed subscription's consumer %s is still there", sub.Consumer)
 	}
 	if _, err := h.b.ConsumerState(t.Context(), "app_marks", keep.Consumer); err != nil {
 		t.Errorf("keep's consumer: %v", err)
@@ -863,88 +852,66 @@ func TestAnUnsubscribeDuringActivationKeepsTheOthers(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("the pull on the subscription the client kept answered %d messages, want 1", len(msgs))
 	}
-
 }
 
-// countingBroker is the harness's broker, with the calls that 1 activation
-// makes: a test reads them to see whether the service activates and cleans up
-// in 1 step.
-type countingBroker struct {
-	*broker.Broker
-	mu           sync.Mutex
-	activates    int
-	unsubscribes int
-}
-
-func (c *countingBroker) Activate(ctx context.Context, client, sub string,
-	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
-	c.mu.Lock()
-	c.activates++
-	c.mu.Unlock()
-	return c.Broker.Activate(ctx, client, sub, filters)
-}
-
-func (c *countingBroker) Unsubscribe(ctx context.Context, client, sub string) error {
-	c.mu.Lock()
-	c.unsubscribes++
-	c.mu.Unlock()
-	return c.Broker.Unsubscribe(ctx, client, sub)
-}
-
-// calls are the activation's counts.
-func (c *countingBroker) calls() (activates, unsubscribes int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.activates, c.unsubscribes
-}
-
-// TestAFailedActivationKeepsAReplacement checks that a subscription is
-// activated and cleaned up in 1 broker call: a cleanup of the service's own
-// could reach a subscription that another request put in its place, and its
-// replacement would go with it.
-func TestAFailedActivationKeepsAReplacement(t *testing.T) {
+// TestAReplacementDuringActivationStays checks that a subscription's
+// registration, its activation and the cleanup of a failed activation are 1
+// step: a request that deletes it and puts another 1 in its place during the
+// activation waits, and its replacement survives.
+func TestAReplacementDuringActivationStays(t *testing.T) {
 	h := newHarness(t)
 	// The app the replacement belongs to.
-	h.apps.enabled["notes"] = true
-	h.apps.hearth["notes"] = &apps.Hearth{Capabilities: []string{"notes:read"}, Selectors: []string{"group"},
-		Events: []apps.Event{{Type: "org.frostyard.notes.note.created", Message: "notes.v1.NoteCreated",
-			Topic: "notes.note.created.group", Selector: "group", ReadPermission: "notes:read"}}}
-	if err := h.b.SyncApps(t.Context(), []string{marksApp, "notes"}); err != nil {
-		t.Fatal(err)
-	}
-	counter := &countingBroker{Broker: h.b}
-	h.svc = events.New(events.Options{Broker: counter, OAuth: h.auth, Apps: h.apps,
-		Log: slog.New(slog.DiscardHandler)})
-
+	h.addApp(t, "notes")
 	_, token := h.auth.newClient(t, "chani", "events")
 	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
 	h.auth.grant("chani", "notes", []oauth.Item{{Cap: "notes:read"}})
-	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	baseActs, baseUnsubs := counter.calls()
-	// The subscription is made again, and this time its activation cannot
-	// read the grant.
-	var armed sync.Once
+
+	replaced := make(chan error, 1)
+	completedWhileActivated := false
+	// The replacement runs this hook too: a flag, and not a sync.Once, lets
+	// its call return at once, so that only the lifecycle lock can hold it.
+	var first atomic.Bool
 	events.SetBeforeActivate(h.svc, func() {
-		armed.Do(func() { h.auth.failGrants(1, errors.New("the store did not answer")) })
+		if !first.CompareAndSwap(false, true) {
+			return
+		}
+		func() {
+			// This subscription's own activation cannot read its grant.
+			h.auth.failGrantsForApp(marksApp, 1, errors.New("the store did not answer"))
+			// Another request replaces the subscription while it is
+			// activated: its delete and its new subscription both need the
+			// lock that this activation holds.
+			go func() {
+				if err := h.svc.Unsubscribe(t.Context(), h.access(t, token), "s1"); err != nil &&
+					!errors.Is(err, events.ErrNotFound) {
+					replaced <- err
+					return
+				}
+				_, serr := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "notes.note.created")
+				replaced <- serr
+			}()
+			select {
+			case <-replaced:
+				completedWhileActivated = true
+			case <-time.After(300 * time.Millisecond):
+			}
+		}()
 	})
 	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created"); err == nil {
 		t.Fatal("an activation that could not read the grant answered no error")
 	}
-	activates, unsubscribes := counter.calls()
-	if activates-baseActs != 1 || unsubscribes-baseUnsubs != 0 {
-		t.Fatalf("the activation made %d activate and %d unsubscribe calls, want 1 and 0",
-			activates-baseActs, unsubscribes-baseUnsubs)
+	if completedWhileActivated {
+		t.Error("another request replaced the subscription while it was activated")
+	}
+	if err := <-replaced; err != nil {
+		t.Fatalf("the replacement: %v", err)
 	}
 
-	// A replacement of the subscription is 1 of its own, and it stays.
+	// The replacement is s1 on notes, and the activation's own subscription
+	// is gone, with its consumer.
 	client, _, ok := h.svc.Tokens(t.Context(), token)
 	if !ok {
 		t.Fatal("the service refuses the token")
-	}
-	if _, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "notes.note.created"); err != nil {
-		t.Fatalf("Subscribe the replacement: %v", err)
 	}
 	subs := h.b.ClientSubscriptions(client)
 	if len(subs) != 1 || subs[0].Sub != "s1" || subs[0].App != "notes" {
@@ -952,5 +919,39 @@ func TestAFailedActivationKeepsAReplacement(t *testing.T) {
 	}
 	if _, err := h.b.ConsumerState(t.Context(), "app_notes", client+"-s1"); err != nil {
 		t.Errorf("the replacement's consumer: %v", err)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1"); err == nil {
+		t.Errorf("the consumer of the subscription that failed is still there")
+	}
+}
+
+// TestARevokedClientGetsNoSubscription checks that a client which OAuth revoked
+// after lodge's token check keeps no subscription: the activation checks the
+// client again, and the consumer it made goes with the failure.
+func TestARevokedClientGetsNoSubscription(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	var once sync.Once
+	events.SetBeforeActivate(h.svc, func() {
+		once.Do(func() { h.auth.revokeClient(id) })
+	})
+	// The token check passes: the client goes after it.
+	_, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err == nil {
+		t.Fatal("a revoked client's subscription was admitted")
+	}
+	if !errors.Is(err, events.ErrNotFound) {
+		t.Errorf("the PUT answered %v, want an error that wraps ErrNotFound", err)
+	}
+	client, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(client); len(subs) != 0 {
+		t.Errorf("the broker holds the subscriptions %+v", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", client+"-s1"); err == nil {
+		t.Errorf("the broker holds the consumer %q", client+"-s1")
 	}
 }

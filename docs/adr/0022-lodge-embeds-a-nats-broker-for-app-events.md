@@ -172,10 +172,12 @@
   path, as hearth's `events.ReadFilters` does; then each is narrowed to
   the requested prefix, and a prefix that another covers is dropped. A
   request that the grant gives nothing under is refused. lodge reads the
-  grant inside the client's lock. A new consumer starts with its resync
-  subject alone and is registered before lodge reads the grant that gives
-  its filters, so a grant change after that read finds it. A grant change
-  and a subscription cannot cross.
+  grant inside the client's lock. A new subscription is 1 step under that
+  lock: its consumer starts with its resync subject alone and is
+  registered before lodge checks its OAuth client and reads the grant
+  that gives its filters, so a grant change or a revoke after that read
+  finds it, and a failure removes it before the lock is released. A grant
+  change and a subscription cannot cross.
 - **A grant change refilters in place.** When an approval or a removal
   changes a principal's grant for an app, lodge computes the filters of
   each of that principal's subscriptions on the app again and updates the

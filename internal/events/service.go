@@ -50,9 +50,6 @@ type Broker interface {
 	// Refilter replaces the filters of client's subscription sub, with the
 	// ones the callback answers.
 	Refilter(ctx context.Context, client, sub string, filters func(ctx context.Context, app, topic string) ([]string, error)) error
-	// Activate installs a new subscription's filters, and removes the
-	// subscription when that fails, in 1 step.
-	Activate(ctx context.Context, client, sub string, filters func(ctx context.Context, app, topic string) ([]string, error)) error
 	// Revoke forgets a client: its connections and its consumers.
 	Revoke(ctx context.Context, client string) error
 	// Subscriptions are every subscription of every client.
@@ -178,42 +175,16 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 	if !ok {
 		return Subscription{}, fmt.Errorf("%q is not an OAuth client's id: %w", access.Client, ErrNotFound)
 	}
-	// The subscription is made inactive, and its filters are installed after
-	// it is registered: a grant that changes between the 2 is read again
-	// here, and a change that runs later finds the subscription and refilters
-	// it through the same lock.
-	_, err = s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic,
-		Inactive: true},
+	// The subscription is registered, and then activated, in 1 step inside the
+	// broker's lifecycle lock: a request that deletes it and puts another 1 in
+	// its place cannot slip between the 2.
+	out := Subscription{Name: sub, App: app, Topic: topic, Stream: "app_" + app, Consumer: client + "-" + sub}
+	installed, err := s.o.Broker.SubscribeWith(ctx, broker.Spec{Client: client, Sub: sub, App: app, Topic: topic,
+		Activate: s.activate(access)},
 		func(ctx context.Context) ([]string, error) {
-			filters, err := s.readFilters(ctx, access.Principal, app, topic)
-			if err != nil {
-				return nil, err
-			}
-			if len(filters) == 0 {
-				return nil, fmt.Errorf("the grant of %s gives no event under %s: %w", access.Principal, topic, ErrNothing)
-			}
-			return filters, nil
+			return s.subscriptionFilters(ctx, access.Principal, app, topic)
 		})
 	if err != nil {
-		if errors.Is(err, broker.ErrTooManyFilters) {
-			// The client's answer is 400: the grant is wider than 1
-			// consumer, and a narrower topic is what fits.
-			return Subscription{}, fmt.Errorf("%w: the grant is too wide for 1 subscription, and a subscription takes at most %d filters; narrow the topic: %w",
-				ErrInvalid, broker.MaxFilters, err)
-		}
-		return Subscription{}, err
-	}
-	out := Subscription{Name: sub, App: app, Topic: topic, Stream: "app_" + app, Consumer: client + "-" + sub}
-	if s.beforeActivate != nil {
-		s.beforeActivate()
-	}
-	// The subscription is registered, so this read is the last word on its
-	// filters: a grant change that runs after it refilters the consumer
-	// through the same lifecycle lock.
-	// 1 step: the filters go in, and the subscription goes when they cannot,
-	// so that a request which replaces it meanwhile cannot lose its
-	// replacement to this call.
-	if err := s.o.Broker.Activate(ctx, client, sub, s.refilter(access.Principal)); err != nil {
 		if errors.Is(err, broker.ErrCleanup) {
 			// The subscription is still there, and it delivers nothing it
 			// may: its client goes, so that nothing else on it does either.
@@ -226,13 +197,66 @@ func (s *Service) Subscribe(ctx context.Context, access oauth.Access, sub, topic
 			return Subscription{}, fmt.Errorf("%w: subscription %q was removed while it was activated", ErrNotFound, sub)
 		}
 		if errors.Is(err, broker.ErrTooManyFilters) {
+			// The client's answer is 400: the grant is wider than 1
+			// consumer, and a narrower topic is what fits.
 			return Subscription{}, fmt.Errorf("%w: the grant is too wide for 1 subscription, and a subscription takes at most %d filters; narrow the topic: %w",
 				ErrInvalid, broker.MaxFilters, err)
 		}
 		return Subscription{}, fmt.Errorf("subscribe %s to %s: its filters are not installed: %w", sub, app, err)
 	}
-	out.Filters = s.consumerFilters(ctx, out)
+	out.Filters = installed
 	return out, nil
+}
+
+// subscriptionFilters reads the grant's filters for the topic, and refuses a
+// grant that reads nothing there.
+func (s *Service) subscriptionFilters(ctx context.Context, principal, app, topic string) ([]string, error) {
+	filters, err := s.readFilters(ctx, principal, app, topic)
+	if err != nil {
+		return nil, err
+	}
+	if len(filters) == 0 {
+		return nil, fmt.Errorf("the grant of %s gives no event under %s: %w", principal, topic, ErrNothing)
+	}
+	return filters, nil
+}
+
+// activate is the callback that installs a new subscription's filters: it runs
+// inside the broker's lifecycle lock, after the subscription is registered.
+func (s *Service) activate(access oauth.Access) func(ctx context.Context, app, topic string) ([]string, error) {
+	return func(ctx context.Context, app, topic string) ([]string, error) {
+		if s.beforeActivate != nil {
+			s.beforeActivate()
+		}
+		// A client that OAuth revoked after lodge's token check holds no
+		// subscription. A revocation after this check finds the subscription
+		// registered, so its hook revokes it.
+		if err := s.liveClient(ctx, access); err != nil {
+			return nil, err
+		}
+		return s.subscriptionFilters(ctx, access.Principal, app, topic)
+	}
+}
+
+// liveClient checks that the client of access is still the 1 OAuth serves: it
+// exists, it is bound, it holds the events scope and it belongs to the token's
+// principal. It answers ErrNotFound, which the gateway answers as 404: the
+// client was revoked after lodge's token check, so there is no subscription
+// for it.
+func (s *Service) liveClient(ctx context.Context, access oauth.Access) error {
+	c, err := s.o.OAuth.Client(ctx, access.Client)
+	if err != nil {
+		return fmt.Errorf("the OAuth client of the token is gone: %w: %w", ErrNotFound, err)
+	}
+	switch {
+	case !c.Bound():
+		return fmt.Errorf("client %s is bound to no principal: %w", c.ID, ErrNotFound)
+	case c.Principal != access.Principal:
+		return fmt.Errorf("client %s is not the token's principal's: %w", c.ID, ErrNotFound)
+	case !hasScope(c.Scope, oauth.ScopeEvents):
+		return fmt.Errorf("client %s has no scope %s: %w", c.ID, oauth.ScopeEvents, ErrNotFound)
+	}
+	return nil
 }
 
 // consumerFilters answers the filters that a subscription's consumer has: the

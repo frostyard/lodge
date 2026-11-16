@@ -31,54 +31,17 @@ func (b *Broker) Refilter(ctx context.Context, client, sub string,
 	}
 	unlock := b.lifecycle(client)
 	defer unlock()
-	return b.refilterLocked(ctx, client, sub, filters)
+	_, err := b.refilterLocked(ctx, client, sub, filters)
+	return err
 }
 
 // ErrCleanup is a subscription that a failed activation could not remove.
 var ErrCleanup = errors.New("the subscription is not removed")
 
-// Activate installs a new subscription's filters, and removes the subscription
-// when that fails, in 1 step under the client's lifecycle lock: a request that
-// deletes the subscription and puts another 1 in its place between the 2 would
-// otherwise lose its replacement to this call's cleanup.
-//
-// It removes nothing when the subscription is gone (ErrNotFound), when a
-// revoke of the client is under way (ErrConflict, and the revoke deletes it),
-// or when a revoke overtook the refilter (the consumer is deleted already). A
-// cleanup that fails answers its error with ErrCleanup.
-func (b *Broker) Activate(ctx context.Context, client, sub string,
-	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
-	if err := validateName("client", client); err != nil {
-		return err
-	}
-	if err := validateName("sub", sub); err != nil {
-		return err
-	}
-	unlock := b.lifecycle(client)
-	defer unlock()
-	err := b.refilterLocked(ctx, client, sub, filters)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, ErrNotFound), errors.Is(err, ErrConflict), errors.Is(err, errRefilterRevoked):
-		// The subscription is gone, a revoke deletes it, or a revoke took the
-		// consumer this call wrote: there is nothing to remove.
-		return err
-	}
-	// The activation may have failed because its budget ran out: the
-	// cleanup has a budget of its own.
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
-	defer cancel()
-	if uerr := b.unsubscribeLocked(cctx, client, sub); uerr != nil && !errors.Is(uerr, ErrNotFound) {
-		return fmt.Errorf("%w: %w: %w", err, ErrCleanup, uerr)
-	}
-	return err
-}
-
 // refilterLocked is Refilter under the client's lifecycle lock, which the
-// caller holds.
+// caller holds. It answers the filters the consumer holds when it returns.
 func (b *Broker) refilterLocked(ctx context.Context, client, sub string,
-	filters func(ctx context.Context, app, topic string) ([]string, error)) error {
+	filters func(ctx context.Context, app, topic string) ([]string, error)) ([]string, error) {
 	b.mu.Lock()
 	epoch := b.epochs[client]
 	revoking := b.inflight[client] > 0
@@ -90,10 +53,10 @@ func (b *Broker) refilterLocked(ctx context.Context, client, sub string,
 	}
 	b.mu.Unlock()
 	if revoking {
-		return fmt.Errorf("refilter %s/%s: a revoke of the client is in progress: %w", client, sub, ErrConflict)
+		return nil, fmt.Errorf("refilter %s/%s: a revoke of the client is in progress: %w", client, sub, ErrConflict)
 	}
 	if ref.stream == "" {
-		return fmt.Errorf("refilter %s: no subscription %q: %w", client, sub, ErrNotFound)
+		return nil, fmt.Errorf("refilter %s: no subscription %q: %w", client, sub, ErrNotFound)
 	}
 	app := appOf(ref.stream)
 	if topic == "" {
@@ -101,25 +64,25 @@ func (b *Broker) refilterLocked(ctx context.Context, client, sub string,
 	}
 	c, err := b.js.Consumer(ctx, ref.stream, ref.consumer)
 	if errors.Is(err, jetstream.ErrConsumerNotFound) {
-		return fmt.Errorf("refilter %s/%s: its consumer is gone: %w", client, sub, ErrNotFound)
+		return nil, fmt.Errorf("refilter %s/%s: its consumer is gone: %w", client, sub, ErrNotFound)
 	}
 	if err != nil {
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
 	info, err := c.Info(ctx)
 	if err != nil {
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
 	// fail stops the consumer's delivery and answers the refilter's error: a
 	// refilter that cannot install the grant's filters must never leave the
 	// events that the grant no longer reads. The write that stops it must not
 	// outlive a revoke either: the check after it is the success path's.
-	fail := func(err error) error {
+	fail := func(err error) ([]string, error) {
 		b.stopDelivery(ctx, info.Config, app, ref)
 		if rerr := b.deleteAfterRevoke(ctx, client, epoch, ref); rerr != nil {
-			return fmt.Errorf("refilter %s/%s: %w", client, sub, rerr)
+			return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, rerr)
 		}
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
 	fs, err := filters(ctx, app, topic)
 	if err != nil {
@@ -144,16 +107,16 @@ func (b *Broker) refilterLocked(ctx context.Context, client, sub string,
 	// The minute sweep refilters every subscription: an unchanged list writes
 	// nothing.
 	if sameFilters(consumerFilters(info.Config), next) {
-		return tooMany
+		return next, tooMany
 	}
 	cfg := refilterConfig(info.Config, next, client, sub, topic)
 	if _, err := b.js.CreateOrUpdateConsumer(ctx, ref.stream, cfg); err != nil {
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
 	if err := b.deleteAfterRevoke(ctx, client, epoch, ref); err != nil {
-		return fmt.Errorf("refilter %s/%s: %w", client, sub, err)
+		return nil, fmt.Errorf("refilter %s/%s: %w", client, sub, err)
 	}
-	return tooMany
+	return next, tooMany
 }
 
 // errRefilterRevoked is a refilter that a revoke of its client overtook.

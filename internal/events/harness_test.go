@@ -88,6 +88,19 @@ func (h *harness) tokens(ctx context.Context, token string) (string, time.Time, 
 	return h.svc.Tokens(ctx, token)
 }
 
+// addApp gives the harness another enabled app, with 1 event on its group
+// selector, and its stream.
+func (h *harness) addApp(t *testing.T, id string) {
+	t.Helper()
+	h.apps.enabled[id] = true
+	h.apps.hearth[id] = &apps.Hearth{Capabilities: []string{id + ":read"}, Selectors: []string{"group"},
+		Events: []apps.Event{{Type: "org.frostyard." + id + ".note.created", Message: id + ".v1.NoteCreated",
+			Topic: id + ".note.created.group", Selector: "group", ReadPermission: id + ":read"}}}
+	if err := h.b.SyncApps(t.Context(), []string{marksApp, id}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // connectApp connects to the broker's socket as marks, the app the test
 // process is.
 func (h *harness) connectApp(t *testing.T) *nats.Conn {
@@ -288,10 +301,12 @@ type fakeOAuth struct {
 	armed   bool
 	read    chan struct{}
 	release chan struct{}
-	// failing and grantErr make the next grant reads fail, and lookups the
-	// next client reads.
+	// failing and grantErr make the next grant reads fail, failApp and
+	// failAppN the next reads of 1 app, and lookups the next client reads.
 	failing   int
 	grantErr  error
+	failApp   string
+	failAppN  int
 	lookups   int
 	lookupErr error
 }
@@ -374,6 +389,12 @@ func (f *fakeOAuth) Grant(_ context.Context, principal, app string) ([]oauth.Ite
 		f.mu.Unlock()
 		return nil, err
 	}
+	if f.failAppN > 0 && f.failApp == app {
+		f.failAppN--
+		err := f.grantErr
+		f.mu.Unlock()
+		return nil, err
+	}
 	items := slices.Clone(f.grants[principal+"\x00"+app])
 	if items == nil {
 		items = []oauth.Item{}
@@ -404,6 +425,13 @@ func (f *fakeOAuth) failClients(n int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookups, f.lookupErr = n, err
+}
+
+// failGrantsForApp makes the next n grant reads of 1 app fail with err.
+func (f *fakeOAuth) failGrantsForApp(app string, n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failApp, f.failAppN, f.grantErr = app, n, err
 }
 
 // failGrants makes the next n grant reads fail with err.

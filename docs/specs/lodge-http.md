@@ -868,11 +868,14 @@ consumer itself.
   `<sub>` on `DELETE` is 404. A broker that fails is 503.
 - **lodge reads the grant inside the client's lock,** so a subscription
   and a grant change of the same client run 1 after the other. A new
-  consumer starts with its resync subject alone and is registered; then
-  lodge reads the grant again and gives the consumer its filters. A grant
-  change that comes after that read finds the subscription and filters it
-  again, so a subscription cannot keep a grant the change narrowed. When
-  that second read fails, the subscription is deleted.
+  subscription is 1 step under that lock: its consumer starts with its
+  resync subject alone and is registered; then lodge checks that the
+  OAuth client is still there with scope `events`, reads the grant again
+  and gives the consumer its filters. A grant change or a revoke that
+  comes after that read finds the subscription, so a subscription cannot
+  keep a grant the change narrowed. When the check or the second read
+  fails, the subscription is deleted before the lock is released, and a
+  client whose OAuth client is gone gets 404.
 - **A grant change refilters.** When a principal's grant for an app
   changes, lodge computes each of its clients' subscriptions on that app
   again and updates the consumer in place. The events not yet delivered
