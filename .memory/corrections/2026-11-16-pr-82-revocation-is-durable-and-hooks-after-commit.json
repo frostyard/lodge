@@ -1,7 +1,7 @@
 {
   "date": "2026-11-16",
   "scope": "internal/oauth",
-  "correction": "The revocation of a token family whose token was reused must survive a failed write: its tokens are refused until the revocation is stored, and the write is retried. A hook runs only after the transaction it belongs to commits.",
-  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) re-review 1 of head 5a38d84, findings R1.1 and R1.2",
-  "promoted_to": "internal/oauth/oauth_test.go TestRevocationIsDurable; internal/gateway/oauth_test.go TestOAuthGrantHookAfterCommit, TestOAuthRevokePrincipalIsAtomic and TestOAuthRequestRevokedDuringCreation"
+  "correction": "A reused token family must be revoked in the same transaction that detects the reuse, so that the revocation is as durable as the database and no in-memory state can be lost or raced; hooks run only after their transaction commits; a check that guards an insert belongs in the insert statement.",
+  "evidence": "frostyard/lodge#82, cross-review (openai/gpt-6.1-sol) re-reviews 1 and 2 of heads 5a38d84 and 9f0590a, findings R1.1, R1.2, R2.1 and the B3.1 guard",
+  "promoted_to": "internal/oauth/oauth_test.go TestReuseRevokesInTheTransaction; internal/gateway/oauth_test.go TestOAuthRefreshSingleUse, TestOAuthCodeSingleUse, TestOAuthRequestRevokedDuringCreation, TestOAuthGrantHookAfterCommit and TestOAuthRevokePrincipalIsAtomic"
 }

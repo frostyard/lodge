@@ -1013,126 +1013,6 @@ func TestReadsUseTheTransaction(t *testing.T) {
 	}
 }
 
-// TestTokenSingleUseIsAtomic checks the storage's own view of a token used
-// twice: the conditional update fails, the error says the token was reused,
-// and the family is revoked after the transaction fosite rolls back.
-func TestTokenSingleUseIsAtomic(t *testing.T) {
-	s, _ := testServer(t)
-	ctx := t.Context()
-	insertClient(t, s, "lgc_test", "test", "chani")
-	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
-		t.Fatal(err)
-	}
-	client, err := s.store.GetClient(ctx, "lgc_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := func() *Session {
-		sess := NewSession()
-		sess.Subject = "chani"
-		sess.SetExpiresAt(fosite.AccessToken, s.now().Add(AccessTokenLifespan))
-		sess.SetExpiresAt(fosite.RefreshToken, s.now().Add(RefreshTokenLifespan))
-		sess.SetExpiresAt(fosite.AuthorizeCode, s.now().Add(AuthorizeCodeLifespan))
-		return sess
-	}
-	request := func(name string) fosite.Requester {
-		req := fosite.NewRequest()
-		req.ID = name
-		req.RequestedAt = s.now()
-		req.Client = client
-		req.Session = session()
-		return req
-	}
-	// A family with a code, an access token and a refresh token.
-	write := func(kind, signature, family string) {
-		t.Helper()
-		req := request(family)
-		var err error
-		switch kind {
-		case kindCode:
-			err = s.store.CreateAuthorizeCodeSession(ctx, signature, req)
-		case kindAccess:
-			err = s.store.CreateAccessTokenSession(ctx, signature, req)
-		case kindRefresh:
-			err = s.store.CreateRefreshTokenSession(ctx, signature, "", req)
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	active := func(kind, signature string) bool {
-		t.Helper()
-		var n int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_sessions WHERE kind = ? AND signature = ? AND active = 1`,
-			kind, signature).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n == 1
-	}
-	t.Run("refresh token", func(t *testing.T) {
-		write(kindRefresh, "rt-1", "family-refresh")
-		write(kindAccess, "at-1", "family-refresh")
-		// The winner consumes it, and commits.
-		tx, err := s.store.BeginTX(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.store.RotateRefreshToken(tx, "family-refresh", "rt-1"); err != nil {
-			t.Fatalf("the first rotation = %v", err)
-		}
-		if err := s.store.Commit(tx); err != nil {
-			t.Fatal(err)
-		}
-		// The winner's new pair, which the reuse must end.
-		write(kindRefresh, "rt-2", "family-refresh")
-		write(kindAccess, "at-2", "family-refresh")
-		// The loser takes the same token, and fails.
-		tx, err = s.store.BeginTX(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = s.store.RotateRefreshToken(tx, "family-refresh", "rt-1")
-		if !errors.Is(err, errTokenReused) || !errors.Is(err, fosite.ErrInactiveToken) {
-			t.Fatalf("the second rotation = %v, want a reuse", err)
-		}
-		// fosite rolls the transaction back; the family goes with it.
-		if err := s.store.Rollback(tx); err != nil {
-			t.Fatal(err)
-		}
-		if active(kindRefresh, "rt-1") || active(kindRefresh, "rt-2") || active(kindAccess, "at-2") {
-			t.Error("the family is still live after the reuse")
-		}
-	})
-	t.Run("authorization code", func(t *testing.T) {
-		write(kindCode, "ac-1", "family-code")
-		write(kindRefresh, "rt-2", "family-code")
-		tx, err := s.store.BeginTX(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.store.InvalidateAuthorizeCodeSession(tx, "ac-1"); err != nil {
-			t.Fatalf("the first exchange = %v", err)
-		}
-		if err := s.store.Commit(tx); err != nil {
-			t.Fatal(err)
-		}
-		tx, err = s.store.BeginTX(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = s.store.InvalidateAuthorizeCodeSession(tx, "ac-1")
-		if !errors.Is(err, errTokenReused) {
-			t.Fatalf("the second exchange = %v, want a reuse", err)
-		}
-		if err := s.store.Rollback(tx); err != nil {
-			t.Fatal(err)
-		}
-		if active(kindRefresh, "rt-2") {
-			t.Error("the family is still live after the code was exchanged twice")
-		}
-	})
-}
-
 // TestRequestHashIsDeterministic checks that the hash of an item with several
 // selectors is the same every time, with its sel keys sorted.
 func TestRequestHashIsDeterministic(t *testing.T) {
@@ -1475,100 +1355,6 @@ func setExpiryRaw(t *testing.T, s *Server, kind, signature, tokenType string, at
 	}
 }
 
-// TestRevocationIsDurable checks that a family whose revocation write fails
-// is still refused, and that the hourly tick writes the revocation again.
-func TestRevocationIsDurable(t *testing.T) {
-	ctx := t.Context()
-	fails := 1
-	var mu sync.Mutex
-	f := newFlowWith(t, func(o *Options) {
-		o.RevokeFails = func(string) error {
-			mu.Lock()
-			defer mu.Unlock()
-			if fails > 0 {
-				fails--
-				return errors.New("the write of the revocation failed")
-			}
-			return nil
-		}
-	})
-	_, tok := f.signinFlow("chani", "mcp")
-	renewed := f.token(url.Values{"grant_type": {"refresh_token"}, "client_id": {f.clientID},
-		"refresh_token": {tok.RefreshToken}})
-	if renewed.status != http.StatusOK {
-		t.Fatalf("the refresh: %d %q", renewed.status, renewed.body)
-	}
-	var second tokenJSON
-	if err := jsonUnmarshal([]byte(renewed.body), &second); err != nil {
-		t.Fatal(err)
-	}
-	// The family of the pair, and the signature of the refresh token that
-	// the refresh consumed.
-	oldSignature := f.s.strategy.RefreshTokenSignature(ctx, tok.RefreshToken)
-	var family string
-	if err := f.s.db.QueryRowContext(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
-		kindRefresh, oldSignature).Scan(&family); err != nil {
-		t.Fatal(err)
-	}
-	// A second use of the consumed token, in fosite's transaction, which it
-	// rolls back: the revocation is written after that, and fails.
-	tx, err := f.s.store.BeginTX(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.s.store.RotateRefreshToken(tx, family, oldSignature); !errors.Is(err, errTokenReused) {
-		t.Fatalf("the second rotation = %v, want a reuse", err)
-	}
-	if err := f.s.store.Rollback(tx); err != nil {
-		t.Fatal(err)
-	}
-	// The write failed, and the family waits: its tokens are refused at once.
-	if waiting := f.s.store.waitingFamilies(); len(waiting) != 1 || waiting[0] != family {
-		t.Fatalf("the waiting families = %v", waiting)
-	}
-	if _, err := f.s.Check(ctx, second.AccessToken, "mcp"); err == nil {
-		t.Error("the winner's access token works while its revocation is not stored")
-	}
-	again := f.token(url.Values{"grant_type": {"refresh_token"}, "client_id": {f.clientID},
-		"refresh_token": {second.RefreshToken}})
-	var refused tokenJSON
-	if err := jsonUnmarshal([]byte(again.body), &refused); err != nil {
-		t.Fatal(err)
-	}
-	if again.status != http.StatusBadRequest || refused.Error != "invalid_grant" {
-		t.Errorf("the winner's refresh token while its revocation is not stored: %d %q", again.status, again.body)
-	}
-	// The database still holds it: the revocation was not written.
-	if active := activeRefreshRows(t, f.s, family); active == 0 {
-		t.Fatal("the family is already revoked in the database")
-	}
-	// The hourly tick writes the revocation again, and then the set is empty.
-	if err := f.s.Sweep(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if waiting := f.s.store.waitingFamilies(); len(waiting) != 0 {
-		t.Errorf("the waiting families after the retry = %v", waiting)
-	}
-	if active := activeRefreshRows(t, f.s, family); active != 0 {
-		t.Errorf("%d active refresh rows after the retry, want 0", active)
-	}
-	if _, err := f.s.Check(ctx, second.AccessToken, "mcp"); err == nil {
-		t.Error("the winner's access token works after the family was revoked")
-	}
-}
-
-// activeRefreshRows is how many active refresh tokens a family holds.
-func activeRefreshRows(t *testing.T, s *Server, family string) int {
-	t.Helper()
-	var n int
-	if err := s.db.QueryRowContext(t.Context(),
-		`SELECT COUNT(*) FROM oauth_sessions WHERE kind = ? AND request_id = ? AND active = 1`,
-		kindRefresh, family).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 // newFlowWith is newFlow, after opts changed the server's options.
 func newFlowWith(t *testing.T, opts func(*Options)) *flow {
 	t.Helper()
@@ -1586,4 +1372,264 @@ func newFlowWith(t *testing.T, opts func(*Options)) *flow {
 	}
 	f.clientID = out.ClientID
 	return f
+}
+
+// TestReuseRevokesInTheTransaction checks the interleaving of 2 requests that
+// read 1 token: the first rotates it and commits, then the second finds it
+// used, revokes its family in its own transaction, and stores no token. The
+// winner's tokens are refused, before and after a restart: nothing of the
+// revocation lives in memory.
+func TestReuseRevokesInTheTransaction(t *testing.T) {
+	ctx := t.Context()
+	t.Run("a refresh token", func(t *testing.T) {
+		s := boundServer(t)
+		client, err := s.store.GetClient(ctx, "lgc_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		session := func() *Session {
+			sess := NewSession()
+			sess.Subject = "chani"
+			sess.SetExpiresAt(fosite.AccessToken, time.Now().Add(time.Hour))
+			sess.SetExpiresAt(fosite.RefreshToken, time.Now().Add(RefreshTokenLifespan))
+			return sess
+		}
+		request := func() fosite.Requester {
+			req := fosite.NewRequest()
+			req.ID = "family-1"
+			req.RequestedAt = s.now()
+			req.Client = client
+			req.Session = session()
+			req.GrantedScope = fosite.Arguments{"mcp"}
+			return req
+		}
+		// The family the two requests read: a refresh token and an access
+		// token.
+		first := request()
+		access1, sigAccess1, err := s.strategy.GenerateAccessToken(ctx, first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, sigRefresh1, err := s.strategy.GenerateRefreshToken(ctx, first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAccessTokenSession(ctx, sigAccess1, first); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateRefreshTokenSession(ctx, sigRefresh1, sigAccess1, first); err != nil {
+			t.Fatal(err)
+		}
+		// Both requests read the refresh token, and see it active.
+		for range 2 {
+			if _, err := s.store.GetRefreshTokenSession(ctx, sigRefresh1, nil); err != nil {
+				t.Fatalf("a read of the refresh token: %v", err)
+			}
+		}
+		// The first rotates it, and stores the pair it issues.
+		winnerTx, err := s.store.BeginTX(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.RotateRefreshToken(winnerTx, "family-1", sigRefresh1); err != nil {
+			t.Fatalf("the first rotation: %v", err)
+		}
+		winner := request()
+		access2, sigAccess2, err := s.strategy.GenerateAccessToken(winnerTx, winner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, sigRefresh2, err := s.strategy.GenerateRefreshToken(winnerTx, winner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAccessTokenSession(winnerTx, sigAccess2, winner); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateRefreshTokenSession(winnerTx, sigRefresh2, sigAccess2, winner); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.Commit(winnerTx); err != nil {
+			t.Fatal(err)
+		}
+		// The second rotates the same token: it is used, so its family goes,
+		// and it stores nothing.
+		flag := &reuseFlag{}
+		loserTx, err := s.store.BeginTX(context.WithValue(ctx, reuseKey{}, flag))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.RotateRefreshToken(loserTx, "family-1", sigRefresh1); err != nil {
+			t.Fatalf("the second rotation = %v, want nil", err)
+		}
+		loser := request()
+		_, sigAccess3, err := s.strategy.GenerateAccessToken(loserTx, loser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, sigRefresh3, err := s.strategy.GenerateRefreshToken(loserTx, loser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAccessTokenSession(loserTx, sigAccess3, loser); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateRefreshTokenSession(loserTx, sigRefresh3, sigAccess3, loser); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.Commit(loserTx); err != nil {
+			t.Fatal(err)
+		}
+		if !flag.used {
+			t.Error("the request's flag is not set")
+		}
+		// The loser stored nothing, and the family the winner issued is gone.
+		if _, err := s.store.GetAccessTokenSession(ctx, sigAccess3, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the loser's access token = %v, want it never stored", err)
+		}
+		if _, err := s.store.GetRefreshTokenSession(ctx, sigRefresh3, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the loser's refresh token = %v, want it never stored", err)
+		}
+		if _, err := s.store.GetAccessTokenSession(ctx, sigAccess2, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the winner's access token = %v, want it revoked", err)
+		}
+		if _, err := s.store.GetRefreshTokenSession(ctx, sigRefresh2, nil); !errors.Is(err, fosite.ErrInactiveToken) {
+			t.Errorf("the winner's refresh token = %v, want it inactive", err)
+		}
+		// After a restart, the same holds: the revocation is in the database.
+		restarted, err := New(ctx, Options{DB: s.db, Apps: fakeApps{},
+			Issuer: func() string { return "https://lodge.example" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.Check(ctx, access2, "mcp"); err == nil {
+			t.Errorf("the winner's access token works after a restart")
+		}
+		if _, err := restarted.store.GetRefreshTokenSession(ctx, sigRefresh2, nil); !errors.Is(err, fosite.ErrInactiveToken) {
+			t.Errorf("the winner's refresh token after a restart = %v", err)
+		}
+		if _, err := restarted.Check(ctx, access1, "mcp"); err == nil {
+			t.Error("the first access token works after a restart")
+		}
+	})
+	t.Run("a code", func(t *testing.T) {
+		s := boundServer(t)
+		client, err := s.store.GetClient(ctx, "lgc_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		session := func() *Session {
+			sess := NewSession()
+			sess.Subject = "chani"
+			sess.SetExpiresAt(fosite.AccessToken, time.Now().Add(time.Hour))
+			sess.SetExpiresAt(fosite.RefreshToken, time.Now().Add(RefreshTokenLifespan))
+			sess.SetExpiresAt(fosite.AuthorizeCode, time.Now().Add(AuthorizeCodeLifespan))
+			return sess
+		}
+		request := func() fosite.Requester {
+			req := fosite.NewRequest()
+			req.ID = "family-2"
+			req.RequestedAt = s.now()
+			req.Client = client
+			req.Session = session()
+			req.GrantedScope = fosite.Arguments{"mcp"}
+			return req
+		}
+		_, sigCode, err := s.strategy.GenerateAuthorizeCode(ctx, request())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAuthorizeCodeSession(ctx, sigCode, request()); err != nil {
+			t.Fatal(err)
+		}
+		// Both requests read the code, and see it active.
+		for range 2 {
+			if _, err := s.store.GetAuthorizeCodeSession(ctx, sigCode, nil); err != nil {
+				t.Fatalf("a read of the code: %v", err)
+			}
+		}
+		// The first exchanges it, and stores the pair it issues.
+		winnerTx, err := s.store.BeginTX(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.InvalidateAuthorizeCodeSession(winnerTx, sigCode); err != nil {
+			t.Fatalf("the first exchange: %v", err)
+		}
+		winner := request()
+		_, sigAccess2, err := s.strategy.GenerateAccessToken(winnerTx, winner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, sigRefresh2, err := s.strategy.GenerateRefreshToken(winnerTx, winner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAccessTokenSession(winnerTx, sigAccess2, winner); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateRefreshTokenSession(winnerTx, sigRefresh2, sigAccess2, winner); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.Commit(winnerTx); err != nil {
+			t.Fatal(err)
+		}
+		// The second exchanges the same code: it is used, so its family goes,
+		// and it stores nothing.
+		flag := &reuseFlag{}
+		loserTx, err := s.store.BeginTX(context.WithValue(ctx, reuseKey{}, flag))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.InvalidateAuthorizeCodeSession(loserTx, sigCode); err != nil {
+			t.Fatalf("the second exchange = %v, want nil", err)
+		}
+		loser := request()
+		_, sigAccess3, err := s.strategy.GenerateAccessToken(loserTx, loser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, sigRefresh3, err := s.strategy.GenerateRefreshToken(loserTx, loser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateAccessTokenSession(loserTx, sigAccess3, loser); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.CreateRefreshTokenSession(loserTx, sigRefresh3, sigAccess3, loser); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.store.Commit(loserTx); err != nil {
+			t.Fatal(err)
+		}
+		if !flag.used {
+			t.Error("the request's flag is not set")
+		}
+		if _, err := s.store.GetAccessTokenSession(ctx, sigAccess3, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the loser's access token = %v, want it never stored", err)
+		}
+		if _, err := s.store.GetAccessTokenSession(ctx, sigAccess2, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the winner's access token = %v, want it revoked", err)
+		}
+		if _, err := s.store.GetRefreshTokenSession(ctx, sigRefresh2, nil); !errors.Is(err, fosite.ErrInactiveToken) {
+			t.Errorf("the winner's refresh token = %v, want it inactive", err)
+		}
+		// A code that is consumed is answered with fosite's own error, which
+		// its code flow revokes the family for.
+		if _, err := s.store.GetAuthorizeCodeSession(ctx, sigCode, nil); !errors.Is(err, fosite.ErrInvalidatedAuthorizeCode) {
+			t.Errorf("a used code = %v, want ErrInvalidatedAuthorizeCode", err)
+		}
+		// After a restart, the family is still revoked.
+		restarted, err := New(ctx, Options{DB: s.db, Apps: fakeApps{},
+			Issuer: func() string { return "https://lodge.example" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.store.GetAccessTokenSession(ctx, sigAccess2, nil); !errors.Is(err, fosite.ErrNotFound) {
+			t.Errorf("the winner's access token after a restart = %v", err)
+		}
+		if _, err := restarted.store.GetRefreshTokenSession(ctx, sigRefresh2, nil); !errors.Is(err, fosite.ErrInactiveToken) {
+			t.Errorf("the winner's refresh token after a restart = %v", err)
+		}
+	})
 }

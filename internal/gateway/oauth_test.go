@@ -52,7 +52,17 @@ type oauthHarness struct {
 	revokedClients [][]string
 	// notes is the app notes, which an MCP token reaches.
 	notes *fakeApp
+	// seamClient is the client a test's seam works on.
+	seamClient string
 }
+
+// setClient names the client a test's OAuth seam works on.
+func (h *oauthHarness) setClient(id string) {
+	h.seamClient = id
+}
+
+// clientID is the client a test's seam works on.
+func (h *oauthHarness) clientID() string { return h.seamClient }
 
 const redirectURI = "https://client.example/callback"
 
@@ -2264,77 +2274,37 @@ func TestOAuthRevokePrincipalIsAtomic(t *testing.T) {
 	}
 }
 
-// TestOAuthRequestRevokedDuringCreation checks that no approvable request
-// survives for a client that is revoked while its request is made: the
-// revocation waits for the request's transaction, then removes its request.
+// TestOAuthRequestRevokedDuringCreation checks that no request survives for
+// a client that is revoked between the check and the insert: the insert
+// re-checks the client itself, and writes nothing.
 func TestOAuthRequestRevokedDuringCreation(t *testing.T) {
-	var (
-		mu       sync.Mutex
-		seamRan  bool
-		revoked  = make(chan struct{})
-		clientID string
-	)
-	ctx := context.Background()
 	var h *oauthHarness
 	h = newOAuthHarnessWith(t, func(o *oauth.Options) {
 		o.BeforeRequestInsert = func() {
-			mu.Lock()
-			first := !seamRan
-			seamRan = true
-			mu.Unlock()
-			if !first {
-				return
-			}
-			// Another goroutine revokes the client. It cannot write while
-			// this request's transaction holds the lock, so the wait ends
-			// when that transaction does.
-			go func() {
-				defer close(revoked)
-				_ = h.oauth.RevokeClient(ctx, clientID)
-			}()
-			select {
-			case <-revoked:
-				// The revocation went through inside the seam: no lock was
-				// held, which is the ordering this test guards.
-			case <-time.After(500 * time.Millisecond):
-				// The transaction holds the lock, as it must.
+			// The pre-check has passed, and no transaction holds the
+			// database: the revocation goes through at once.
+			if err := h.oauth.RevokeClient(t.Context(), h.clientID()); err != nil {
+				t.Errorf("the revocation in the seam: %v", err)
 			}
 		}
 	})
-	c, _ := h.signin("pi-pocket", "mcp")
-	clientID = c.ClientID
-	req, err := h.oauth.RequestAccess(ctx, clientID, "marks", marksItems())
-	select {
-	case <-revoked:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the revocation never finished")
-	}
-	// Whatever the request answered, its request does not wait for a
-	// decision: the revocation removed it, or the creation failed.
+	client, _ := h.signin("pi-pocket", "mcp")
+	h.setClient(client.ClientID)
+	req, err := h.oauth.RequestAccess(t.Context(), client.ClientID, "marks", marksItems())
 	if err == nil {
-		var waiting int
-		if err := h.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM consent_requests WHERE id = ? AND decided_at IS NULL`, req.ID).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting != 0 {
-			t.Errorf("the request %s waits for a decision for a revoked client", req.ID)
-		}
+		t.Errorf("the creation = %+v, want an error for a revoked client", req)
 	}
+	// No request waits for a decision, for this client or any other.
 	var pending int
-	if err := h.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM consent_requests WHERE client_id = ? AND decided_at IS NULL`,
-		clientID).Scan(&pending); err != nil {
+	if err := h.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM consent_requests WHERE client_id = ? AND decided_at IS NULL`, client.ClientID).Scan(&pending); err != nil {
 		t.Fatal(err)
 	}
 	if pending != 0 {
-		if err != nil {
-			t.Errorf("%d requests wait for a decision for a revoked client (%v)", pending, err)
-		} else {
-			t.Errorf("%d requests wait for a decision for a revoked client", pending)
-		}
+		t.Errorf("%d requests wait for a decision for a revoked client", pending)
 	}
 	var revokedAt sql.NullString
-	if err := h.db.QueryRowContext(ctx, `SELECT revoked_at FROM oauth_clients WHERE id = ?`, clientID).Scan(&revokedAt); err != nil {
+	if err := h.db.QueryRowContext(t.Context(), `SELECT revoked_at FROM oauth_clients WHERE id = ?`, client.ClientID).Scan(&revokedAt); err != nil {
 		t.Fatal(err)
 	}
 	if !revokedAt.Valid {

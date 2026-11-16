@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -372,14 +373,39 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_request", "the resource parameter is not lodge's")
 		return
 	}
-	req, err := s.provider.NewAccessRequest(ctx, r, NewSession())
+	// The request carries a flag that the storage sets when a code or a
+	// refresh token was used twice: then its family is revoked in the
+	// transaction that found it, no token is stored, and this request
+	// answers invalid_grant (docs/specs/oauth.md, Tokens).
+	reuse := &reuseFlag{}
+	ctx = context.WithValue(ctx, reuseKey{}, reuse)
+	req, err := s.provider.NewAccessRequest(ctx, r.WithContext(ctx), NewSession())
 	if err != nil {
-		s.accessError(ctx, w, req, err)
+		s.provider.WriteAccessError(ctx, w, req, err)
 		return
 	}
 	resp, err := s.provider.NewAccessResponse(ctx, req)
 	if err != nil {
-		s.accessError(ctx, w, req, err)
+		// A second request that presents a code: fosite's code flow revokes
+		// the family when it reads a used code at its first read, and
+		// answers an error when it reads one at its second. lodge revokes
+		// the family here, in a transaction of its own, and answers
+		// invalid_grant either way.
+		if errors.Is(err, fosite.ErrInvalidatedAuthorizeCode) {
+			if ok, rerr := s.revokeUsedCode(ctx, r.PostForm.Get("code")); rerr != nil {
+				s.log.Error("revoke a used code's family", "err", rerr)
+			} else if ok {
+				s.writeError(w, http.StatusBadRequest, "invalid_grant",
+					"the code was used already: every token of its sign-in is revoked")
+				return
+			}
+		}
+		s.provider.WriteAccessError(ctx, w, req, err)
+		return
+	}
+	if reuse.used {
+		s.provider.WriteAccessError(ctx, w, req,
+			fosite.ErrInvalidGrant.WithHint("The token was used already; every token of its sign-in is revoked."))
 		return
 	}
 	// fosite derives expires_in from the session's expiry and the wall
@@ -389,15 +415,23 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	s.provider.WriteAccessResponse(ctx, w, req, resp)
 }
 
-// accessError answers a token request's error. A code or refresh token that
-// was used twice answers invalid_grant, with its family revoked
-// (docs/specs/oauth.md, Tokens).
-func (s *Server) accessError(ctx context.Context, w http.ResponseWriter, req fosite.AccessRequester, err error) {
-	if errors.Is(err, errTokenReused) {
-		s.writeError(w, http.StatusBadRequest, "invalid_grant", "the token was already used: every token of its family is revoked")
-		return
+// revokeUsedCode revokes the family of a code that a second request
+// presented, in a transaction of its own, and reports whether it found it.
+func (s *Server) revokeUsedCode(ctx context.Context, code string) (bool, error) {
+	ctx = context.WithoutCancel(ctx)
+	var family string
+	err := s.store.queryRow(ctx, `SELECT request_id FROM oauth_sessions WHERE kind = ? AND signature = ?`,
+		kindCode, s.strategy.AuthorizeCodeSignature(ctx, code)).Scan(&family)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("oauth: read a used code: %w", err)
 	}
-	s.provider.WriteAccessError(ctx, w, req, err)
+	if err := s.store.revokeFamily(ctx, family); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // revoke is the revocation endpoint (RFC 7009).

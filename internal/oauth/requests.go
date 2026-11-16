@@ -153,10 +153,12 @@ func validItem(a apps.App, it Item) error {
 	return nil
 }
 
-// createRequest stores req while fewer than MaxPending requests are pending:
-// 1 statement, so that 2 creations at once cannot both pass the limit
-// (docs/specs/oauth.md, Requests).
-func (s *Server) createRequest(ctx context.Context, q querier, req Request) error {
+// createRequest stores req in 1 statement that re-checks everything the
+// entry needs: its client is live, an access request's client is still bound
+// to its principal and that principal is live, and fewer than MaxPending
+// requests are pending. A check and its insert cannot be split, so a
+// revocation cannot slip between them (docs/specs/oauth.md, Requests).
+func (s *Server) createRequest(ctx context.Context, req Request) error {
 	scopesJSON, err := jsonMarshal(req.Scopes)
 	if err != nil {
 		return err
@@ -173,22 +175,52 @@ func (s *Server) createRequest(ctx context.Context, q querier, req Request) erro
 		}
 		query = string(b)
 	}
-	res, err := s.store.at(ctx, q).ExecContext(ctx, `INSERT INTO consent_requests
+	statement := `INSERT INTO consent_requests
 		(id, kind, client_id, principal, app, scopes, items, query, created_at, expires_at)
 		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE (SELECT COUNT(*) FROM consent_requests WHERE decided_at IS NULL AND expires_at > ?) < ?`,
-		req.ID, string(req.Kind), req.Client, req.Principal, req.App, string(scopesJSON), string(itemsJSON),
-		query, stamp(req.Created), stamp(req.Expires), stamp(s.now()), MaxPending)
+		WHERE EXISTS (SELECT 1 FROM oauth_clients WHERE id = ? AND revoked_at IS NULL`
+	args := []any{req.ID, string(req.Kind), req.Client, req.Principal, req.App, string(scopesJSON), string(itemsJSON),
+		query, stamp(req.Created), stamp(req.Expires), req.Client}
+	if req.Kind == KindAccess {
+		statement += ` AND principal = ?`
+		args = append(args, req.Principal)
+	}
+	statement += `)`
+	if req.Kind == KindAccess {
+		statement += ` AND EXISTS (SELECT 1 FROM principals WHERE name = ? AND revoked_at IS NULL)`
+		args = append(args, req.Principal)
+	}
+	statement += ` AND (SELECT COUNT(*) FROM consent_requests WHERE decided_at IS NULL AND expires_at > ?) < ?`
+	args = append(args, stamp(s.now()), MaxPending)
+	res, err := s.store.at(ctx, nil).ExecContext(ctx, statement, args...)
 	if err != nil {
 		return fmt.Errorf("oauth: store a request: %w", err)
 	}
-	switch n, err := res.RowsAffected(); {
-	case err != nil:
+	if n, err := res.RowsAffected(); err != nil {
 		return fmt.Errorf("oauth: store a request: %w", err)
-	case n == 0:
-		return fmt.Errorf("%d requests are pending: %w", MaxPending, ErrTooMany)
+	} else if n == 0 {
+		return s.requestRefused(ctx, req)
 	}
 	return nil
+}
+
+// requestRefused says why a request was not stored: its client is unknown,
+// revoked or not bound to it; an access request's principal is revoked; or
+// too many requests wait for a decision.
+func (s *Server) requestRefused(ctx context.Context, req Request) error {
+	c, err := s.store.clientRow(ctx, req.Client)
+	if err != nil {
+		return err
+	}
+	if req.Kind == KindAccess {
+		if c.Principal != req.Principal {
+			return fmt.Errorf("client %s is bound to principal %s: %w", req.Client, c.Principal, ErrNotFound)
+		}
+		if err := s.store.livePrincipal(ctx, nil, req.Principal); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("%d requests are pending: %w", MaxPending, ErrTooMany)
 }
 
 // request reads request id.
@@ -294,33 +326,29 @@ func (s *Server) RequestAccess(ctx context.Context, clientID, app string, items 
 			return Request{}, fmt.Errorf("item %d: %w", i, err)
 		}
 	}
+	c, err := s.store.clientRow(ctx, clientID)
+	if err != nil {
+		return Request{}, err
+	}
+	if c.Principal == "" {
+		return Request{}, fmt.Errorf("client %s is bound to no principal: %w", clientID, ErrNotFound)
+	}
+	if err := s.store.livePrincipal(ctx, nil, c.Principal); err != nil {
+		return Request{}, err
+	}
+	if s.beforeRequestInsert != nil {
+		s.beforeRequestInsert()
+	}
 	id, err := newID()
 	if err != nil {
 		return Request{}, err
 	}
 	now := s.now().UTC()
-	req := Request{ID: id, Kind: KindAccess, Client: clientID, App: app, Scopes: []string{}, Items: normalize(items),
-		Created: now, Expires: now.Add(RequestLifespan), URL: s.Issuer() + "/oauth/consent/" + id}
-	// The client, its principal, the limit and the insert are 1 transaction:
-	// it serializes with a revocation, so a revoked client makes no request.
-	err = s.inTx(ctx, func(tx *sql.Tx) error {
-		c, err := s.store.clientRowAt(ctx, tx, clientID)
-		if err != nil {
-			return err
-		}
-		if c.Principal == "" {
-			return fmt.Errorf("client %s is bound to no principal: %w", clientID, ErrNotFound)
-		}
-		if err := s.store.livePrincipal(ctx, tx, c.Principal); err != nil {
-			return err
-		}
-		req.Principal = c.Principal
-		if s.beforeRequestInsert != nil {
-			s.beforeRequestInsert()
-		}
-		return s.createRequest(ctx, tx, req)
-	})
-	if err != nil {
+	req := Request{ID: id, Kind: KindAccess, Client: clientID, Principal: c.Principal, App: app, Scopes: []string{},
+		Items: normalize(items), Created: now, Expires: now.Add(RequestLifespan), URL: s.Issuer() + "/oauth/consent/" + id}
+	// The insert re-checks the client, its binding and the principal, so a
+	// revocation between the check and it leaves no request.
+	if err := s.createRequest(ctx, req); err != nil {
 		return Request{}, err
 	}
 	s.log.Info("access requested", "request", id, "client", clientID, "principal", req.Principal, "app", app, "items", len(items))
@@ -351,7 +379,7 @@ func (s *Server) createSigninRequest(ctx context.Context, clientID string, scope
 	req := Request{ID: id, Kind: KindSignin, Client: clientID, Principal: principal, App: "",
 		Scopes: scopes, Items: []Item{}, Created: now, Expires: now.Add(RequestLifespan), Query: query,
 		URL: s.Issuer() + "/oauth/consent/" + id}
-	if err := s.createRequest(ctx, s.db, req); err != nil {
+	if err := s.createRequest(ctx, req); err != nil {
 		return Request{}, err
 	}
 	return req, nil
