@@ -84,7 +84,13 @@ func (g *Gateway) gatewayMCP(w http.ResponseWriter, r *http.Request, who peer.Wh
 		fail(w, http.StatusUnauthorized, "unauthorized", gatewayHeaders)
 		return
 	}
-	caller = mcpgw.Caller{Principal: access.Principal, Client: access.Client, Expires: access.Expires}
+	caller = mcpgw.Caller{Principal: access.Principal, Client: access.Client, Expires: access.Expires,
+		// A revocation between this check and the gateway's own registration
+		// gets the same answer as a dead token.
+		Refuse: func(w http.ResponseWriter) {
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+resource+`"`)
+			fail(w, http.StatusUnauthorized, "unauthorized", gatewayHeaders)
+		}}
 	// 7. No upgrade.
 	if refuseUpgrade(w, r, gatewayHeaders) {
 		return

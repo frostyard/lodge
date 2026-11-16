@@ -1514,3 +1514,41 @@ func editOperation(t *testing.T, name string, edit func(op map[string]any)) []by
 	}
 	return b
 }
+
+// TestMCPGatewayRevokedAfterTheCheck checks the answer to a request whose
+// client lodge revoked between its token check and the MCP gateway's own
+// registration: lodge's 401, with its challenge, its confined headers and a
+// closed connection, as for a dead token (docs/specs/lodge-http.md, The MCP
+// gateway and Connections). The MCP gateway's revocation alone opens that
+// window: the OAuth server still holds the client live.
+func TestMCPGatewayRevokedAfterTheCheck(t *testing.T) {
+	h := newOAuthHarness(t)
+	h.serveHearth(nil)
+	client, tok := h.signin("pi-late", "mcp")
+	h.mcp.Revoked("chani", []string{client.ClientID})
+	r := h.req(http.MethodPost, gatewayPath, `{}`, map[string]string{
+		"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+		"Authorization": "Bearer " + tok.AccessToken})
+	// The request asks to keep its connection: only lodge's answer closes it.
+	r.Close = false
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	header := resp.Header
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a client revoked after the check: %d, want 401", resp.StatusCode)
+	}
+	want := `Bearer resource_metadata="` + h.oauth.Issuer() + `/.well-known/oauth-protected-resource/gateway/mcp"`
+	if got := header.Get("WWW-Authenticate"); got != want {
+		t.Errorf("the challenge %q, want %q", got, want)
+	}
+	// Go's client reads Connection: close into Close, and drops the header.
+	if !resp.Close {
+		t.Error("the answer keeps the connection, want Connection: close")
+	}
+	if csp := header.Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Errorf("the Content-Security-Policy is %q", csp)
+	}
+}

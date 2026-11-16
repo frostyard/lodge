@@ -79,6 +79,10 @@ type Caller struct {
 	Principal string
 	Client    string
 	Expires   time.Time
+	// Refuse answers a request whose client lodge revoked after its token
+	// check: with lodge's own 401, its challenge and its headers. Without it,
+	// the answer is a plain 401.
+	Refuse func(w http.ResponseWriter) `json:"-"`
 }
 
 // callerKey carries a Caller in a request's context.
@@ -156,7 +160,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, done, cancelled := g.callContext(r.Context(), c)
 	defer done()
 	if cancelled {
-		// The client was revoked between lodge's check and this request.
+		// The client was revoked between lodge's check and this request: the
+		// answer is lodge's 401, as if the check had come after.
+		if c.Refuse != nil {
+			c.Refuse(w)
+			return
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
