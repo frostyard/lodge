@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the resync record of a consumer that passed a gap",
+  "correction": "The resync check wrote the consumer's last known position before it published the resync event. A publish that failed therefore moved the record past the gap, and no later check sent the event: the client never learned that its state was stale. The check now answers the position and writes nothing on the gap path; the record moves only once the event is stored, or once a pending event is confirmed, and a failed publish leaves it where it was.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: resyncNeeded recorded the position before publishResync, so a failed publish lost the resync",
+  "promoted_to": "internal/broker TestAResyncWhosePublishFailsKeepsTheRecord"
+}

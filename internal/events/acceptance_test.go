@@ -1133,3 +1133,64 @@ func TestRestartRevokesAClientItCannotRead(t *testing.T) {
 		t.Error("the tokens check names a client that is gone")
 	}
 }
+
+// TestRestoreCancelledRevokesNothing checks a start that lodge stops while
+// Restore reads the OAuth client of a restored subscription: it revokes
+// nothing, keeps the subscription and its consumer, and admits no client.
+func TestRestoreCancelledRevokesNothing(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	h.restart(t)
+
+	read, release := h.auth.blockNextClient()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- h.svc.Restore(ctx) }()
+	// The restore is inside the client's read: lodge stops.
+	<-read
+	cancel()
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Restore of a cancelled start answered %v, want context.Canceled", err)
+	}
+	select {
+	case <-h.svc.Ready():
+		t.Fatal("a cancelled start admitted clients")
+	default:
+	}
+	// The client keeps its subscription and its consumer.
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 1 || subs[0].Sub != "s1" {
+		t.Errorf("the broker holds the subscriptions %+v, want s1 alone", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err != nil {
+		t.Errorf("the consumer of a cancelled start: %v", err)
+	}
+}
+
+// TestRestoreOfACancelledStartAdmitsNothing checks the first check of Restore:
+// a start that is stopped before it restores anything admits no client, and
+// still holds nothing to restore.
+func TestRestoreOfACancelledStartAdmitsNothing(t *testing.T) {
+	h := newHarness(t)
+	h.restart(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := h.svc.Restore(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Restore answered %v, want context.Canceled", err)
+	}
+	select {
+	case <-h.svc.Ready():
+		t.Fatal("a cancelled start admitted clients")
+	default:
+	}
+}

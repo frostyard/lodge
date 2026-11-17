@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the record of a consumer that a subscription puts again",
+  "correction": "A subscription that was put again overwrote its consumer's last known position with the consumer's current 1. A client whose pull had passed a retention gap therefore lost the only record of that gap, and got no resync event. The birth of a consumer now records its position only when there is none, or when the new 1 is lower: an update never raises the record.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: SubscribeWith overwrote the position record of an existing consumer",
+  "promoted_to": "internal/broker TestARePutKeepsThePositionRecord"
+}

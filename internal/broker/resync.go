@@ -53,9 +53,24 @@ func (b *Broker) Resync(ctx context.Context, client string) error {
 		// consumer, from 2 connections or a connection and the sweep, would
 		// otherwise both see no resync event pending, and publish 2.
 		b.resyncMu.Lock()
-		needed, err := b.resyncNeeded(ctx, ref)
+		during := b.duringResyncCheck
+		if during != nil {
+			during()
+		}
+		needed, next, err := b.resyncNeeded(ctx, ref)
 		if err == nil && needed {
-			err = b.publishResync(ctx, ref)
+			if hook := b.beforeResyncPublish; hook != nil {
+				err = hook()
+			}
+			if err == nil {
+				err = b.publishResync(ctx, ref)
+			}
+			// The record moves only once the event is stored: a publish that
+			// fails leaves it where it was, and the next check sends the event
+			// again.
+			if err == nil {
+				b.notePosition(ctx, ref, next)
+			}
 		}
 		b.resyncMu.Unlock()
 		if err != nil {
@@ -83,9 +98,10 @@ func (b *Broker) ResyncAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// resyncNeeded reports whether ref's consumer missed messages that its
-// stream dropped, and has no resync event pending. It records the position
-// that the check leaves the consumer at.
+// resyncNeeded reports whether ref's consumer missed messages that its stream
+// dropped, and has no resync event pending. It answers the position that the
+// check leaves the consumer at, which the caller records once the event is
+// stored.
 //
 // The consumer's info is read first, and the stream's after it: a stream that
 // drops messages in between makes the check see 1 gap too many, which is the
@@ -93,79 +109,53 @@ func (b *Broker) ResyncAll(ctx context.Context) error {
 // never showed it, so a gap it can no longer see is found from lodge's record
 // of its last known position. That record is only a lower bound of what the
 // client has passed: a false resync is allowed, a missing 1 is not.
-func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, error) {
+func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, uint64, error) {
 	c, err := b.js.Consumer(ctx, ref.stream, ref.consumer)
 	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
-		b.forgetPositionLocked(ref)
-		return false, nil
+		b.forgetPosition(ctx, ref)
+		return false, 0, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
+		return false, 0, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
 	}
 	info, err := c.Info(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
+		return false, 0, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
 	}
 	st, err := b.js.Stream(ctx, ref.stream)
 	if err != nil {
-		return false, fmt.Errorf("read the stream %s: %w", ref.stream, err)
+		return false, 0, fmt.Errorf("read the stream %s: %w", ref.stream, err)
 	}
 	state, err := st.Info(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read the stream %s: %w", ref.stream, err)
+		return false, 0, fmt.Errorf("read the stream %s: %w", ref.stream, err)
 	}
 	delivered, first := info.Delivered.Stream, state.State.FirstSeq
-	passed := b.knownPositionLocked(ref, delivered)
+	passed := b.position(ref)
 	if delivered+1 >= first && passed+1 >= first {
-		// It is at the stream's first message, or past it.
-		b.notePositionLocked(ref, delivered)
-		return false, nil
+		// It is at the stream's first message, or past it. The record moves
+		// up to it, in the bucket too: a bucket that kept the birth position
+		// would send every consumer a resync event after each start, once its
+		// stream has dropped that position.
+		if delivered > passed {
+			b.notePosition(ctx, ref, delivered)
+		}
+		return false, delivered, nil
 	}
-	// A resync event that the consumer has not read yet is pending, and
-	// covers everything that the stream dropped until then.
+	// The client reads its state again when it reads the event: everything the
+	// stream dropped so far is covered by then.
+	next := max(delivered, first-1)
+	// A resync event that the consumer has not read yet is pending, and covers
+	// everything that the stream dropped until then.
 	last, err := st.GetLastMsgForSubject(ctx, ResyncSubject(appOf(ref.stream), ref.consumer))
 	if err != nil && !errors.Is(err, jetstream.ErrMsgNotFound) {
-		return false, fmt.Errorf("read the resync event of %s: %w", ref.consumer, err)
+		return false, 0, fmt.Errorf("read the resync event of %s: %w", ref.consumer, err)
 	}
-	// The client reads its state again when it reads the event: everything
-	// the stream dropped so far is covered.
-	b.notePositionLocked(ref, max(delivered, first-1))
 	if err == nil && last.Sequence > delivered {
-		return false, nil
+		b.notePosition(ctx, ref, next)
+		return false, next, nil
 	}
-	return true, nil
-}
-
-// notePosition records seq as the last known stream position of ref.
-func (b *Broker) notePosition(ref consumerRef, seq uint64) {
-	b.resyncMu.Lock()
-	defer b.resyncMu.Unlock()
-	b.notePositionLocked(ref, seq)
-}
-
-// notePositionLocked is notePosition under resyncMu, which the caller holds.
-func (b *Broker) notePositionLocked(ref consumerRef, seq uint64) { b.positions[ref] = seq }
-
-// forgetPosition drops what lodge knows of ref's position: its consumer is
-// gone.
-func (b *Broker) forgetPosition(ref consumerRef) {
-	b.resyncMu.Lock()
-	defer b.resyncMu.Unlock()
-	b.forgetPositionLocked(ref)
-}
-
-// forgetPositionLocked is forgetPosition under resyncMu, which the caller
-// holds.
-func (b *Broker) forgetPositionLocked(ref consumerRef) { delete(b.positions, ref) }
-
-// knownPositionLocked answers the last known stream position of ref, and
-// delivered when lodge has none: delivered is what the consumer itself
-// answers.
-func (b *Broker) knownPositionLocked(ref consumerRef, delivered uint64) uint64 {
-	if p, ok := b.positions[ref]; ok {
-		return p
-	}
-	return delivered
+	return true, next, nil
 }
 
 // publishResync publishes 1 resync event on ref's consumer's subject, in the

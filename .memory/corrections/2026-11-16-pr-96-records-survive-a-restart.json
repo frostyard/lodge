@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the position records across a start",
+  "correction": "The positions of the consumers lived in memory alone, so a start began with no record, fell back to each consumer's own position, and lost every gap that a pull had passed before the stop. lodge now keeps them in the key-value bucket lodge_positions, in its own account, which no client and no app reaches, and a start seeds each consumer from it, and every check moves the bucket up to where the consumer is: a consumer with no record is taken as being at position 0.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: the position records were in memory only and were lost at a start",
+  "promoted_to": "internal/broker TestThePositionRecordSurvivesARestart, TestAConsumerWithNoRecordGetsTheResync, TestAConsumerThatKeptUpGetsNoResyncAfterARestart and TestThePositionBucketIsOutOfReach; docs/adr/0022, docs/specs/lodge-http.md"
+}

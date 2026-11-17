@@ -194,27 +194,35 @@ var errRestoreRevoked = errors.New("the restored client is revoked")
 //
 // A client that lodge cannot read, that no principal is bound to, or that
 // holds no scope events is revoked: the filter that the store brought back
-// cannot be trusted, so it fails closed. A refilter that fails revokes too,
-// as a grant change's does. A cancelled start is not a grant's fault: it stops
-// and admits no client at all.
+// cannot be trusted, so it fails closed. A refilter that fails revokes too, as
+// a grant change's does.
+//
+// A cancelled start is not a grant's fault: it revokes nothing, and it admits
+// no client at all, so the next start does the work again.
 func (s *Service) Restore(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var errs []error
 	revoked := map[string]bool{}
 	for _, sub := range s.o.Broker.Subscriptions() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if revoked[sub.Client] {
 			continue
 		}
 		// Each subscription has its own budget: 1 that hangs does not take
-		// the others' time.
+		// the others' time. A budget that runs out is a store that does not
+		// answer, which fails closed, but a cancelled start is lodge's own.
 		sctx, cancel := context.WithTimeout(ctx, opTimeout)
-		err := s.restoreOne(sctx, sub)
+		err := s.restoreOne(ctx, sctx, sub)
 		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		switch {
 		case err == nil:
-		case ctx.Err() != nil:
-			// Lodge is stopping: its cancelled reads say nothing about a
-			// grant, so nothing is revoked, and no client is admitted.
-			return ctx.Err()
 		case errors.Is(err, errRestoreRevoked):
 			revoked[sub.Client] = true
 			errs = append(errs, err)
@@ -225,23 +233,26 @@ func (s *Service) Restore(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	// Every failure above is closed, so clients are admitted whatever came
-	// of them.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Every failure above is closed, so clients are admitted whatever came of
+	// them.
 	s.markReady()
 	return errors.Join(errs...)
 }
 
 // restoreOne puts 1 restored subscription back in step with the grant of its
-// client's principal. A client that it cannot trust is revoked, and the
-// answer wraps errRestoreRevoked.
-func (s *Service) restoreOne(ctx context.Context, sub broker.Subscription) error {
+// client's principal, within call's budget. A client that it cannot trust is
+// revoked, and the answer wraps errRestoreRevoked. A cancelled start revokes
+// nothing: its failed reads say nothing about a grant.
+func (s *Service) restoreOne(parent, call context.Context, sub broker.Subscription) error {
 	id, ok := ClientID(sub.Client)
 	if !ok {
 		err := fmt.Errorf("client %q is not an OAuth client's id: %w", sub.Client, ErrNotFound)
-		s.revoke(sub.Client)
-		return fmt.Errorf("%w: %w", errRestoreRevoked, err)
+		return s.restoreFailure(parent, sub.Client, err)
 	}
-	c, err := s.o.OAuth.Client(ctx, id)
+	c, err := s.o.OAuth.Client(call, id)
 	switch {
 	case err != nil:
 		err = fmt.Errorf("read the OAuth client of %s: %w", sub.Client, err)
@@ -251,12 +262,26 @@ func (s *Service) restoreOne(ctx context.Context, sub broker.Subscription) error
 		err = fmt.Errorf("client %s has no scope %s", sub.Client, oauth.ScopeEvents)
 	}
 	if err != nil {
-		// The filter it came back with may be wider than its grant: it never
-		// reads a message before a start has read the grant store.
-		s.revoke(sub.Client)
-		return fmt.Errorf("%w: %w", errRestoreRevoked, err)
+		return s.restoreFailure(parent, sub.Client, err)
 	}
-	return s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(c.Principal))
+	if err := s.o.Broker.Refilter(call, sub.Client, sub.Sub, s.refilter(c.Principal)); err != nil {
+		if parent.Err() != nil {
+			return parent.Err()
+		}
+		return err
+	}
+	return nil
+}
+
+// restoreFailure answers a restored subscription whose client cannot be
+// trusted: the filter that the store brought back may be wider than its grant,
+// so the client is revoked. A cancelled start revokes nothing.
+func (s *Service) restoreFailure(parent context.Context, client string, err error) error {
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	s.revoke(client)
+	return fmt.Errorf("%w: %w", errRestoreRevoked, err)
 }
 
 // Subscribe gives the client of access the subscription sub, which takes the

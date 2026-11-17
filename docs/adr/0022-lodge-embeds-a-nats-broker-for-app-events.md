@@ -222,9 +222,13 @@
     the stream's first message is past it, lodge publishes the resync
     event at the next check: when the client connects, before its
     `CONNECT` line reaches the server, and every consumer each minute.
-    That check is conservative: a consumer near the end of retention can
-    get a resync event it did not strictly need, but no gap goes
-    unreported.
+    The positions live in a key-value bucket of lodge's own account,
+    `lodge_positions`, which no client and no app reaches, so they
+    outlive a start. A consumer that has no record after a start is
+    taken as being at position 0. The record moves only once the resync
+    event is stored. That check is conservative: a consumer near the end
+    of retention can get a resync event it did not strictly need, but no
+    gap goes unreported.
 - [specs/lodge-http.md](../specs/lodge-http.md#the-broker) and
   [specs/app-contract.md](../specs/app-contract.md#events) pin it, and
   [design/overview.md](../design/overview.md#events) shows where it fits.

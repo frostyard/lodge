@@ -342,6 +342,8 @@ type fakeOAuth struct {
 	armed   bool
 	read    chan struct{}
 	release chan struct{}
+	// blockLookup makes the next client read wait, until its release.
+	blockLookup bool
 	// failing and grantErr make the next grant reads fail, failApp and
 	// failAppN the next reads of 1 app, and lookups the next client reads.
 	failing   int
@@ -484,14 +486,33 @@ func (f *fakeOAuth) failGrants(n int, err error) {
 
 func (f *fakeOAuth) Client(_ context.Context, id string) (oauth.Client, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.lookups > 0 {
 		f.lookups--
-		return oauth.Client{}, f.lookupErr
+		err := f.lookupErr
+		f.mu.Unlock()
+		return oauth.Client{}, err
 	}
 	c, ok := f.clients[id]
+	blocked, read, release := f.blockLookup, f.read, f.release
+	f.blockLookup = false
+	f.mu.Unlock()
+	// The read has begun, and waits: a test cancels the start in this window.
+	if blocked {
+		close(read)
+		<-release
+	}
 	if !ok || !c.Revoked.IsZero() {
 		return oauth.Client{}, oauth.ErrNotFound
 	}
 	return c, nil
+}
+
+// blockNextClient makes the next read of a client signal read before it
+// answers, and wait for the answer's release.
+func (f *fakeOAuth) blockNextClient() (read, release chan struct{}) {
+	read, release = make(chan struct{}), make(chan struct{})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockLookup, f.read, f.release = true, read, release
+	return read, release
 }

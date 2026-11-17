@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events: a start that lodge stops while Restore runs",
+  "correction": "Restore revoked a client, and admitted every client, when its context was cancelled: a stop during the restore was taken for a store that does not answer. So a cancelled start turned a healthy client into a revoked 1, and closed the door's wait at once. Restore now checks its context at the start, before each subscription and before it admits clients; a cancelled start returns the context's error, revokes nothing and admits nobody, and a per-subscription budget that runs out while the start is alive still fails closed.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: a cancelled restore revoked a client and marked the service ready",
+  "promoted_to": "internal/events TestRestoreCancelledRevokesNothing and TestRestoreOfACancelledStartAdmitsNothing"
+}

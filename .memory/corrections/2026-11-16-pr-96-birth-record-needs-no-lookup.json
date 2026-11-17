@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the position a consumer is made at",
+  "correction": "The birth of a consumer read its position with a second call to the server, and a read that failed left no record at all. The create's own answer is cached on the consumer, so the birth now records its position from that, and 0 when it is not cached: no lookup, and no path that leaves the record unset.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: the birth record made a separate Info lookup whose failure only logged",
+  "promoted_to": "internal/broker TestTheBirthPositionIsRecorded"
+}

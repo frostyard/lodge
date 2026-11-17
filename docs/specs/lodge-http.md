@@ -930,8 +930,12 @@ consumer itself.
   the server never showed it. So the check is conservative: when the
   stream's first message is past the last known position, lodge publishes
   the resync event at the next check, at the client's connection or
-  within the minute, even after a pull passed the gap. A consumer near the
-  end of retention can get a resync event it did not strictly need.
+  within the minute, even after a pull passed the gap. The positions are
+  kept in a key-value bucket of lodge's own account, `lodge_positions`,
+  which no client and no app reaches; a consumer with no record after a
+  start is taken as being at position 0, and a record moves only after the
+  resync event is stored. A consumer near the end of retention can get a
+  resync event it did not strictly need.
 
 ### OAuth routes
 

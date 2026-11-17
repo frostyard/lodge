@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the locks of the position records and the resync check",
+  "correction": "The position records were guarded by the resync check's lock, so deleting a consumer's record waited for a check that was under way, and a revoke, which has a 1 s budget, could fail to delete its consumers and keep them for a later try. The records now have a lock of their own, held only for the map and never across a call to JetStream or to the bucket, and the bucket's delete has the caller's budget.",
+  "evidence": "cross-review of frostyard/lodge#96 at a0d5c6a: forgetting a position took the resync lock, which a revoke should never wait for",
+  "promoted_to": "internal/broker TestRevokeDoesNotWaitForAResyncCheck"
+}
