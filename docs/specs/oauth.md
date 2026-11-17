@@ -320,6 +320,9 @@ A request is what the consent page shows and an admin decides.
 
 ### The grants page
 
+The shell links to it as `Agent access`, in a new top-level page and never
+in a frame ([shell.md](shell.md#agent-access)).
+
 `GET /oauth/grants`, after the consent checks, lists:
 
 - each live principal: its name, when it was made, its last use, its grant

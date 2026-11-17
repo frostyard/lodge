@@ -2,7 +2,8 @@
 
 What lodge's shell page draws and does: the rail, the switcher and its
 shortcut, the frames, the address bar and history, app states, badges, the
-theme, the safe area and the companion. Its consumers:
+link to agent access, the theme, the safe area and the companion. Its
+consumers:
 
 - `shell/`, which implements it;
 - every app, which learns from it what the shell around its frame does.
@@ -29,7 +30,7 @@ and built in the roadmap's
 [Phase 6](../plans/0001-roadmap.md#phase-6--the-companion-and-the-agent-socket).
 [Badges](#badges) were added on 2026-11-02
 ([ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md),
-Proposed).
+Proposed). [Agent access](#agent-access) was added on 2026-11-16.
 
 ## Interface
 
@@ -37,7 +38,7 @@ Proposed).
 
 | Width | Chrome | The app's frame |
 | --- | --- | --- |
-| 600 CSS pixels and wider | a rail at the left edge, 48 pixels wide: one button per installed app (icon, its state, its name as a tooltip), then lodge's own state | fills the rest |
+| 600 CSS pixels and wider | a rail at the left edge, 48 pixels wide: one button per installed app (icon, its state, its name as a tooltip), then at its foot the companion's button, the [Agent access](#agent-access) link, lodge's own state and the menu | fills the rest |
 | narrower than 600 | a bar at the top, 36 pixels high (44 on a coarse pointer, for its buttons): the current app's icon and name, which opens the switcher on a tap, and lodge's state | fills the rest |
 
 - Apps in the rail and the switcher are ordered by `name`.
@@ -118,7 +119,8 @@ resolve the light or dark value from the `data-theme` the shell sets
   - Alt+1 to 9, which Firefox on Linux uses for tabs.
 - **What it shows:** a list of the installed apps (icon, name, the
   manifest's `key`, state), with the current app marked and a filter
-  field.
+  field. Under the list, outside it, is the
+  [Agent access](#agent-access) link.
 - **Keys while it is open:**
 
   | Key | Does |
@@ -205,6 +207,38 @@ The shell reads it with the states, so it is at most about 30 s old.
   when the sum is 0. It calls neither where the browser lacks them, and
   ignores their failures. The first read always sets it, so a stale count
   from the last visit is replaced.
+
+### Agent access
+
+The grants page, `/oauth/grants`, is where an admin reads and revokes
+what agents may reach ([lodge-http.md](lodge-http.md#oauth-routes),
+[oauth.md](oauth.md#the-grants-page)). The shell links to it, so the owner
+need not type its URL on a phone.
+
+- **Where it shows.** A link named `Agent access`, drawn as a key:
+  - at the foot of the rail, under the companion's button and above
+    lodge's state, with its name as its tooltip;
+  - in the switcher, under the list of apps and outside it, with its
+    name as text. The list's keys (Up, Down, Enter, an app's `key`) never
+    reach it; Tab does. A click on it closes the switcher.
+
+  The narrow bar has no link of its own: a tap on the bar opens the
+  switcher, which has it.
+- **How it opens.** In a new top-level browsing context: an `<a>` with
+  `href="/oauth/grants"`, `target="_blank"` and `rel="noopener
+  noreferrer"`. It never opens in a frame. The page answers
+  `frame-ancestors 'none'` and `X-Frame-Options: DENY`
+  ([lodge-http.md](lodge-http.md#oauth-routes)), so a frame cannot show
+  it, and a same-tab navigation would unload every app's frame
+  ([Rules](#rules)). The link is a same-origin top-level navigation, which
+  the consent routes' fetch-metadata check admits.
+- **Who sees it.** The rule: the link shows only to an admin when a route
+  the shell already reads says whether the login is one; else it shows to
+  every user, and the page enforces its own access. `/lodge/apps`, the only
+  route the shell reads, does not say it, and the shell adds no route to
+  learn it, so today every user sees the link. A login that is not an
+  admin gets the page's refusal, which names the step (`lodgectl allow
+  admin LOGIN`).
 
 ### Theme
 
@@ -297,7 +331,11 @@ The messages are [lodge-client.md's](lodge-client.md#the-companion).
 ## Rules
 
 - The shell has no session of its own and changes nothing on lodge. It
-  reads `/lodge/apps` and serves frames.
+  reads `/lodge/apps` and serves frames. The
+  [Agent access](#agent-access) link only navigates to a page of lodge's.
+- The grants page never opens in a frame: the Agent access link opens it
+  as a top-level page, and goes through none of the shell's frame paths.
+  A test checks it.
 - The shell's own local storage keys start with `lodge:`.
 - A frame is never unloaded on purpose while the page lives.
 - The switcher's default shortcut collides with none of the ruled-out keys

@@ -325,6 +325,9 @@ served for `/`, `/<id>` and `/<id>/<route>`.
 - It talks to frames only through lodge-client
   ([lodge-client.md](../specs/lodge-client.md)), keeps the address bar on
   canonical URLs, and owns history.
+- Its Agent access link, on the rail and in the switcher, opens the grants
+  page, `/oauth/grants`, in a new top-level page, never in a frame
+  ([shell.md](../specs/shell.md#agent-access)).
 
 **The companion** is the one app whose manifest sets
 `companion: true`: Porter, whose chat is its main surface

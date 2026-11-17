@@ -36,6 +36,9 @@ import type { Settings } from "./storage.js";
 /** How often the rail is read while the page is visible. */
 export const POLL_EVERY = 15_000;
 
+/** The grants page: where the owner reads and revokes agent access. It cannot be framed, so it opens in a new tab. */
+export const GRANTS_PATH = "/oauth/grants";
+
 /** The companion's panel width, and how far its sheet's handle is dragged to close it, in CSS pixels. */
 export const PANEL_WIDTH = 400;
 export const SHEET_CLOSE_DRAG = 80;
@@ -92,6 +95,37 @@ interface View {
 }
 
 type HistoryState = { lodge: 1; app: string; route: string };
+
+/** grantsLink makes a link to the grants page that opens a top-level page in a new tab, never an app frame. */
+function grantsLink(doc: Document, cls: string, ...children: (Node | string)[]): HTMLAnchorElement {
+  return h(doc, "a", { class: cls, href: GRANTS_PATH, target: "_blank", rel: "noopener noreferrer" }, ...children);
+}
+
+/** keyIcon draws a small key, with no innerHTML. */
+function keyIcon(doc: Document): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = doc.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({
+    width: "20",
+    height: "20",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "1.8",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": "true",
+  }))
+    svg.setAttribute(k, v);
+  const circle = doc.createElementNS(ns, "circle");
+  circle.setAttribute("cx", "8");
+  circle.setAttribute("cy", "15");
+  circle.setAttribute("r", "4");
+  const path = doc.createElementNS(ns, "path");
+  path.setAttribute("d", "M11 12l9-9m-3 3l3 3m-6 0l2 2");
+  svg.append(circle, path);
+  return svg;
+}
 
 /** h makes an element. Text goes in as text, never as HTML. */
 function h<K extends keyof HTMLElementTagNameMap>(
@@ -196,9 +230,20 @@ export class LodgeShell {
       d,
       "div",
       { class: "switcher", role: "dialog", "aria-modal": "true", "aria-label": "Switch app", hidden: "" },
-      h(d, "div", { class: "switcher-box" }, this.#filter, this.#list),
+      h(
+        d,
+        "div",
+        { class: "switcher-box" },
+        this.#filter,
+        this.#list,
+        // Outside the listbox, so the list's keys do not change. The browser follows the link.
+        this.#switcherLink(d),
+      ),
     );
     this.#menu = this.#buildMenu();
+    const grants = grantsLink(d, "grants-link", keyIcon(d));
+    grants.setAttribute("aria-label", "Agent access");
+    grants.setAttribute("title", "Agent access");
     const state = () => h(d, "span", { class: "lodge-state", role: "status", title: "lodge is reachable" });
     const menuButton = () =>
       h(
@@ -225,7 +270,7 @@ export class LodgeShell {
       "nav",
       { class: "rail", "aria-label": "Apps" },
       this.#railApps,
-      h(d, "div", { class: "rail-end" }, railCompanion, state(), menuButton()),
+      h(d, "div", { class: "rail-end" }, railCompanion, grants, state(), menuButton()),
     );
     this.#bar = h(
       d,
@@ -858,6 +903,12 @@ export class LodgeShell {
     this.#switcher.hidden = false;
     this.#drawList();
     this.#filter.focus();
+  }
+
+  #switcherLink(d: Document): HTMLAnchorElement {
+    const a = grantsLink(d, "switcher-link", "Agent access");
+    a.addEventListener("click", () => this.closeSwitcher(false));
+    return a;
   }
 
   closeSwitcher(focusFrame = true): void {

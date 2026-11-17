@@ -850,3 +850,51 @@ describe("badges", () => {
     await expect(s.shell.poll()).resolves.toBeUndefined();
   });
 });
+
+describe("agent access", () => {
+  const check = (a: Element | null) => {
+    expect(a?.getAttribute("href")).toBe("/oauth/grants");
+    expect(a?.getAttribute("target")).toBe("_blank");
+    expect(a?.getAttribute("rel")).toContain("noopener");
+  };
+
+  it("has one rail link, with and without a companion", async () => {
+    for (const r of [rail, withCompanion]) {
+      await setup("/notes", { rail: r });
+      const links = document.querySelectorAll(".rail .grants-link");
+      expect(links).toHaveLength(1);
+      check(links[0] ?? null);
+      expect(links[0]?.getAttribute("aria-label")).toBe("Agent access");
+    }
+  });
+
+  it("has a switcher link outside the listbox, and a click closes the switcher", async () => {
+    const s = await setup("/notes");
+    window.dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    expect(s.shell.switcherOpen).toBe(true);
+    const link = document.querySelector<HTMLAnchorElement>(".switcher-link");
+    check(link);
+    expect(link?.textContent).toBe("Agent access");
+    expect(link?.closest("[role=listbox]")).toBeNull();
+    link?.addEventListener("click", (e) => e.preventDefault());
+    link?.click();
+    expect(s.shell.switcherOpen).toBe(false);
+  });
+
+  it("never frames the grants page or changes history", async () => {
+    const s = await setup("/notes");
+    const frames = document.querySelectorAll("iframe").length;
+    const hist = history.length;
+    window.dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    for (const sel of [".switcher-link", ".grants-link"]) {
+      const a = document.querySelector<HTMLAnchorElement>(sel);
+      a?.addEventListener("click", (e) => e.preventDefault());
+      a?.click();
+    }
+    expect(s.shell.switcherOpen).toBe(false);
+    const all = [...document.querySelectorAll("iframe")];
+    expect(all).toHaveLength(frames);
+    expect(all.some((f) => f.src.includes("/oauth/grants"))).toBe(false);
+    expect(history.length).toBe(hist);
+  });
+});

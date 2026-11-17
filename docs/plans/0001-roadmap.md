@@ -514,6 +514,10 @@ It checks Phases 7 to 9 from end to end: [oauth.md](../specs/oauth.md),
   a PR of its own, after a kit tag
   ([shell.md](../specs/shell.md#badges)).
 - Settings in the shell (sessions, tokens), over a WebSocket of lodge's own.
+  Its first step is built (2026-11-16): the shell's
+  [Agent access](../specs/shell.md#agent-access) link, on the rail and in
+  the switcher, opens the grants page as a top-level page, with no new
+  route.
 - The inference layer in a process of its own, behind the same socket.
 - **frostread, the third app.** [frostyard/frostread](https://github.com/frostyard/frostread)
   is the reader: RSS, Atom and JSON feeds, and read-later, as lodge app
