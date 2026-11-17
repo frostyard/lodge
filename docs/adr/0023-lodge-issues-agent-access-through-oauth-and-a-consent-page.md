@@ -66,6 +66,16 @@
   limited by the client's scope. Revoking a client ends its tokens;
   revoking a principal ends all its clients and deletes its grants. All
   of it is in lodge's database in `/var/lib/lodge/`.
+- **A grant item holds for 1 major version of its app.** An approval
+  stores, with each item, the compatibility line of the app's hearth
+  manifest `version` when the request was made: `MAJOR`, or `0.MINOR` for
+  a version `0.y.z`, the line in which hearth allows no breaking change
+  ([hearth ADR-0004](https://github.com/frostyard/hearth/blob/main/docs/adr/0004-generate-the-manifest-from-protobuf-options.md)).
+  An item is in force only while the app is on that line. A new line
+  takes it out of force, for the gateway and the broker at once, until an
+  admin approves it again on the consent page; the grants page shows it
+  as waiting. A request made on an old line can only be declined. An item
+  stored with no line is in force for none.
 - **The consent page amends 2 rules of lodge-http.md.** "No browser route
   writes" gains 1 exception, and "issuing a token … happen only on the
   control socket" gains 1 exception: the consent routes, under these
@@ -132,6 +142,11 @@
   adds a login.
 - Nothing changes for frostnotes, frostmail, Porter and the PocketJournal
   until each moves to the gateway in its own change.
+- **An app's major version costs 1 consent per principal.** A breaking
+  change of a capability, a selector or a topic cannot reach a grant that
+  an admin approved for the old meaning. The cost is 1 new
+  `request_access` and 1 approval after each new major version. A grant
+  approved before lodge recorded the line needs that approval once.
 
 ## Alternatives considered
 
@@ -144,6 +159,12 @@
   lodge is the only resource, and revocation must take effect at once.
 - **Any allowed login approves:** every program on an allowed device signs
   in as its owner, so the approval needs a smaller list.
+- **Keep a grant across an app's major version:** no new consent, but an
+  item would keep its old capability name while the app changed what it
+  means, which is the change the manifest diff calls breaking.
+- **Stamp an old item with the app's line at lodge's first start:** no
+  new consent for a grant made before the line was recorded, but lodge
+  cannot know the version the admin approved; it would guess.
 - **A cookie and a session for the pages:** lodge sets no cookie on any
   browser response; the per-request CSRF token and WhoIs do the same work
   with no new state in the browser.

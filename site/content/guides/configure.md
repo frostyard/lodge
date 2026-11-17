@@ -130,6 +130,13 @@ requests that wait for you. It revokes a client or a whole principal,
 and their tokens stop at once. **Remove** beside an item of a grant takes
 that item away, and the agent's next call no longer has it.
 
+A grant holds for 1 major version of its app (for a version `0.y.z`, 1
+minor version). When you install the app's next major version, its old
+grants stop at once: the agent loses those tools and events, and the
+grants page marks each item **not in force**. The agent asks again with
+`request_access`, and you approve it again. A request that the agent made
+before the new version can only be declined.
+
 ## The MCP gateway for agents
 
 Apps built on [hearth](https://github.com/frostyard/hearth) have no

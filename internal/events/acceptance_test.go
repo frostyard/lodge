@@ -439,6 +439,41 @@ func TestRefilterAfterAnEmptyGrant(t *testing.T) {
 	}
 }
 
+// TestAppsChangedRefilters checks a reload's refilter: a grant that a new
+// manifest takes out of force, such as an app's next major version, leaves
+// each subscription with its resync subject alone at once, without a grant
+// change's hook or a sweep, and a grant back in force reads again.
+func TestAppsChangedRefilters(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// The grant the service reads gives nothing now, as after the app's
+	// next major version; only the reload says so.
+	h.auth.grant("chani", marksApp, nil)
+	h.svc.AppsChanged()
+	state, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"lodge.marks.resync." + sub.Consumer}; !slices.Equal(state.Filters, want) {
+		t.Fatalf("the consumer's filters after the reload are %q, want %q alone", state.Filters, want)
+	}
+	// A new consent and a reload: the folder is read again.
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f1")})
+	h.svc.AppsChanged()
+	state, err = h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(state.Filters, "marks.bookmark.created.folder.f1") {
+		t.Errorf("the consumer's filters are %q, want f1's", state.Filters)
+	}
+}
+
 // TestTooManyFilters checks that a grant too wide for 1 consumer is an
 // invalid request, and that a narrower topic fits.
 func TestTooManyFilters(t *testing.T) {

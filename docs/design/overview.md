@@ -258,6 +258,11 @@ server, so a standard MCP client signs in without a token copied by hand.
   broker. `/mcp/<id>` with `lgm_` tokens is unchanged.
 - The grants page also removes 1 item of a grant, which narrows it without
   a new sign-in.
+- A grant item holds for 1 line of its app's version (`MAJOR`, or
+  `0.MINOR` before 1.0.0): the app's next major version takes it out of
+  force until an admin approves it again
+  ([ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md),
+  [specs/oauth.md](../specs/oauth.md#principals-clients-and-grants)).
 
 **The MCP gateway**
 ([ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md);

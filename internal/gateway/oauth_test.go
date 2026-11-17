@@ -98,7 +98,7 @@ func newOAuthHarnessWith(t *testing.T, opts func(*oauth.Options)) *oauthHarness 
 	apptest.InstallShell(t, root, map[string]string{"index.html": "<!doctype html><title>Lodge</title>"})
 	apptest.Install(t, root, "notes", map[string]any{"name": "Notes", "mcp": true}, nil)
 	dir := apptest.Install(t, root, "marks", map[string]any{"name": "Marks", "hearth": "hearth.json"}, nil)
-	if err := os.WriteFile(filepath.Join(dir, "hearth.json"), []byte(`{"hearth":1,"app":"marks",`+
+	if err := os.WriteFile(filepath.Join(dir, "hearth.json"), []byte(`{"hearth":1,"app":"marks","version":"1.0.0",`+
 		`"capabilities":["marks:read","marks:write"],"selectors":["folder","tag"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

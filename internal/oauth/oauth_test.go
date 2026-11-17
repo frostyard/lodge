@@ -49,7 +49,8 @@ func testServerWith(t *testing.T, opts func(*Options)) (*Server, *clock) {
 	t.Cleanup(func() { db.Close() })
 	c := &clock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}
 	marks := apps.App{ID: "marks", Manifest: apps.Manifest{ID: "marks", Name: "Marks"},
-		Hearth: &apps.Hearth{Capabilities: []string{"marks:read", "marks:write"}, Selectors: []string{"folder"}}}
+		Hearth: &apps.Hearth{Version: "0.1.0", Major: "0.1", Capabilities: []string{"marks:read", "marks:write"},
+			Selectors: []string{"folder"}}}
 	plain := apps.App{ID: "plain", Manifest: apps.Manifest{ID: "plain", Name: "Plain"}}
 	options := Options{DB: db, Apps: fakeApps{"marks": marks, "plain": plain},
 		Issuer: func() string { return "https://lodge.example" }, Now: c.now}
@@ -523,10 +524,10 @@ func TestGrantAdd(t *testing.T) {
 		t.Fatalf("an absent grant = %+v, %v", granted, err)
 	}
 	one := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}
-	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one}, "0.1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one, {Cap: "marks:write"}}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{one, {Cap: "marks:write"}}, "0.1"); err != nil {
 		t.Fatal(err)
 	}
 	granted, err := s.Grant(ctx, "chani", "marks")
@@ -535,11 +536,101 @@ func TestGrantAdd(t *testing.T) {
 	}
 	// A narrowed path is another item.
 	narrowed := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading/Inbox"}}
-	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{narrowed}); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{narrowed}, "0.1"); err != nil {
 		t.Fatal(err)
 	}
 	if granted, _ := s.Grant(ctx, "chani", "marks"); len(granted) != 3 {
 		t.Errorf("a narrowed path did not add an item: %+v", granted)
+	}
+}
+
+// TestGrantMajor checks that a grant item is in force only for the app's
+// compatibility line that its approval was for: an app's new major version
+// stops it until a new consent, which puts it in force again without a
+// duplicate (docs/specs/oauth.md, Principals, clients and grants; hearth
+// ADR-0004, Compatibility).
+func TestGrantMajor(t *testing.T) {
+	var installed fakeApps
+	s, _ := testServerWith(t, func(o *Options) { installed = o.Apps.(fakeApps) })
+	ctx := t.Context()
+	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
+		t.Fatal(err)
+	}
+	at := func(version, major string) {
+		a := installed["marks"]
+		h := *a.Hearth
+		h.Version, h.Major = version, major
+		a.Hearth = &h
+		installed["marks"] = a
+	}
+	read := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{read}, "0.1"); err != nil {
+		t.Fatal(err)
+	}
+	inForce := func(want int) {
+		t.Helper()
+		granted, err := s.Grant(ctx, "chani", "marks")
+		if err != nil || len(granted) != want {
+			t.Fatalf("Grant = %+v, %v; want %d items", granted, err, want)
+		}
+	}
+	inForce(1)
+	// A patch of a 0.y app is the same line.
+	at("0.1.7", "0.1")
+	inForce(1)
+	// The app's next major version: the old grant gives nothing.
+	at("0.2.0", "0.2")
+	inForce(0)
+	// A request made for the old line cannot be approved for the new one.
+	if err := sameMajor(installed["marks"], Request{App: "marks", Major: "0.1"}); err == nil ||
+		err.Error() != "app marks is at version 0.2.0, and this request was made for 0.1: decline it, and ask again" {
+		t.Errorf("an old request on the new line = %v", err)
+	}
+	if err := sameMajor(installed["marks"], Request{App: "marks", Major: "0.2"}); err != nil {
+		t.Errorf("a request on the app's line = %v", err)
+	}
+	// A new consent puts the item in force again, with no duplicate.
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{read}, "0.2"); err != nil {
+		t.Fatal(err)
+	}
+	inForce(1)
+	stored, err := s.store.grants(ctx, "chani")
+	if err != nil || len(stored["marks"]) != 1 || stored["marks"][0].Major != "0.2" {
+		t.Errorf("the stored grant = %+v, %v; want 1 item for 0.2", stored, err)
+	}
+	// Going back to the old line does not bring the old consent back.
+	at("0.1.9", "0.1")
+	inForce(0)
+	// An app that is gone has no item in force.
+	delete(installed, "marks")
+	inForce(0)
+	// An approval always names a line.
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{read}, ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an approval with no major version = %v, want ErrInvalid", err)
+	}
+}
+
+// TestGrantWithoutMajor checks that an item stored before lodge recorded the
+// app's line is in force for no line, and that a new consent stamps it.
+func TestGrantWithoutMajor(t *testing.T) {
+	s, _ := testServer(t)
+	ctx := t.Context()
+	if err := s.makePrincipal(ctx, s.db, "chani"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO grants (principal, app, items, updated_at)
+		VALUES ('chani', 'marks', ?, '2026-11-16T12:00:00Z')`, `[{"cap":"marks:read","sel":{"folder":"/Reading"}}]`); err != nil {
+		t.Fatal(err)
+	}
+	if granted, err := s.Grant(ctx, "chani", "marks"); err != nil || len(granted) != 0 {
+		t.Fatalf("a grant without a line = %+v, %v; want nothing in force", granted, err)
+	}
+	read := Item{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}
+	if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{read}, "0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if granted, err := s.Grant(ctx, "chani", "marks"); err != nil || len(granted) != 1 {
+		t.Errorf("the grant after a new consent = %+v, %v", granted, err)
 	}
 }
 
@@ -1861,7 +1952,7 @@ func TestRemoveGrantItem(t *testing.T) {
 			t.Fatal(err)
 		}
 		items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
-		if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+		if err := s.addGrant(ctx, s.db, "chani", "marks", items, "0.1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(items[0])); err != nil {
@@ -1878,7 +1969,7 @@ func TestRemoveGrantItem(t *testing.T) {
 	t.Run("the last item deletes the grant", func(t *testing.T) {
 		s := boundServer(t)
 		items := []Item{{Cap: "marks:read"}}
-		if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+		if err := s.addGrant(ctx, s.db, "chani", "marks", items, "0.1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(items[0])); err != nil {
@@ -1897,7 +1988,7 @@ func TestRemoveGrantItem(t *testing.T) {
 	})
 	t.Run("an unknown item", func(t *testing.T) {
 		s := boundServer(t)
-		if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{{Cap: "marks:read"}}); err != nil {
+		if err := s.addGrant(ctx, s.db, "chani", "marks", []Item{{Cap: "marks:read"}}, "0.1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.RemoveGrantItem(ctx, "chani", "marks", ItemHash(Item{Cap: "marks:write"})); !errors.Is(err, ErrNotFound) {
@@ -1930,7 +2021,7 @@ func TestGrantsPageItemForm(t *testing.T) {
 	ctx := t.Context()
 	s := boundServer(t)
 	items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
-	if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", items, "0.1"); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -1978,7 +2069,7 @@ func TestRevokeItemRoute(t *testing.T) {
 	ctx := t.Context()
 	s := boundServer(t)
 	items := []Item{{Cap: "marks:read", Sel: map[string]string{"folder": "/Reading"}}, {Cap: "marks:write"}}
-	if err := s.addGrant(ctx, s.db, "chani", "marks", items); err != nil {
+	if err := s.addGrant(ctx, s.db, "chani", "marks", items, "0.1"); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()

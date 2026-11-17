@@ -336,6 +336,38 @@ func (s *Service) GrantChanged(principal, app string) {
 	}
 }
 
+// AppsChanged is called after a reload: an app's manifest may have changed,
+// and with it what a grant reads there, its events, or its major version,
+// which takes every grant item of the old one out of force
+// (docs/specs/oauth.md, Principals, clients and grants). Every subscription
+// is refiltered at once from its principal's grant, as a sweep would do
+// within a minute; a refilter that fails closes as a grant change's does.
+func (s *Service) AppsChanged() {
+	for _, sub := range s.o.Broker.Subscriptions() {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		err := s.refilterAny(ctx, sub)
+		cancel()
+		if err != nil {
+			s.failClosed(sub.Client, sub.Sub, err)
+		}
+	}
+}
+
+// refilterAny refilters 1 subscription from the grant of its client's
+// principal. A client that cannot be named is an error: its subscription is
+// never left with the filters it had.
+func (s *Service) refilterAny(ctx context.Context, sub broker.Subscription) error {
+	id, ok := ClientID(sub.Client)
+	if !ok {
+		return fmt.Errorf("client %q is not an OAuth client's id: %w", sub.Client, ErrNotFound)
+	}
+	c, err := s.o.OAuth.Client(ctx, id)
+	if err != nil {
+		return fmt.Errorf("read the OAuth client of %s: %w", sub.Client, err)
+	}
+	return s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(c.Principal))
+}
+
 // refilterOne refilters 1 subscription when it belongs to principal. A
 // failure to name its client is an error: a subscription that may be
 // principal's is never left with the filters it had.

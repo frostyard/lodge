@@ -12,7 +12,7 @@ import (
 func TestHearthEvents(t *testing.T) {
 	root := t.TempDir()
 	dir := apptest.Install(t, root, "marks", map[string]any{"hearth": "hearth.json"}, nil)
-	hearth(t, dir, "hearth.json", `{"hearth":1,"app":"marks",
+	hearth(t, dir, "hearth.json", `{"hearth":1,"app":"marks","version":"1.0.0",
 		"capabilities":["marks:read","marks:write"],"selectors":["folder"],
 		"events":[
 			{"type":"org.frostyard.marks.bookmark.created","message":"marks.v1.BookmarkCreated",
@@ -39,7 +39,7 @@ func TestHearthEvents(t *testing.T) {
 // TestHearthEventDisabled checks each rule of a hearth manifest's events: a
 // broken one disables its app, and no other.
 func TestHearthEventDisabled(t *testing.T) {
-	const base = `{"hearth":1,"app":"a","capabilities":["a:read"],"selectors":["folder"],"events":[`
+	const base = `{"hearth":1,"app":"a","version":"1.0.0","capabilities":["a:read"],"selectors":["folder"],"events":[`
 	for name, c := range map[string]struct {
 		body   string
 		reason string
