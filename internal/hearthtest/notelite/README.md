@@ -1,7 +1,7 @@
 # notelite: hearth's example app, copied
 
 This directory is a copy of [frostyard/hearth](https://github.com/frostyard/hearth)'s
-`examples/notes-lite`, at tag `v0.1.0` (commit `d54bdb7`). hearth is MIT
+`examples/notes-lite`, at tag `v0.2.0` (commit `723cbc9`). hearth is MIT
 licensed; its `LICENSE` covers this copy.
 
 **Why it is copied.** The example is its own Go module (`example.com/notes-lite`),
@@ -21,9 +21,11 @@ and `dev/hearthapp` ([internal/repocheck](../../repocheck)'s test holds that).
 - `manifest.go` is new: it embeds `manifest.json`.
 - `notesv1/` holds the 4 generated files of
   `gen/example/notes/v1` byte for byte, and `manifest.json` is
-  `gen/manifest.json` byte for byte.
+  `gen/manifest.json` byte for byte. `notesv1/notesv1connect/notes.connect.go`
+  is the generated Connect route, with only the v1 import changed to
+  `github.com/frostyard/lodge/internal/hearthtest/notelite/notesv1`.
 - The example's own tests, `cmd/`, `proto/` and `Makefile` are not copied.
 
 `internal/hearthtest` serves it on an app's lodge socket: hearth's adapter, the
-4 Connect unary handlers, `GET /health`, and the tool catalog from
+generated Connect route, `GET /health`, and the tool catalog from
 `notesv1.NoteServiceTools`.

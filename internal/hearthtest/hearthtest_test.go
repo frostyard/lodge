@@ -3,6 +3,7 @@ package hearthtest_test
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -132,6 +133,49 @@ func TestConnect(t *testing.T) {
 	if err == nil || !asConnectError(err, &ce) || ce.Code() != connect.CodePermissionDenied ||
 		!strings.Contains(ce.Message(), "permission denied") {
 		t.Errorf("a refused call = %v", err)
+	}
+}
+
+// TestConnectRefusesOtherCallers checks that the app's Connect API admits the
+// caller kind principal only: a call without Lodge-Caller, or with another
+// kind, is 403 with 1 line, and the app records no caller (docs/specs/app-contract.md,
+// hearth's docs/specs/connect.md).
+func TestConnectRefusesOtherCallers(t *testing.T) {
+	root := t.TempDir()
+	app, r := start(t, root)
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", r.SocketPath(hearthtest.ID))
+	}}}
+	grant := base64.RawURLEncoding.EncodeToString([]byte(`[{"cap":"notelite:read"}]`))
+	for _, kind := range []string{"", "session", "agent", "device", "content"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			"http://"+hearthtest.ID+"/connect/example.notes.v1.NoteService/ListNotes", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if kind != "" {
+			req.Header.Set("Lodge-Caller", kind)
+		}
+		req.Header.Set("Lodge-Principal", "chani")
+		req.Header.Set("Lodge-Grant", grant)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(body), "forbidden: ") ||
+			strings.Count(string(body), "\n") != 1 {
+			t.Errorf("a call with the kind %q = %d %q, want 403 and 1 line that starts forbidden: ", kind, resp.StatusCode, body)
+		}
+	}
+	if kind, path := app.LastKind(), app.LastPath(); kind != "" || path != "" {
+		t.Errorf("the app recorded the kind %q on %q, want no caller", kind, path)
 	}
 }
 

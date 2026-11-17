@@ -24,10 +24,12 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/frostyard/hearth/authz"
+	"github.com/frostyard/hearth/connectserver"
 	hearthlodge "github.com/frostyard/hearth/lodge"
 
 	"github.com/frostyard/lodge/internal/hearthtest/notelite"
 	"github.com/frostyard/lodge/internal/hearthtest/notelite/notesv1"
+	"github.com/frostyard/lodge/internal/hearthtest/notelite/notesv1/notesv1connect"
 )
 
 // ID is the app's ID, which its manifest names.
@@ -35,9 +37,6 @@ const ID = "notelite"
 
 // Version is the app's version, which its manifest names.
 const Version = "0.1.0"
-
-// service is the app's Protobuf service, which its RPCs are under.
-const service = "example.notes.v1.NoteService"
 
 // Catalog is the app's tool catalog, in the shape of an MCP tools/list result:
 // 1 tool for each of its agent operations, with the description and the
@@ -132,8 +131,9 @@ func (a *App) LastCaller() (principal, grant string) {
 	return a.principal, a.grant
 }
 
-// LastKind is the caller kind of the app's last request: Lodge-Caller, such as
-// session, principal or agent.
+// LastKind is the caller kind of the app's last request: Lodge-Caller. hearth's
+// adapter admits only principal, so a request of another kind is refused before
+// it is recorded.
 func (a *App) LastKind() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -204,20 +204,31 @@ func Serve(ctx context.Context, l net.Listener, lodgeUID int, dbPath string) (*A
 	}
 	app := &App{db: db}
 	api := (&notelite.Service{DB: db, Notify: func() {}}).API()
-	mux := http.NewServeMux()
-	mux.Handle("/"+service+"/CreateNote", unary[notesv1.CreateNoteRequest, notesv1.CreateNoteResponse](
-		app, "/"+service+"/CreateNote", api.CreateNote))
-	mux.Handle("/"+service+"/DeleteNote", unary[notesv1.DeleteNoteRequest, notesv1.DeleteNoteResponse](
-		app, "/"+service+"/DeleteNote", api.DeleteNote))
-	mux.Handle("/"+service+"/GetNote", unary[notesv1.GetNoteRequest, notesv1.GetNoteResponse](
-		app, "/"+service+"/GetNote", api.GetNote))
-	mux.Handle("/"+service+"/ListNotes", unary[notesv1.ListNotesRequest, notesv1.ListNotesResponse](
-		app, "/"+service+"/ListNotes", api.ListNotes))
+	// Connect decodes the body before the unary interceptor runs, so a held
+	// RPC still sees its context end when lodge ends the call. HandlerOptions
+	// puts hearth's error mapping first, the outermost, and it keeps the
+	// *connect.Error that connectFailure returns here as it is.
+	interceptor := connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if err := app.wait(ctx); err != nil {
+				return nil, connect.NewError(connect.CodeCanceled, err)
+			}
+			res, err := next(ctx, req)
+			if err != nil {
+				return nil, connectFailure(err)
+			}
+			return res, nil
+		}
+	})
+	path, handler := notesv1connect.NewNoteServiceHandler(api,
+		connectserver.HandlerOptions(connect.WithInterceptors(interceptor))...)
+	inner := http.NewServeMux()
+	inner.Handle(path, handler)
 	root := http.NewServeMux()
 	root.HandleFunc("/health", health)
 	// The adapter trusts Lodge-Principal and Lodge-Grant on this socket only,
 	// after its peer check, so the app records them inside it (ADR-0024).
-	root.Handle("/connect/", hearthlodge.Handler(app.record(http.StripPrefix("/connect", mux))))
+	root.Handle(connectserver.LodgePrefix, connectserver.Lodge("/", app.record(inner)))
 	app.Server = &http.Server{Handler: root, ConnContext: hearthlodge.ConnContext,
 		ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -241,27 +252,11 @@ func (a *App) record(next http.Handler) http.Handler {
 			a.mu.Lock()
 			a.kind = r.Header.Get("Lodge-Caller")
 			a.principal, a.grant = r.Header.Get(hearthlodge.PrincipalHeader), r.Header.Get(hearthlodge.GrantHeader)
-			a.path = r.URL.Path
+			// The adapter strips /connect before it reaches this handler.
+			a.path = "/connect" + r.URL.Path
 			a.mu.Unlock()
 		}
 		next.ServeHTTP(w, r)
-	})
-}
-
-// unary serves 1 RPC with the Connect unary protocol, path procedure, and maps
-// the app's error to a Connect error. It is where a test's hold stops an RPC,
-// after Connect has read the body, so that its context ends when lodge ends the
-// call.
-func unary[Req, Res any](a *App, procedure string, call func(context.Context, *Req) (*Res, error)) http.Handler {
-	return connect.NewUnaryHandler(procedure, func(ctx context.Context, req *connect.Request[Req]) (*connect.Response[Res], error) {
-		if err := a.wait(ctx); err != nil {
-			return nil, connect.NewError(connect.CodeCanceled, err)
-		}
-		res, err := call(ctx, req.Msg)
-		if err != nil {
-			return nil, connectFailure(err)
-		}
-		return connect.NewResponse(res), nil
 	})
 }
 

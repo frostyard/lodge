@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	connectrpc.com/connect v1.21.1
 	github.com/coder/websocket v1.8.15
-	github.com/frostyard/hearth v0.1.0
+	github.com/frostyard/hearth v0.2.0
 	github.com/frostyard/lodge/kit v0.0.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/nats-server/v2 v2.15.3
