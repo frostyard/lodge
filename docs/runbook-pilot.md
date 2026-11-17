@@ -44,6 +44,13 @@ The parts that the run uses:
 
 Check each item. A missing item is not a failed line: fix it first.
 
+The grants page is `https://LODGE/oauth/grants`. With lodge v0.6.0 and
+later, open it from lodge's shell: select **Agent access**, the key at the
+foot of the rail, or on a phone the last row of the switcher (a tap on the
+bar opens it). It opens in a new tab
+([shell.md](specs/shell.md#agent-access)). With an earlier lodge, type the
+address.
+
 1. lodge v0.5.0 or later and frostmarks v0.1.0 or later run on lodge's
    host ([packaging/README.md](../packaging/README.md#update) records the
    release of lodge that the host runs).
@@ -51,11 +58,12 @@ Check each item. A missing item is not a failed line: fix it first.
    `lodgectl apps` lists `marks` with version `0.1.0` or later and state
    `up`.
 2. The owner's login is a lodge admin.
-   Expected: `https://LODGE/oauth/grants` opens and lists the principals.
+   Expected: **Agent access** opens the grants page, which lists the
+   principals.
    A refusal names the step (`lodgectl allow admin LOGIN`).
 3. Chani's gateway entry is on and signed in, and Chani holds no grant.
    Expected: Pi Pocket > Menu > MCP shows `chani-lodge` on and signed in.
-   `https://LODGE/oauth/grants` lists principal `chani` with client
+   The grants page (**Agent access**) lists principal `chani` with client
    `Chani`, scope `mcp`, and no grant item on any app. An approval adds
    items to a grant and never replaces it, so an item from an earlier run
    changes the results of L1. Write down each item that `chani` holds,
@@ -201,7 +209,7 @@ the write tools. Removing every item removes all `marks_<tool>` tools and
 leaves the consumer only its resync subject, but the bridge's subscription
 stays open.
 
-1. Open `https://LODGE/oauth/grants`. At principal `chani`, select
+1. Open the grants page (**Agent access**). At principal `chani`, select
    **Revoke**.
    Expected: the page reloads, and `chani` is no longer in the list of
    principals.
@@ -278,7 +286,7 @@ back to a loopback address on that computer.
    `/pilot`. The update call is a tool error that starts with
    `insufficient_scope: principal inspector holds no marks:write for app
    marks`, and the bookmark does not change.
-6. Clean up. On `https://LODGE/oauth/grants`, at principal `inspector`,
+6. Clean up. On the grants page (**Agent access**), at principal `inspector`,
    select **Revoke**. Then run `mcpdo @lodge tools/list`.
    Expected: the call fails. mcpdo reports an auth error, or starts a new
    sign-in: on lodge's consent page, select **Decline**. Then run
