@@ -381,9 +381,15 @@ unless the `broker` member of `/etc/lodge/config.json` turns it off.
   events and narrowed to that prefix
   ([lodge-http.md](../specs/lodge-http.md#event-subscriptions)). A grant
   change refilters the consumer in place, and a revoke deletes it.
-- A consumer whose position is before its stream's first message gets 1
-  `org.frostyard.lodge.resync` event, checked when its client connects and
-  each minute.
+- A consumer whose position, or whose last known position, is before its
+  stream's first message gets 1 `org.frostyard.lodge.resync` event,
+  checked when its client connects and each minute. lodge keeps each
+  consumer's last known position, so a client that stays connected and
+  pulls past a gap still gets the event.
+- After a start, lodge refilters every subscription that the store brought
+  back before `/nats` admits a client, and revokes a client it cannot
+  read: a grant change commits before its hook runs, so a stored filter
+  may be wider than the grant.
 - Built in [roadmap — Phase 9](../plans/0001-roadmap.md#phase-9--grant-driven-events).
 
 ### Inference

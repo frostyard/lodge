@@ -1027,3 +1027,170 @@ func TestAClientLookupFailureDuringActivationIs503(t *testing.T) {
 		t.Errorf("the broker holds the consumer %q", client+"-s1")
 	}
 }
+
+// TestRestartRefiltersBeforeAdmission checks a stop between a grant change's
+// commit and its hook: the consumer that the store brings back keeps the
+// wider filter, and lodge refilters it from the grant store before /nats
+// admits a client.
+func TestRestartRefiltersBeforeAdmission(t *testing.T) {
+	h := newHarness(t)
+	_, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// The grant narrows, and lodge stops between the store's commit and the
+	// hook: no GrantChanged runs, so the consumer keeps the wider filter.
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	h.restart(t)
+
+	stored, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatalf("the restored consumer: %v", err)
+	}
+	if want := "marks.bookmark.created.folder"; !slices.Contains(stored.Filters, want) {
+		t.Fatalf("the restored consumer's filters are %q, want the wider %q", stored.Filters, want)
+	}
+	// No client is admitted before Restore.
+	select {
+	case <-h.svc.Ready():
+		t.Fatal("the service is ready before Restore")
+	default:
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, ok := h.svc.Tokens(cancelled, token); ok {
+		t.Fatal("the tokens check named a client before Restore")
+	}
+
+	if err := h.svc.Restore(t.Context()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	select {
+	case <-h.svc.Ready():
+	default:
+		t.Fatal("the service is not ready after Restore")
+	}
+	// The consumer takes the grant as the store has it now.
+	state, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer)
+	if err != nil {
+		t.Fatalf("the consumer after Restore: %v", err)
+	}
+	if slices.Contains(state.Filters, "marks.bookmark.created.folder") ||
+		!slices.Contains(state.Filters, "marks.bookmark.created.folder.f3") {
+		t.Fatalf("the consumer's filters after Restore are %q, want f3's alone", state.Filters)
+	}
+	// The event of a folder outside the grant never reaches the client, and
+	// the 1 inside it does.
+	h.publish(t, "marks.bookmark.created.folder.f1")
+	h.publish(t, "marks.bookmark.created.folder.f3")
+	nc := h.subscribed(t, token)
+	msgs := pull(t, nc, "app_marks", sub.Consumer, 2, 500*time.Millisecond)
+	if len(msgs) != 1 || !strings.HasSuffix(msgs[0].Subject, ".folder.f3") {
+		t.Fatalf("the pull answered %d messages, want the f3 event alone", len(msgs))
+	}
+}
+
+// TestRestartRevokesAClientItCannotRead checks the fail-closed side: a client
+// that OAuth revoked while lodge was stopped, with no hook to say so, is
+// revoked at the restore, because its stored filter cannot be trusted.
+func TestRestartRevokesAClientItCannotRead(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// The client goes while lodge is stopped: nothing tells the broker.
+	h.auth.revokeClient(id)
+	h.restart(t)
+
+	if err := h.svc.Restore(t.Context()); err == nil {
+		t.Error("Restore answered no error for a client it revoked")
+	}
+	select {
+	case <-h.svc.Ready():
+	default:
+		t.Error("the service is not ready after Restore")
+	}
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 0 {
+		t.Errorf("the broker keeps the subscriptions %+v", subs)
+	}
+	wait(t, func() (bool, error) {
+		if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err == nil {
+			return false, errNotYet
+		}
+		return true, nil
+	})
+	// The old token names no client.
+	if _, _, ok := h.svc.Tokens(t.Context(), token); ok {
+		t.Error("the tokens check names a client that is gone")
+	}
+}
+
+// TestRestoreCancelledRevokesNothing checks a start that lodge stops while
+// Restore reads the OAuth client of a restored subscription: it revokes
+// nothing, keeps the subscription and its consumer, and admits no client.
+func TestRestoreCancelledRevokesNothing(t *testing.T) {
+	h := newHarness(t)
+	id, token := h.auth.newClient(t, "chani", "events")
+	h.auth.grant("chani", marksApp, []oauth.Item{marksRead("/f3")})
+	sub, err := h.svc.Subscribe(t.Context(), h.access(t, token), "s1", "marks.bookmark.created")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	h.restart(t)
+
+	read, release := h.auth.blockNextClient()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- h.svc.Restore(ctx) }()
+	// The restore is inside the client's read: lodge stops.
+	<-read
+	cancel()
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Restore of a cancelled start answered %v, want context.Canceled", err)
+	}
+	select {
+	case <-h.svc.Ready():
+		t.Fatal("a cancelled start admitted clients")
+	default:
+	}
+	// The client keeps its subscription and its consumer.
+	name, ok := events.ClientName(id)
+	if !ok {
+		t.Fatalf("ClientName(%q) is refused", id)
+	}
+	if subs := h.b.ClientSubscriptions(name); len(subs) != 1 || subs[0].Sub != "s1" {
+		t.Errorf("the broker holds the subscriptions %+v, want s1 alone", subs)
+	}
+	if _, err := h.b.ConsumerState(t.Context(), "app_marks", sub.Consumer); err != nil {
+		t.Errorf("the consumer of a cancelled start: %v", err)
+	}
+}
+
+// TestRestoreOfACancelledStartAdmitsNothing checks the first check of Restore:
+// a start that is stopped before it restores anything admits no client, and
+// still holds nothing to restore.
+func TestRestoreOfACancelledStartAdmitsNothing(t *testing.T) {
+	h := newHarness(t)
+	h.restart(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := h.svc.Restore(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Restore answered %v, want context.Canceled", err)
+	}
+	select {
+	case <-h.svc.Ready():
+		t.Fatal("a cancelled start admitted clients")
+	default:
+	}
+}

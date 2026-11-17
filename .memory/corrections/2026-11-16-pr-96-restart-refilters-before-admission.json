@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events: the filters of a subscription that a start brings back",
+  "correction": "A start restored each consumer with the filters the store held, and /nats admitted clients at once, while the first refilter ran a minute later. A grant change commits in the store before its hook runs, so a stop between the 2 left a consumer whose filter was wider than the grant, and a client could read events outside it. lodge now runs Restore before its first sweep: it refilters every restored subscription from the grant store, revokes a client it cannot read (fail closed), and admits no client until it has finished.",
+  "evidence": "T1913 whole-plan check, finding 1 on t8 at lodge main c3fe29e: restored consumers kept their stored filters; RemoveGrantItem commits before onGrant, and /nats admitted clients before the first sweep",
+  "promoted_to": "internal/events TestRestartRefiltersBeforeAdmission and TestRestartRevokesAClientItCannotRead; docs/adr/0022, docs/specs/lodge-http.md"
+}

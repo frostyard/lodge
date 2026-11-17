@@ -172,7 +172,9 @@ grant on 1 folder gives that folder's events, and no other.
   the agent has not received yet do not reach it. When you revoke the
   client or the principal, its events stop at once.
 - An agent away for more than 7 days, or 1 GiB behind, gets 1 `resync`
-  event when it comes back: it then reads the app's state again.
+  event when it comes back: it then reads the app's state again. An agent
+  that stays connected and keeps reading gets it too, as soon as lodge
+  sees that the stream dropped events the agent did not read.
 
 The
 [HTTP spec](https://github.com/frostyard/lodge/blob/main/docs/specs/lodge-http.md#event-subscriptions)

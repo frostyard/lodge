@@ -440,3 +440,125 @@ func TestResyncPublishesOneEventForConcurrentChecks(t *testing.T) {
 		t.Errorf("the stream's last message is %d, and the resync event is at %d", info.State.LastSeq, last.Sequence)
 	}
 }
+
+// TestResyncAfterAPullPassesTheGap checks a gap that a pull on an open
+// connection passed: the consumer's own position is past the gap, and lodge's
+// record of its last known position still finds it.
+func TestResyncAfterAPullPassesTheGap(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	nc, _ := h.client(t, "chani", "tok-chani")
+	for range 3 {
+		published(t, h.b.js, "marks.x", "e")
+	}
+	// Retention drops the 3 events that the consumer never saw, as a stream's
+	// limit does, and 1 more event is there for it.
+	h.purge(t, "app_marks", 4)
+	published(t, h.b.js, "marks.x", "e4")
+
+	// The pull takes e4, and with it the position the gap was visible from.
+	msgs := pull(t, nc, "app_marks", "chani-s1", 1)
+	if got := string(msgs[0].Data); got != "e4" {
+		t.Fatalf("the pull answered %q, want e4", got)
+	}
+	noErr(t, msgs[0].Ack())
+	// The consumer's own position is past the gap that retention made.
+	delivered := wait(t, func() (uint64, error) {
+		info := h.consumer(t, "app_marks", "chani-s1")
+		if info.Delivered.Stream != 4 {
+			return 0, errNotYet
+		}
+		return info.Delivered.Stream, nil
+	})
+	first := wait(t, func() (uint64, error) {
+		state, err := h.b.StreamState(t.Context(), "marks")
+		if err != nil {
+			return 0, err
+		}
+		if state.FirstSeq != 4 {
+			return 0, errNotYet
+		}
+		return state.FirstSeq, nil
+	})
+	if delivered+1 < first {
+		t.Fatalf("the consumer is still before the gap: delivered %d, first %d", delivered, first)
+	}
+
+	// The check finds the gap from lodge's record, and the client's next pull
+	// answers the resync event.
+	noErr(t, h.b.ResyncAll(t.Context()))
+	msgs = pull(t, nc, "app_marks", "chani-s1", 1)
+	if want := ResyncSubject("marks", "chani-s1"); msgs[0].Subject != want {
+		t.Errorf("the pull after the gap answered %q, want %q", msgs[0].Subject, want)
+	}
+	// A second check publishes nothing: the resync event is still pending.
+	before := h.msgs(t, "app_marks")
+	noErr(t, h.b.ResyncAll(t.Context()))
+	if after := h.msgs(t, "app_marks"); after != before {
+		t.Errorf("a second check published %d messages, want none", after-before)
+	}
+}
+
+// TestResyncFindsTheGapOfAConsumerBornBeforeIt checks a consumer that no
+// check saw before it pulled: it was made after its client's last connection,
+// so the only record of where it started is the position lodge noted at its
+// birth, and that position still finds the gap that its pull passed.
+func TestResyncFindsTheGapOfAConsumerBornBeforeIt(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	for range 3 {
+		published(t, h.b.js, "marks.x", "e")
+	}
+	h.purge(t, "app_marks", 4)
+	published(t, h.b.js, "marks.x", "e4")
+	// Lodge's own connection pulls, as a client's bridge does: the consumer's
+	// position moves past the gap, and no client's check has seen it yet.
+	msgs := pull(t, h.own(t), "app_marks", "chani-s1", 1)
+	if got := string(msgs[0].Data); got != "e4" {
+		t.Fatalf("the pull answered %q, want e4", got)
+	}
+	before := h.msgs(t, "app_marks")
+
+	noErr(t, h.b.ResyncAll(t.Context()))
+	if after := h.msgs(t, "app_marks"); after != before+1 {
+		t.Fatalf("the check published %d messages, want the 1 resync event", after-before)
+	}
+	st, err := h.b.js.Stream(t.Context(), "app_marks")
+	noErr(t, err)
+	last, err := st.GetLastMsgForSubject(t.Context(), ResyncSubject("marks", "chani-s1"))
+	noErr(t, err)
+	if last.Sequence == 0 {
+		t.Error("the check published no resync event for a consumer that passed a gap")
+	}
+}
+
+// TestResyncSkipsAConsumerThatKeptUp checks the other side: a consumer that
+// read every event before retention dropped them, and so passed no gap, gets
+// no resync event.
+func TestResyncSkipsAConsumerThatKeptUp(t *testing.T) {
+	h := newHarness(t)
+	noErr(t, h.b.Subscribe(t.Context(), "chani", "s1", "marks", []string{"marks.>"}))
+	nc, _ := h.client(t, "chani", "tok-chani")
+	for range 3 {
+		published(t, h.b.js, "marks.x", "e")
+	}
+	for _, m := range pull(t, nc, "app_marks", "chani-s1", 3) {
+		noErr(t, m.Ack())
+	}
+	wait(t, func() (uint64, error) {
+		if info := h.consumer(t, "app_marks", "chani-s1"); info.Delivered.Stream != 3 {
+			return 0, errNotYet
+		}
+		return 3, nil
+	})
+	// A check while the stream is whole records the position it kept up to.
+	noErr(t, h.b.ResyncAll(t.Context()))
+	// Retention drops what it already read: its position is at the stream's
+	// first message, and nothing is before it.
+	h.purge(t, "app_marks", 4)
+	before := h.msgs(t, "app_marks")
+	noErr(t, h.b.ResyncAll(t.Context()))
+	if after := h.msgs(t, "app_marks"); after != before {
+		t.Errorf("the check published %d messages for a consumer that kept up, want none", after-before)
+	}
+}

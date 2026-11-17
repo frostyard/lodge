@@ -190,6 +190,13 @@
     the broker:
     its connections close and its consumers go, and it subscribes again.
     A consumer never keeps filters wider than the grant it was last told.
+  - **A start refilters before it admits a client.** A grant change
+    commits in the store and then calls its hook, which is 2 steps: a
+    stop between the 2 leaves a consumer whose stored filter is wider
+    than the grant, and the first sweep is a minute away. So after a
+    start lodge refilters every subscription from the grant store, and
+    `/nats` admits no client until that has finished. A client it cannot
+    read at that point is revoked: the stored filter cannot be trusted.
   - An event delivered before the change and not acknowledged may come
     again: JetStream redelivers by sequence, not by filter. It was
     readable when it was delivered.
@@ -209,10 +216,20 @@
   tells it to read the state again through the app's API. lodge sends no
   second one while the first is pending: a consumer's check and publish
   run 1 at a time.
-  - JetStream moves a consumer's position only when it serves a pull, and
-    after that pull the gap cannot be seen. So lodge checks a client's
-    consumers when it connects, before its `CONNECT` line reaches the
-    server, and every consumer each minute.
+  - lodge keeps each consumer's last known stream position. A pull moves
+    the consumer's own position, and a gap that the pull passed is no
+    longer visible there, so the recorded position is what finds it. When
+    the stream's first message is past it, lodge publishes the resync
+    event at the next check: when the client connects, before its
+    `CONNECT` line reaches the server, and every consumer each minute.
+    The positions live in a key-value bucket of lodge's own account,
+    `lodge_positions`, which no client and no app reaches, so they
+    outlive a start. A consumer that has no record after a start is
+    taken as being at position 0. A check that finds no gap moves the
+    record up to the consumer's position; a check that finds a gap moves
+    it only once the resync event is stored, or one is pending. That check is conservative: a consumer near the end
+    of retention can get a resync event it did not strictly need, but no
+    gap goes unreported.
 - [specs/lodge-http.md](../specs/lodge-http.md#the-broker) and
   [specs/app-contract.md](../specs/app-contract.md#events) pin it, and
   [design/overview.md](../design/overview.md#events) shows where it fits.
@@ -243,9 +260,11 @@
 - **Retention is a limit, not a promise.** A consumer away for more than
   7 days, or more than 1 GiB behind, loses events, and learns it from 1
   resync event. A client that stays connected and keeps pulling while its
-  backlog ages out can pass the gap between 2 checks of lodge's, and get
-  no resync: the limit is sized so that an agent that reads at all is
-  never that far behind.
+  backlog ages out passes the gap in the consumer's own position, and
+  lodge still sends the resync event at its next check, because it keeps
+  the consumer's last known position. That check is conservative: a
+  consumer near the end of retention can get a resync event it did not
+  strictly need.
 - **Revoking a client is lodge's:** its connections close first, its
   consumers go within 1 s, and nothing of its is left to read. A deletion
   that cannot finish yet is lodge's to retry, not a consumer's to keep.

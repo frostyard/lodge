@@ -223,8 +223,18 @@ type Broker struct {
 
 	// resyncMu makes each consumer's resync check and its publish 1 step, so
 	// that 2 checks cannot both find no resync event pending and publish 2.
-	// It is never held with b.mu.
+	// A caller that holds b.mu or posMu takes no resyncMu: its order is
+	// resyncMu, then b.mu or posMu, and the 2 never wait for a resync check.
 	resyncMu sync.Mutex
+	// posMu guards positions alone, and it is never held across a call to
+	// JetStream or to the bucket.
+	posMu sync.Mutex
+	// positions are each consumer's last known stream position, which is a
+	// lower bound of what its client has passed. posMu guards them, and the
+	// bucket of positions keeps them across a start.
+	positions map[consumerRef]uint64
+	// kv is the bucket of positions, which a start makes.
+	kv jetstream.KeyValue
 
 	// peerUID reads a connection's peer uid (SO_PEERCRED); a test
 	// replaces it.
@@ -260,6 +270,13 @@ type Broker struct {
 	// subscription's one-app check has passed, and before its consumer is
 	// made.
 	afterOneAppCheck func()
+	// beforeResyncPublish, when set, is a test's barrier: it runs inside the
+	// resync check of a consumer that needs a resync event, before the
+	// publish, and its error takes the place of the publish's.
+	beforeResyncPublish func() error
+	// duringResyncCheck, when set, is a test's barrier: it runs inside
+	// resyncMu, before a consumer's check and publish.
+	duringResyncCheck func()
 	// beforeActivate, when set, is a test's barrier: it runs once a new
 	// subscription is registered, and before its activation, inside the
 	// client's lifecycle lock.
@@ -300,6 +317,7 @@ func New(o Options) *Broker {
 		exports:          map[string]map[string]bool{},
 		imports:          map[string]map[string]bool{},
 		conns:            map[string]map[*conn]struct{}{},
+		positions:        map[consumerRef]uint64{},
 		refused:          map[int]time.Time{},
 		now:              time.Now,
 	}
@@ -350,6 +368,10 @@ func (b *Broker) Start(ctx context.Context) error {
 		}
 	}
 	if err := b.connect(); err != nil {
+		b.Close()
+		return err
+	}
+	if err := b.makePositions(ctx); err != nil {
 		b.Close()
 		return err
 	}
@@ -608,7 +630,7 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 	if err := b.addImports(acc, ref); err != nil {
 		return nil, err
 	}
-	if _, err := b.js.CreateOrUpdateConsumer(ctx, ref.stream, jetstream.ConsumerConfig{
+	consumer, err := b.js.CreateOrUpdateConsumer(ctx, ref.stream, jetstream.ConsumerConfig{
 		Durable:           ref.consumer,
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverNewPolicy,
@@ -616,8 +638,18 @@ func (b *Broker) SubscribeWith(ctx context.Context, spec Spec, filters func(ctx 
 		MaxRequestExpires: PullExpires,
 		MaxRequestBatch:   PullBatch,
 		Metadata:          map[string]string{MetadataClient: client, MetadataSub: sub, MetadataTopic: spec.Topic},
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("subscribe %s to %s: %w", client, app, err)
+	}
+	// The position it is made at is a lower bound of what its client has
+	// passed: a pull moves it past a gap that no check saw, and this record
+	// still finds that gap. The create's own answer is enough, and a consumer
+	// that is made again never raises the record.
+	if info := consumer.CachedInfo(); info != nil {
+		b.seedPosition(ctx, ref, info.Delivered.Stream)
+	} else {
+		b.seedPosition(ctx, ref, 0)
 	}
 	// A revoke that ran meanwhile took the client and its consumers: this
 	// one is nobody's, and it goes again.
@@ -712,6 +744,7 @@ func (b *Broker) unsubscribeLocked(ctx context.Context, client, sub string) erro
 	if err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return fmt.Errorf("unsubscribe %s/%s: %w", client, sub, err)
 	}
+	b.forgetPosition(ctx, *ref)
 	// A revoke that ran meanwhile removed the client, so there is nothing
 	// left to take out of the index.
 	b.mu.Lock()
@@ -822,6 +855,7 @@ func (b *Broker) deleteRefs(ctx context.Context, refs []consumerRef) ([]consumer
 		wg.Go(func() {
 			err := b.js.DeleteConsumer(ctx, ref.stream, ref.consumer)
 			if err == nil || errors.Is(err, jetstream.ErrConsumerNotFound) {
+				b.forgetPosition(ctx, ref)
 				return
 			}
 			mu.Lock()
@@ -1005,7 +1039,7 @@ func (b *Broker) rebuild(ctx context.Context) error {
 		}
 		consumers := st.ListConsumers(ctx)
 		for ci := range consumers.Info() {
-			if err := b.restore(stream, ci); err != nil {
+			if err := b.restore(ctx, stream, ci); err != nil {
 				return err
 			}
 		}
@@ -1020,7 +1054,7 @@ func (b *Broker) rebuild(ctx context.Context) error {
 }
 
 // restore puts one stored consumer back in the index.
-func (b *Broker) restore(stream string, info *jetstream.ConsumerInfo) error {
+func (b *Broker) restore(ctx context.Context, stream string, info *jetstream.ConsumerInfo) error {
 	client, sub := info.Config.Metadata[MetadataClient], info.Config.Metadata[MetadataSub]
 	if client == "" || sub == "" {
 		return nil
@@ -1048,6 +1082,16 @@ func (b *Broker) restore(stream string, info *jetstream.ConsumerInfo) error {
 	}
 	c.topics[sub] = topic
 	b.mu.Unlock()
+	// The position it comes back with is the 1 that lodge last recorded for it,
+	// because a pull may have moved the consumer past a gap in its absence. A
+	// consumer that has no record is at 0: the check after this start then sends
+	// the resync event when the stream has dropped anything, which is the safe
+	// side, and happens once after the upgrade.
+	if seq, ok := b.storedPosition(ctx, ref); ok {
+		b.setPosition(ref, seq)
+	} else {
+		b.setPosition(ref, 0)
+	}
 	return nil
 }
 

@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/events tests: the restore of a cancelled start",
+  "correction": "The test of a cancelled restore blocked the OAuth client lookup, but the fake answered a live client after the cancel, so the test passed without the guard that keeps a cancelled start from revoking: the refilter after it failed on the cancelled context and returned before any revoke. The fake's blocked lookup now fails with its context's error, as a store's read does, so the test reaches the revoke path and fails when the guard is removed.",
+  "evidence": "cross-review of frostyard/lodge#96 at a72a307, re-review 1: TestRestoreCancelledRevokesNothing did not exercise the lookup-error path of restoreFailure",
+  "promoted_to": "internal/events TestRestoreCancelledRevokesNothing, with fakeOAuth.Client failing a blocked lookup with ctx.Err()"
+}

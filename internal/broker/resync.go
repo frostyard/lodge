@@ -21,15 +21,17 @@ import (
 const resyncTimeout = 2 * time.Second
 
 // Resync publishes 1 resync event for each of client's consumers that
-// retention overtook: a consumer whose position is older than the first
-// message its stream still holds never saw the messages that went, so it
-// gets 1 event that says its state is stale (docs/specs/lodge-http.md, The
-// broker).
+// retention overtook: a consumer whose position, or whose last known position,
+// is older than the first message its stream still holds never saw the
+// messages that went, so it gets 1 event that says its state is stale
+// (docs/specs/lodge-http.md, The broker).
 //
 // A resync event that is still pending for a consumer is not published
-// again. The server moves a consumer's position only when it serves a pull,
-// so a resync is published while the gap is still visible: on the client's
-// connection, before the server serves it, and in the sweep.
+// again. The server moves a consumer's position when it serves a pull, so a
+// gap that a pull passed is found from lodge's own record of the consumer's
+// last known position, which it notes when the consumer is made, when a start
+// restores it, and at each check: when the client connects, before the server
+// serves it, and in the sweep.
 func (b *Broker) Resync(ctx context.Context, client string) error {
 	if err := validateName("client", client); err != nil {
 		return err
@@ -51,9 +53,24 @@ func (b *Broker) Resync(ctx context.Context, client string) error {
 		// consumer, from 2 connections or a connection and the sweep, would
 		// otherwise both see no resync event pending, and publish 2.
 		b.resyncMu.Lock()
-		needed, err := b.resyncNeeded(ctx, ref)
+		during := b.duringResyncCheck
+		if during != nil {
+			during()
+		}
+		needed, next, err := b.resyncNeeded(ctx, ref)
 		if err == nil && needed {
-			err = b.publishResync(ctx, ref)
+			if hook := b.beforeResyncPublish; hook != nil {
+				err = hook()
+			}
+			if err == nil {
+				err = b.publishResync(ctx, ref)
+			}
+			// The record moves only once the event is stored: a publish that
+			// fails leaves it where it was, and the next check sends the event
+			// again.
+			if err == nil {
+				b.notePosition(ctx, ref, next)
+			}
 		}
 		b.resyncMu.Unlock()
 		if err != nil {
@@ -81,40 +98,64 @@ func (b *Broker) ResyncAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// resyncNeeded reports whether ref's consumer missed messages that its
-// stream dropped, and has no resync event pending.
-func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, error) {
+// resyncNeeded reports whether ref's consumer missed messages that its stream
+// dropped, and has no resync event pending. It answers the position that the
+// check leaves the consumer at, which the caller records once the event is
+// stored.
+//
+// The consumer's info is read first, and the stream's after it: a stream that
+// drops messages in between makes the check see 1 gap too many, which is the
+// safe side. A pull moves the consumer's position past a gap that the server
+// never showed it, so a gap it can no longer see is found from lodge's record
+// of its last known position. That record is only a lower bound of what the
+// client has passed: a false resync is allowed, a missing 1 is not.
+func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, uint64, error) {
 	c, err := b.js.Consumer(ctx, ref.stream, ref.consumer)
 	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
-		return false, nil
+		b.forgetPosition(ctx, ref)
+		return false, 0, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
+		return false, 0, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
 	}
 	info, err := c.Info(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
+		return false, 0, fmt.Errorf("read the consumer %s of %s: %w", ref.consumer, ref.stream, err)
 	}
 	st, err := b.js.Stream(ctx, ref.stream)
 	if err != nil {
-		return false, fmt.Errorf("read the stream %s: %w", ref.stream, err)
+		return false, 0, fmt.Errorf("read the stream %s: %w", ref.stream, err)
 	}
 	state, err := st.Info(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read the stream %s: %w", ref.stream, err)
+		return false, 0, fmt.Errorf("read the stream %s: %w", ref.stream, err)
 	}
-	if info.Delivered.Stream+1 >= state.State.FirstSeq {
-		return false, nil
+	delivered, first := info.Delivered.Stream, state.State.FirstSeq
+	passed := b.position(ref)
+	if delivered+1 >= first && passed+1 >= first {
+		// It is at the stream's first message, or past it. The record moves
+		// up to it, in the bucket too: a bucket that kept the birth position
+		// would send every consumer a resync event after each start, once its
+		// stream has dropped that position.
+		if delivered > passed {
+			b.notePosition(ctx, ref, delivered)
+		}
+		return false, delivered, nil
 	}
+	// The client reads its state again when it reads the event: everything the
+	// stream dropped so far is covered by then.
+	next := max(delivered, first-1)
+	// A resync event that the consumer has not read yet is pending, and covers
+	// everything that the stream dropped until then.
 	last, err := st.GetLastMsgForSubject(ctx, ResyncSubject(appOf(ref.stream), ref.consumer))
 	if err != nil && !errors.Is(err, jetstream.ErrMsgNotFound) {
-		return false, fmt.Errorf("read the resync event of %s: %w", ref.consumer, err)
+		return false, 0, fmt.Errorf("read the resync event of %s: %w", ref.consumer, err)
 	}
-	if err == nil && last.Sequence > info.Delivered.Stream {
-		// A resync event this consumer has not read yet is pending.
-		return false, nil
+	if err == nil && last.Sequence > delivered {
+		b.notePosition(ctx, ref, next)
+		return false, next, nil
 	}
-	return true, nil
+	return true, next, nil
 }
 
 // publishResync publishes 1 resync event on ref's consumer's subject, in the
