@@ -101,7 +101,8 @@ button {
 
 .app-button,
 .menu-button,
-.companion-button {
+.companion-button,
+.grants-link {
   position: relative;
   width: var(--control-h);
   height: var(--control-h);
@@ -115,7 +116,8 @@ button {
 
 .app-button:hover,
 .menu-button:hover,
-.companion-button:hover {
+.companion-button:hover,
+.grants-link:hover {
   background: var(--line);
 }
 
@@ -127,6 +129,8 @@ button {
 .app-button:focus-visible,
 .menu-button:focus-visible,
 .companion-button:focus-visible,
+.grants-link:focus-visible,
+.switcher-link:focus-visible,
 .companion-handle:focus-visible,
 .bar-app:focus-visible {
   outline: 2px solid var(--accent);
@@ -335,6 +339,25 @@ button {
   border-radius: 12px;
   box-shadow: var(--shadow);
   overflow: hidden;
+}
+
+.grants-link {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.switcher-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-h);
+  padding: 0 var(--pad-x);
+  border-top: 1px solid var(--line);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.switcher-link:hover {
+  background: var(--chrome);
 }
 
 .switcher-filter {

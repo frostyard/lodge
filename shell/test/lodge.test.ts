@@ -850,3 +850,91 @@ describe("badges", () => {
     await expect(s.shell.poll()).resolves.toBeUndefined();
   });
 });
+
+describe("agent access", () => {
+  const check = (a: Element | null) => {
+    expect(a?.getAttribute("href")).toBe("/oauth/grants");
+    expect(a?.getAttribute("target")).toBe("_blank");
+    expect(a?.getAttribute("rel")).toContain("noopener");
+  };
+
+  it("has one rail link, with and without a companion", async () => {
+    for (const r of [rail, withCompanion]) {
+      await setup("/notes", { rail: r });
+      const links = document.querySelectorAll(".rail .grants-link");
+      expect(links).toHaveLength(1);
+      check(links[0] ?? null);
+      expect(links[0]?.getAttribute("aria-label")).toBe("Agent access");
+    }
+  });
+
+  it("has a switcher link outside the listbox, and a click closes the switcher", async () => {
+    const s = await setup("/notes");
+    window.dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    expect(s.shell.switcherOpen).toBe(true);
+    const link = document.querySelector<HTMLAnchorElement>(".switcher-link");
+    check(link);
+    expect(link?.textContent).toBe("Agent access");
+    expect(link?.closest("[role=listbox]")).toBeNull();
+    link?.addEventListener("click", (e) => e.preventDefault());
+    link?.click();
+    expect(s.shell.switcherOpen).toBe(false);
+  });
+
+  it("takes the switcher's Escape, shortcut and companion chord while the switcher link has focus", async () => {
+    const link = () => document.querySelector<HTMLAnchorElement>(".switcher-link") as HTMLAnchorElement;
+    const s = await setup("/notes", { rail: withCompanion });
+    s.ready("notes");
+    s.shell.switchTo("mail");
+    s.ready("mail");
+
+    // Escape closes the switcher.
+    s.shell.openSwitcher();
+    link().focus();
+    expect(document.activeElement).toBe(link());
+    const esc = key("Escape", "Escape");
+    link().dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    expect(s.shell.switcherOpen).toBe(false);
+
+    // The shortcut again opens the app shown before the current one.
+    s.shell.openSwitcher();
+    link().focus();
+    link().dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    expect(s.shell.switcherOpen).toBe(false);
+    expect(s.shell.current).toBe("notes");
+
+    // The companion's chord closes the switcher and toggles the companion.
+    const companionShown = s.shell.companionShown;
+    s.shell.openSwitcher();
+    link().focus();
+    link().dispatchEvent(key("Backquote", "~", { ctrlKey: true, shiftKey: true }));
+    expect(s.shell.switcherOpen).toBe(false);
+    expect(s.shell.companionShown).toBe(!companionShown);
+
+    // Enter stays the link's own: the switcher does not take it.
+    s.shell.openSwitcher();
+    link().focus();
+    const enter = key("Enter", "Enter");
+    link().dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
+    expect(s.shell.current).toBe("notes");
+  });
+
+  it("never frames the grants page or changes history", async () => {
+    const s = await setup("/notes");
+    const frames = document.querySelectorAll("iframe").length;
+    const hist = history.length;
+    window.dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    for (const sel of [".switcher-link", ".grants-link"]) {
+      const a = document.querySelector<HTMLAnchorElement>(sel);
+      a?.addEventListener("click", (e) => e.preventDefault());
+      a?.click();
+    }
+    expect(s.shell.switcherOpen).toBe(false);
+    const all = [...document.querySelectorAll("iframe")];
+    expect(all).toHaveLength(frames);
+    expect(all.some((f) => f.src.includes("/oauth/grants"))).toBe(false);
+    expect(history.length).toBe(hist);
+  });
+});

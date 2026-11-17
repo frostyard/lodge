@@ -124,7 +124,10 @@ sudo lodgectl disallow admin alice@example.com
 
 An admin must also be on the allowed logins, on an allowed device.
 
-`https://LODGE/oauth/grants` is the **grants page**. It lists each
+`https://LODGE/oauth/grants` is the **grants page**. **Agent access**, the
+key at the foot of lodge's rail or under the apps in the switcher, opens
+it in a new tab. Every login sees the link; the page opens only for an
+admin. It lists each
 principal, its clients, its grants, when each was last used, and the
 requests that wait for you. It revokes a client or a whole principal,
 and their tokens stop at once. **Remove** beside an item of a grant takes
