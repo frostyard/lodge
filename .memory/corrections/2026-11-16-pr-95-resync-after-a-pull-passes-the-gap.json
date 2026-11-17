@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "internal/broker: the resync event of a consumer that retention overtook",
+  "correction": "The resync check compared only the consumer's own position with the stream's first sequence. A pull moves that position, so a client that stayed connected and pulled after retention dropped events passed the gap, and no resync event ever came. lodge now records each consumer's last known stream position, at its birth, at a restore and at every check, and needs a resync when the stream's first message is past that record: a false resync is allowed, a missing one is not.",
+  "evidence": "T1913 whole-plan check, finding 2 on t8 at lodge main c3fe29e: resyncNeeded saw only a visible gap, and a pull on an open connection moved the consumer past it",
+  "promoted_to": "internal/broker TestResyncAfterAPullPassesTheGap, TestResyncFindsTheGapOfAConsumerBornBeforeIt and TestResyncSkipsAConsumerThatKeptUp; docs/adr/0022"
+}

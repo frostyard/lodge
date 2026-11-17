@@ -726,6 +726,12 @@ listener of its own.
   `-ERR 'Authorization Violation'` after the server's `INFO` line. The
   client's broker name is `o` and the 16 bytes of its client ID in
   lower-case base32 with no padding (27 characters).
+  - **No client is admitted before the restore has finished.** After a
+    start lodge refilters every subscription that the store brought back
+    from the grant store, and the token check of this route waits for it,
+    within 5 s: a grant change commits before its hook runs, so a stop
+    between the 2 leaves a stored filter wider than the grant. A client
+    the restore cannot read is revoked.
   - **Before the line reaches the server,** lodge checks the client's
     consumers for a [resync](#event-subscriptions), within 2 s; a failure
     is logged, and the connection goes on.
@@ -902,10 +908,13 @@ consumer itself.
   [as above](#the-broker).
 - **Each minute** lodge checks for resyncs, checks the open connections'
   tokens, computes every subscription's filters again, and revokes a
-  broker client whose OAuth client is gone or has no scope `events`.
-- **Resync.** When a consumer's stream position is before its stream's
-  first message, retention dropped events it never received. lodge then
-  publishes 1 message on its resync subject, with `Nats-Msg-Id` its `id`:
+  broker client whose OAuth client is gone or has no scope `events`. The
+  resync check of a consumer that a pull moved past a gap finds it from
+  the position lodge last recorded for that consumer.
+- **Resync.** When a consumer's stream position, or the position lodge
+  last recorded for it, is before its stream's first message, retention
+  dropped events it never received. lodge then publishes 1 message on its
+  resync subject, with `Nats-Msg-Id` its `id`:
 
   ```json
   {"specversion": "1.0", "id": "<UUIDv7>", "source": "/lodge",
@@ -916,10 +925,13 @@ consumer itself.
   The consumer reads on from the stream's first message; the event tells
   it to read the state again through the app's API. lodge publishes no
   second one while one is pending: the check and the publish of a
-  consumer run 1 at a time. JetStream moves a consumer's position
-  only when it serves a pull, so lodge checks when a client connects,
-  before its `CONNECT` line reaches the server, and every consumer each
-  minute.
+  consumer run 1 at a time. lodge keeps each consumer's last known stream
+  position, and a pull moves the consumer's own position past a gap that
+  the server never showed it. So the check is conservative: when the
+  stream's first message is past the last known position, lodge publishes
+  the resync event at the next check, at the client's connection or
+  within the minute, even after a pull passed the gap. A consumer near the
+  end of retention can get a resync event it did not strictly need.
 
 ### OAuth routes
 

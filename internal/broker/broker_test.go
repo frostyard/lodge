@@ -297,6 +297,30 @@ func (h *harness) names(t *testing.T, stream string) []string {
 	return out
 }
 
+// purge drops a stream's messages below seq, as the stream's retention does:
+// its first sequence becomes seq.
+func (h *harness) purge(t *testing.T, stream string, seq uint64) {
+	t.Helper()
+	st, err := h.b.js.Stream(t.Context(), stream)
+	noErr(t, err)
+	noErr(t, st.Purge(t.Context(), jetstream.WithPurgeSequence(seq)))
+}
+
+// own connects a connection of its own in the hub account, for a test that
+// pulls for a client that is not there: a pull's answer on lodge's own
+// connection would reach the muxed inbox of its JetStream API client, which
+// reads it as a response.
+func (h *harness) own(t *testing.T) *nats.Conn {
+	t.Helper()
+	secret, err := h.b.newSecret(identity{kind: kindHub, name: "lodge"})
+	noErr(t, err)
+	nc, err := nats.Connect("", nats.InProcessServer(h.b.srv), nats.Token(secret), nats.NoReconnect(),
+		nats.Name("test-pull"))
+	noErr(t, err)
+	t.Cleanup(nc.Close)
+	return nc
+}
+
 // published publishes data to subject and waits for the answer.
 func published(t *testing.T, js jetstream.JetStream, subject, data string) *jetstream.PubAck {
 	t.Helper()

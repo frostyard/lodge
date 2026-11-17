@@ -49,6 +49,12 @@ type harness struct {
 	apps *fakeApps
 	auth *fakeOAuth
 	sock string
+	// o are the broker's options, and ids the apps its streams are for:
+	// restart starts the same broker again.
+	o   broker.Options
+	ids []string
+	// ln is the broker's app socket.
+	ln net.Listener
 	// app is the connection the test publishes on, as marks.
 	app *nats.Conn
 }
@@ -56,31 +62,65 @@ type harness struct {
 // newHarness starts a broker over a temp dir, with a stream for marks.
 func newHarness(t *testing.T, opts ...func(*broker.Options)) *harness {
 	t.Helper()
-	h := &harness{t: t, dir: t.TempDir(), apps: newFakeApps(), auth: newFakeOAuth()}
-	o := broker.Options{StoreDir: h.dir, Apps: h.apps, DevUID: -1, Tokens: h.tokens,
+	h := &harness{t: t, dir: t.TempDir(), apps: newFakeApps(), auth: newFakeOAuth(), ids: []string{marksApp}}
+	h.o = broker.Options{StoreDir: h.dir, Apps: h.apps, DevUID: -1, Tokens: h.tokens,
 		Log: slog.New(slog.DiscardHandler)}
 	for _, f := range opts {
-		f(&o)
+		f(&h.o)
 	}
-	h.b = broker.New(o)
+	h.start(t)
+	// A start of lodge restores the subscriptions, and admits no client
+	// before it has: a test that restarts runs Restore itself.
+	if err := h.svc.Restore(t.Context()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	return h
+}
+
+// start starts the harness's broker, serves its app socket, and makes the
+// service over it. That service is not ready: Restore, which a start of lodge
+// runs before it serves, admits no client until it has finished.
+func (h *harness) start(t *testing.T) {
+	t.Helper()
+	h.b = broker.New(h.o)
 	if err := h.b.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(h.b.Close)
-	ln, err := broker.Listen(filepath.Join(h.dir, "nats.sock"), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	go func() { _ = h.b.ServeApps(t.Context(), ln) }()
-	h.sock = ln.Addr().String()
-	if err := h.b.SyncApps(t.Context(), []string{marksApp}); err != nil {
+	h.listen(t)
+	if err := h.b.SyncApps(t.Context(), h.ids); err != nil {
 		t.Fatal(err)
 	}
 	h.svc = events.New(events.Options{Broker: h.b, OAuth: h.auth, Apps: h.apps,
 		Log: slog.New(slog.DiscardHandler)})
 	h.app = h.connectApp(t)
-	return h
+}
+
+// listen makes the broker's app socket, and serves it with the harness's
+// broker.
+func (h *harness) listen(t *testing.T) {
+	t.Helper()
+	ln, err := broker.Listen(filepath.Join(h.dir, "nats.sock"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	b := h.b
+	go func() { _ = b.ServeApps(t.Context(), ln) }()
+	h.ln = ln
+	h.sock = ln.Addr().String()
+}
+
+// restart closes the broker, and starts a new 1 over the same store and
+// socket, as a start of lodge does. Its service is not ready: the test runs
+// Restore, and the door admits no client before it.
+func (h *harness) restart(t *testing.T) *events.Service {
+	t.Helper()
+	h.b.Close()
+	h.ln.Close()
+	h.app.Close()
+	h.start(t)
+	return h.svc
 }
 
 // tokens is the broker's Options.Tokens: the service's own answer.
@@ -96,7 +136,8 @@ func (h *harness) addApp(t *testing.T, id string) {
 	h.apps.hearth[id] = &apps.Hearth{Capabilities: []string{id + ":read"}, Selectors: []string{"group"},
 		Events: []apps.Event{{Type: "org.frostyard." + id + ".note.created", Message: id + ".v1.NoteCreated",
 			Topic: id + ".note.created.group", Selector: "group", ReadPermission: id + ":read"}}}
-	if err := h.b.SyncApps(t.Context(), []string{marksApp, id}); err != nil {
+	h.ids = append(h.ids, id)
+	if err := h.b.SyncApps(t.Context(), h.ids); err != nil {
 		t.Fatal(err)
 	}
 }

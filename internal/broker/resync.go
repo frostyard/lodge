@@ -21,15 +21,17 @@ import (
 const resyncTimeout = 2 * time.Second
 
 // Resync publishes 1 resync event for each of client's consumers that
-// retention overtook: a consumer whose position is older than the first
-// message its stream still holds never saw the messages that went, so it
-// gets 1 event that says its state is stale (docs/specs/lodge-http.md, The
-// broker).
+// retention overtook: a consumer whose position, or whose last known position,
+// is older than the first message its stream still holds never saw the
+// messages that went, so it gets 1 event that says its state is stale
+// (docs/specs/lodge-http.md, The broker).
 //
 // A resync event that is still pending for a consumer is not published
-// again. The server moves a consumer's position only when it serves a pull,
-// so a resync is published while the gap is still visible: on the client's
-// connection, before the server serves it, and in the sweep.
+// again. The server moves a consumer's position when it serves a pull, so a
+// gap that a pull passed is found from lodge's own record of the consumer's
+// last known position, which it notes when the consumer is made, when a start
+// restores it, and at each check: when the client connects, before the server
+// serves it, and in the sweep.
 func (b *Broker) Resync(ctx context.Context, client string) error {
 	if err := validateName("client", client); err != nil {
 		return err
@@ -82,10 +84,19 @@ func (b *Broker) ResyncAll(ctx context.Context) error {
 }
 
 // resyncNeeded reports whether ref's consumer missed messages that its
-// stream dropped, and has no resync event pending.
+// stream dropped, and has no resync event pending. It records the position
+// that the check leaves the consumer at.
+//
+// The consumer's info is read first, and the stream's after it: a stream that
+// drops messages in between makes the check see 1 gap too many, which is the
+// safe side. A pull moves the consumer's position past a gap that the server
+// never showed it, so a gap it can no longer see is found from lodge's record
+// of its last known position. That record is only a lower bound of what the
+// client has passed: a false resync is allowed, a missing 1 is not.
 func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, error) {
 	c, err := b.js.Consumer(ctx, ref.stream, ref.consumer)
 	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
+		b.forgetPositionLocked(ref)
 		return false, nil
 	}
 	if err != nil {
@@ -103,18 +114,58 @@ func (b *Broker) resyncNeeded(ctx context.Context, ref consumerRef) (bool, error
 	if err != nil {
 		return false, fmt.Errorf("read the stream %s: %w", ref.stream, err)
 	}
-	if info.Delivered.Stream+1 >= state.State.FirstSeq {
+	delivered, first := info.Delivered.Stream, state.State.FirstSeq
+	passed := b.knownPositionLocked(ref, delivered)
+	if delivered+1 >= first && passed+1 >= first {
+		// It is at the stream's first message, or past it.
+		b.notePositionLocked(ref, delivered)
 		return false, nil
 	}
+	// A resync event that the consumer has not read yet is pending, and
+	// covers everything that the stream dropped until then.
 	last, err := st.GetLastMsgForSubject(ctx, ResyncSubject(appOf(ref.stream), ref.consumer))
 	if err != nil && !errors.Is(err, jetstream.ErrMsgNotFound) {
 		return false, fmt.Errorf("read the resync event of %s: %w", ref.consumer, err)
 	}
-	if err == nil && last.Sequence > info.Delivered.Stream {
-		// A resync event this consumer has not read yet is pending.
+	// The client reads its state again when it reads the event: everything
+	// the stream dropped so far is covered.
+	b.notePositionLocked(ref, max(delivered, first-1))
+	if err == nil && last.Sequence > delivered {
 		return false, nil
 	}
 	return true, nil
+}
+
+// notePosition records seq as the last known stream position of ref.
+func (b *Broker) notePosition(ref consumerRef, seq uint64) {
+	b.resyncMu.Lock()
+	defer b.resyncMu.Unlock()
+	b.notePositionLocked(ref, seq)
+}
+
+// notePositionLocked is notePosition under resyncMu, which the caller holds.
+func (b *Broker) notePositionLocked(ref consumerRef, seq uint64) { b.positions[ref] = seq }
+
+// forgetPosition drops what lodge knows of ref's position: its consumer is
+// gone.
+func (b *Broker) forgetPosition(ref consumerRef) {
+	b.resyncMu.Lock()
+	defer b.resyncMu.Unlock()
+	b.forgetPositionLocked(ref)
+}
+
+// forgetPositionLocked is forgetPosition under resyncMu, which the caller
+// holds.
+func (b *Broker) forgetPositionLocked(ref consumerRef) { delete(b.positions, ref) }
+
+// knownPositionLocked answers the last known stream position of ref, and
+// delivered when lodge has none: delivered is what the consumer itself
+// answers.
+func (b *Broker) knownPositionLocked(ref consumerRef, delivered uint64) uint64 {
+	if p, ok := b.positions[ref]; ok {
+		return p
+	}
+	return delivered
 }
 
 // publishResync publishes 1 resync event on ref's consumer's subject, in the

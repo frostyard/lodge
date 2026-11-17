@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/frostyard/lodge/internal/apps"
@@ -101,6 +102,13 @@ type Service struct {
 	o   Options
 	log *slog.Logger
 
+	// ready is closed once Restore has refiltered every subscription that a
+	// start brought back: /nats admits no client before that, because a
+	// stored filter may be wider than its grant.
+	ready chan struct{}
+	// once closes ready 1 time.
+	once sync.Once
+
 	// beforeActivate, when set, runs between a new subscription's
 	// registration and the read that gives it its filters. A test sets it to
 	// look at the subscription in that window.
@@ -129,8 +137,15 @@ func New(o Options) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{o: o, log: log}
+	return &Service{o: o, log: log, ready: make(chan struct{})}
 }
+
+// Ready is closed once Restore has finished: until then no client is
+// admitted.
+func (s *Service) Ready() <-chan struct{} { return s.ready }
+
+// markReady admits clients, 1 time.
+func (s *Service) markReady() { s.once.Do(func() { close(s.ready) }) }
 
 // now is the service's clock.
 func (s *Service) now() time.Time {
@@ -143,7 +158,20 @@ func (s *Service) now() time.Time {
 // Tokens answers the broker's name of the client that token belongs to, and
 // when the token expires: the broker's Options.Tokens (docs/specs/oauth.md,
 // lodge's own callers).
+//
+// No client is admitted before Restore has refiltered every restored
+// subscription: a filter that the store brought back may be wider than its
+// grant, because a grant change commits before its hook runs.
 func (s *Service) Tokens(ctx context.Context, token string) (string, time.Time, bool) {
+	timer := time.NewTimer(opTimeout)
+	defer timer.Stop()
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return "", time.Time{}, false
+	case <-timer.C:
+		return "", time.Time{}, false
+	}
 	access, err := s.o.OAuth.Check(ctx, token, oauth.ScopeEvents)
 	if err != nil {
 		return "", time.Time{}, false
@@ -153,6 +181,82 @@ func (s *Service) Tokens(ctx context.Context, token string) (string, time.Time, 
 		return "", time.Time{}, false
 	}
 	return name, access.Expires, true
+}
+
+// errRestoreRevoked is a restored subscription whose client lodge revoked:
+// its stored filters could not be trusted.
+var errRestoreRevoked = errors.New("the restored client is revoked")
+
+// Restore puts every subscription that a start brought back in step with its
+// grant, and then admits clients: a grant change commits before its hook runs,
+// so a stop between the 2 leaves a consumer with a filter wider than the
+// grant, and the first sweep is a minute away.
+//
+// A client that lodge cannot read, that no principal is bound to, or that
+// holds no scope events is revoked: the filter that the store brought back
+// cannot be trusted, so it fails closed. A refilter that fails revokes too,
+// as a grant change's does. A cancelled start is not a grant's fault: it stops
+// and admits no client at all.
+func (s *Service) Restore(ctx context.Context) error {
+	var errs []error
+	revoked := map[string]bool{}
+	for _, sub := range s.o.Broker.Subscriptions() {
+		if revoked[sub.Client] {
+			continue
+		}
+		// Each subscription has its own budget: 1 that hangs does not take
+		// the others' time.
+		sctx, cancel := context.WithTimeout(ctx, opTimeout)
+		err := s.restoreOne(sctx, sub)
+		cancel()
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
+			// Lodge is stopping: its cancelled reads say nothing about a
+			// grant, so nothing is revoked, and no client is admitted.
+			return ctx.Err()
+		case errors.Is(err, errRestoreRevoked):
+			revoked[sub.Client] = true
+			errs = append(errs, err)
+		default:
+			if s.failClosed(sub.Client, sub.Sub, err) {
+				revoked[sub.Client] = true
+			}
+			errs = append(errs, err)
+		}
+	}
+	// Every failure above is closed, so clients are admitted whatever came
+	// of them.
+	s.markReady()
+	return errors.Join(errs...)
+}
+
+// restoreOne puts 1 restored subscription back in step with the grant of its
+// client's principal. A client that it cannot trust is revoked, and the
+// answer wraps errRestoreRevoked.
+func (s *Service) restoreOne(ctx context.Context, sub broker.Subscription) error {
+	id, ok := ClientID(sub.Client)
+	if !ok {
+		err := fmt.Errorf("client %q is not an OAuth client's id: %w", sub.Client, ErrNotFound)
+		s.revoke(sub.Client)
+		return fmt.Errorf("%w: %w", errRestoreRevoked, err)
+	}
+	c, err := s.o.OAuth.Client(ctx, id)
+	switch {
+	case err != nil:
+		err = fmt.Errorf("read the OAuth client of %s: %w", sub.Client, err)
+	case !c.Bound():
+		err = fmt.Errorf("client %s is bound to no principal", sub.Client)
+	case !hasScope(c.Scope, oauth.ScopeEvents):
+		err = fmt.Errorf("client %s has no scope %s", sub.Client, oauth.ScopeEvents)
+	}
+	if err != nil {
+		// The filter it came back with may be wider than its grant: it never
+		// reads a message before a start has read the grant store.
+		s.revoke(sub.Client)
+		return fmt.Errorf("%w: %w", errRestoreRevoked, err)
+	}
+	return s.o.Broker.Refilter(ctx, sub.Client, sub.Sub, s.refilter(c.Principal))
 }
 
 // Subscribe gives the client of access the subscription sub, which takes the
@@ -449,8 +553,14 @@ func (s *Service) Revoked(principal string, clients []string) {
 	}
 }
 
-// Run sweeps every SweepEvery until ctx ends.
+// Run runs Restore, then sweeps every SweepEvery until ctx ends. Restore
+// runs first, before any client is admitted: it refilters every subscription
+// that the start brought back from the grant store, so that the first sweep's
+// minute is not a window in which a restored filter reads past its grant.
 func (s *Service) Run(ctx context.Context) {
+	if err := s.Restore(ctx); err != nil {
+		s.log.Warn("restore the event subscriptions", "err", err)
+	}
 	tick := time.NewTicker(SweepEvery)
 	defer tick.Stop()
 	for {
