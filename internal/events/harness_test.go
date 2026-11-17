@@ -484,7 +484,7 @@ func (f *fakeOAuth) failGrants(n int, err error) {
 	f.failing, f.grantErr = n, err
 }
 
-func (f *fakeOAuth) Client(_ context.Context, id string) (oauth.Client, error) {
+func (f *fakeOAuth) Client(ctx context.Context, id string) (oauth.Client, error) {
 	f.mu.Lock()
 	if f.lookups > 0 {
 		f.lookups--
@@ -496,10 +496,14 @@ func (f *fakeOAuth) Client(_ context.Context, id string) (oauth.Client, error) {
 	blocked, read, release := f.blockLookup, f.read, f.release
 	f.blockLookup = false
 	f.mu.Unlock()
-	// The read has begun, and waits: a test cancels the start in this window.
+	// The read has begun, and waits: a test cancels the start in this window,
+	// and the read then fails as a store's read does with its context.
 	if blocked {
 		close(read)
 		<-release
+		if err := ctx.Err(); err != nil {
+			return oauth.Client{}, err
+		}
 	}
 	if !ok || !c.Revoked.IsZero() {
 		return oauth.Client{}, oauth.ErrNotFound

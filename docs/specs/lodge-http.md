@@ -933,8 +933,9 @@ consumer itself.
   within the minute, even after a pull passed the gap. The positions are
   kept in a key-value bucket of lodge's own account, `lodge_positions`,
   which no client and no app reaches; a consumer with no record after a
-  start is taken as being at position 0, and a record moves only after the
-  resync event is stored. A consumer near the end of retention can get a
+  start is taken as being at position 0. A check that finds no gap moves
+  the record up to the consumer's position; a check that finds a gap moves
+  it only after the resync event is stored, or when 1 is pending. A consumer near the end of retention can get a
   resync event it did not strictly need.
 
 ### OAuth routes

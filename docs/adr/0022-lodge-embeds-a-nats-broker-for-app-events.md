@@ -225,8 +225,9 @@
     The positions live in a key-value bucket of lodge's own account,
     `lodge_positions`, which no client and no app reaches, so they
     outlive a start. A consumer that has no record after a start is
-    taken as being at position 0. The record moves only once the resync
-    event is stored. That check is conservative: a consumer near the end
+    taken as being at position 0. A check that finds no gap moves the
+    record up to the consumer's position; a check that finds a gap moves
+    it only once the resync event is stored, or one is pending. That check is conservative: a consumer near the end
     of retention can get a resync event it did not strictly need, but no
     gap goes unreported.
 - [specs/lodge-http.md](../specs/lodge-http.md#the-broker) and
