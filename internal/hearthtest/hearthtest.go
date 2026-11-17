@@ -205,7 +205,9 @@ func Serve(ctx context.Context, l net.Listener, lodgeUID int, dbPath string) (*A
 	app := &App{db: db}
 	api := (&notelite.Service{DB: db, Notify: func() {}}).API()
 	// Connect decodes the body before the unary interceptor runs, so a held
-	// RPC still sees its context end when lodge ends the call.
+	// RPC still sees its context end when lodge ends the call. HandlerOptions
+	// puts hearth's error mapping first, the outermost, and it keeps the
+	// *connect.Error that connectFailure returns here as it is.
 	interceptor := connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			if err := app.wait(ctx); err != nil {
