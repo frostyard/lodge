@@ -105,8 +105,9 @@ While lodge is stopped, no browser and no agent reaches any app.
    `packaging/` files, and `lodge --version` prints `lodge X.Y.Z (<commit>)`.
    lodge's host was updated this way from `43d40b7` to v0.2.0 on
    2026-11-05, from v0.2.0 to v0.3.0 on 2026-11-11, from v0.3.0 to
-   v0.5.0 on 2026-11-16, from v0.5.0 to v0.5.1 on 2026-11-17, and from
-   v0.5.1 to v0.5.2 on 2026-11-17. v0.5.0
+   v0.5.0 on 2026-11-16, from v0.5.0 to v0.5.1 on 2026-11-17, from
+   v0.5.1 to v0.5.2 on 2026-11-17, and from v0.5.2 to v0.6.0 on
+   2026-11-17. v0.5.0
    turns the broker on by default (`/run/lodge/nats.sock`,
    `/var/lib/lodge/jetstream`), and its database migrates forward: a
    rollback to an earlier version restores `/var/lib/lodge` from the
@@ -118,6 +119,10 @@ While lodge is stopped, no browser and no agent reaches any app.
    subscription 1 resync event, because lodge's consumers had no position
    record before it
    ([specs/lodge-http.md](../docs/specs/lodge-http.md#event-subscriptions)).
+   v0.6.0 changes only the shell: its **Agent access** link opens the
+   grants page ([specs/shell.md](../docs/specs/shell.md#agent-access)). It
+   has no migration, and outside this README its `packaging/` files are
+   those of v0.5.2.
    The script replaces each binary by rename and the shell's bundle whole. It
    does not change `/etc/lodge`. It restarts lodge only if lodge is active,
    so run `sudo systemctl start lodge` if you stopped it.
