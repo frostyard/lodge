@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": "shell: keys in the open switcher",
+  "correction": "Only the switcher's filter took Escape, the switcher's shortcut and the companion's chord, and the window's handler ignores keys while the switcher is open. The Agent access link, a second focus target in the switcher, therefore left those keys dead when Tab gave it focus. Every focus target in the switcher now takes those keys through 1 shared handler, and Enter stays the link's own.",
+  "evidence": "cross-review of frostyard/lodge#98 at 00c9f05: the switcher link had no keydown handler",
+  "promoted_to": "shell/test/lodge.test.ts: takes the switcher's Escape, shortcut and companion chord while the switcher link has focus"
+}

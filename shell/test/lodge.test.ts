@@ -881,6 +881,46 @@ describe("agent access", () => {
     expect(s.shell.switcherOpen).toBe(false);
   });
 
+  it("takes the switcher's Escape, shortcut and companion chord while the switcher link has focus", async () => {
+    const link = () => document.querySelector<HTMLAnchorElement>(".switcher-link") as HTMLAnchorElement;
+    const s = await setup("/notes", { rail: withCompanion });
+    s.ready("notes");
+    s.shell.switchTo("mail");
+    s.ready("mail");
+
+    // Escape closes the switcher.
+    s.shell.openSwitcher();
+    link().focus();
+    expect(document.activeElement).toBe(link());
+    const esc = key("Escape", "Escape");
+    link().dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    expect(s.shell.switcherOpen).toBe(false);
+
+    // The shortcut again opens the app shown before the current one.
+    s.shell.openSwitcher();
+    link().focus();
+    link().dispatchEvent(key("Backquote", "`", { ctrlKey: true }));
+    expect(s.shell.switcherOpen).toBe(false);
+    expect(s.shell.current).toBe("notes");
+
+    // The companion's chord closes the switcher and toggles the companion.
+    const companionShown = s.shell.companionShown;
+    s.shell.openSwitcher();
+    link().focus();
+    link().dispatchEvent(key("Backquote", "~", { ctrlKey: true, shiftKey: true }));
+    expect(s.shell.switcherOpen).toBe(false);
+    expect(s.shell.companionShown).toBe(!companionShown);
+
+    // Enter stays the link's own: the switcher does not take it.
+    s.shell.openSwitcher();
+    link().focus();
+    const enter = key("Enter", "Enter");
+    link().dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
+    expect(s.shell.current).toBe("notes");
+  });
+
   it("never frames the grants page or changes history", async () => {
     const s = await setup("/notes");
     const frames = document.querySelectorAll("iframe").length;

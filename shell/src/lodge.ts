@@ -908,6 +908,9 @@ export class LodgeShell {
   #switcherLink(d: Document): HTMLAnchorElement {
     const a = grantsLink(d, "switcher-link", "Agent access");
     a.addEventListener("click", () => this.closeSwitcher(false));
+    // Focused by Tab, it takes the switcher's Escape and chords as the filter
+    // does; Enter stays the link's own.
+    a.addEventListener("keydown", (e) => this.#onSwitcherKey(e));
     return a;
   }
 
@@ -980,25 +983,36 @@ export class LodgeShell {
     this.switchTo(app);
   }
 
-  #onFilterKey = (e: KeyboardEvent): void => {
+  /**
+   * onSwitcherKey takes the keys every focus target in the open switcher
+   * shares: its shortcut, the companion's chord and Escape. It reports
+   * whether it took the key.
+   */
+  #onSwitcherKey(e: KeyboardEvent): boolean {
     if (matchesChord(e, this.#chord)) {
       e.preventDefault();
       e.stopPropagation();
       this.onShortcut();
-      return;
+      return true;
     }
     if (matchesChord(e, this.#companionChord)) {
       e.preventDefault();
       e.stopPropagation();
       this.closeSwitcher(false);
       this.toggleCompanion();
-      return;
+      return true;
     }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.closeSwitcher();
+      return true;
+    }
+    return false;
+  }
+
+  #onFilterKey = (e: KeyboardEvent): void => {
+    if (this.#onSwitcherKey(e)) return;
     switch (e.key) {
-      case "Escape":
-        e.preventDefault();
-        this.closeSwitcher();
-        return;
       case "ArrowDown":
         e.preventDefault();
         this.#select(this.#selected + 1);

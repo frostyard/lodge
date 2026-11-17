@@ -220,7 +220,9 @@ need not type its URL on a phone.
     lodge's state, with its name as its tooltip;
   - in the switcher, under the list of apps and outside it, with its
     name as text. The list's keys (Up, Down, Enter, an app's `key`) never
-    reach it; Tab does. A click on it closes the switcher.
+    reach it; Tab does. While it has focus, Escape, the switcher's
+    shortcut and the companion's chord do what they do in the filter, and
+    Enter follows the link. A click on it closes the switcher.
 
   The narrow bar has no link of its own: a tap on the bar opens the
   switcher, which has it.
