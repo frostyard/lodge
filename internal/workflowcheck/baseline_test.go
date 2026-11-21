@@ -930,10 +930,24 @@ func TestMatchGlob(t *testing.T) {
 }
 
 // dependabotUpdate is 1 entry of the updates list of
-// .github/dependabot.yml.
+// .github/dependabot.yml. An entry names 1 directory, or several in
+// directories.
 type dependabotUpdate struct {
-	Ecosystem string `yaml:"package-ecosystem"`
-	Directory string `yaml:"directory"`
+	Ecosystem   string   `yaml:"package-ecosystem"`
+	Directory   string   `yaml:"directory"`
+	Directories []string `yaml:"directories"`
+}
+
+// dirs returns the entry's directories, normalized.
+func (u dependabotUpdate) dirs() []string {
+	var out []string
+	if u.Directory != "" {
+		out = append(out, normalizeDir(u.Directory))
+	}
+	for _, d := range u.Directories {
+		out = append(out, normalizeDir(d))
+	}
+	return out
 }
 
 // dependabotFile is the whole of .github/dependabot.yml.
@@ -968,8 +982,9 @@ func normalizeDir(dir string) string {
 }
 
 // TestDependabotCoversManifests guards row B13 of frostyard/core
-// docs/specs/repository-baseline.md: .github/dependabot.yml has 1 entry for
-// each manifest of the repository, and the github-actions entry at "/".
+// docs/specs/repository-baseline.md: .github/dependabot.yml covers each
+// manifest of the repository, in an entry's directory or directories, and
+// has the github-actions entry at "/". The npm manifests share 1 entry.
 func TestDependabotCoversManifests(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
 	if err != nil {
@@ -984,15 +999,29 @@ func TestDependabotCoversManifests(t *testing.T) {
 	}
 	covered := make(map[[2]string]bool, len(cfg.Updates))
 	actions := false
+	npmEntries := 0
 	for _, u := range cfg.Updates {
-		dir := normalizeDir(u.Directory)
-		covered[[2]string{u.Ecosystem, dir}] = true
-		if u.Ecosystem == "github-actions" && dir == "/" {
-			actions = true
+		if u.Directory != "" && len(u.Directories) > 0 {
+			t.Errorf("%s entry sets both directory and directories", u.Ecosystem)
+		}
+		if u.Ecosystem == "npm" {
+			npmEntries++
+		}
+		for _, dir := range u.dirs() {
+			covered[[2]string{u.Ecosystem, dir}] = true
+			if u.Ecosystem == "github-actions" && dir == "/" {
+				actions = true
+			}
 		}
 	}
 	if !actions {
 		t.Error("no github-actions entry with directory /")
+	}
+	// Brian, 2026-11-21: the npm manifests share 1 entry, so its 1 group
+	// opens at most 1 npm PR a week across them all. A new package.json
+	// joins that entry's directories.
+	if npmEntries != 1 {
+		t.Errorf("%d npm entries, want 1 with every package.json directory in directories", npmEntries)
 	}
 
 	manifests := 0
