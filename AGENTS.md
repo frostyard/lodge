@@ -311,8 +311,8 @@ them rather than improvising, whichever agent you are:
   `shell/package.json` links `../client` and `../ui`, so lodge always
   builds on its own tree. `kit/go.mod` requires no frostyard module.
   Dependabot (`.github/dependabot.yml`) proposes weekly updates of the
-  actions, both Go modules, the 3 npm packages and the end-to-end tests'
-  pins (`dev/mcp-e2e`). Tools stay pinned in
+  actions, both Go modules, and in 1 PR the 3 npm packages and the
+  end-to-end tests' pins (`dev/mcp-e2e`). Tools stay pinned in
   `mise.toml` and `mise.lock`, and Node in each workflow's `NODE_VERSION`
   and `dev/nsl/provision.sh`.
 - **Who uses it.** frostnotes, frostmail and Porter pin the
@@ -358,10 +358,12 @@ verify` when one of these files breaks:
   admission joins the list in the PR that adds it, with a level by the
   grading rule: `L1` for the risk categories and `L2` for governance. A
   glob that matches no file fails.
-- `.github/dependabot.yml` (B13): 1 entry for each manifest (`go.mod`,
-  `kit/go.mod`, `client/package.json`, `ui/package.json`,
-  `shell/package.json`, `dev/mcp-e2e/package.json`). A new manifest gets an
-  entry.
+- `.github/dependabot.yml` (B13): an entry covers each manifest. `go.mod`
+  and `kit/go.mod` have 1 entry each. The 4 `package.json` files
+  (`client/`, `ui/`, `shell/`, `dev/mcp-e2e/`) share 1 npm entry, in its
+  `directories`, so its 1 group opens at most 1 npm PR a week (Brian,
+  2026-11-21). A new `package.json` joins that list; another new manifest
+  gets an entry. `internal/workflowcheck` checks both.
 
 `.github/pull_request_template.md` (B7) holds the risk tier.
 Vulnerabilities are reported privately ([SECURITY.md](SECURITY.md), B14).

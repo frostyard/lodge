@@ -2,9 +2,10 @@
 # ecosystem with a manifest here. internal/workflowcheck checks the list.
 #
 # The kit (kit/go.mod) is a module that the apps import: an update there
-# reaches them with the next kit/vX.Y.Z tag. The npm entries update the
-# client, the UI package and the shell; their lockfiles build and test in
-# the nsl machine (make client-check, ui-check, shell-check), as CI does.
+# reaches them with the next kit/vX.Y.Z tag. The npm entry updates the
+# client, the UI package, the shell and the end-to-end tests' pins in 1 PR;
+# their lockfiles build and test in the nsl machine (make client-check,
+# ui-check, shell-check), as CI does.
 #
 # The commit prefix is build (or ci): svu reads it as a patch, not a feature.
 # @types/node follows the Node major of NODE_VERSION; internal/workflowcheck
@@ -44,33 +45,14 @@ updates:
       kit-go:
         patterns: ["*"]
 
+  # 1 entry for the 4 npm manifests: its 1 group opens at most 1 PR a week
+  # across all 4 directories, not 1 PR for each (Brian, 2026-11-21).
   - package-ecosystem: npm
-    directory: /dev/mcp-e2e
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build
-      include: scope
-    groups:
-      mcp-e2e-npm:
-        patterns: ["*"]
-
-  - package-ecosystem: npm
-    directory: /client
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build
-      include: scope
-    ignore:
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
-    groups:
-      client-npm:
-        patterns: ["*"]
-
-  - package-ecosystem: npm
-    directory: /ui
+    directories:
+      - /client
+      - /ui
+      - /shell
+      - /dev/mcp-e2e
     schedule:
       interval: weekly
     commit-message:
@@ -80,19 +62,5 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
     groups:
-      ui-npm:
-        patterns: ["*"]
-
-  - package-ecosystem: npm
-    directory: /shell
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build
-      include: scope
-    ignore:
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
-    groups:
-      shell-npm:
+      npm:
         patterns: ["*"]
