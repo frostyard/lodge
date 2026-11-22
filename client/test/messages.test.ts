@@ -105,6 +105,11 @@ describe("parsing", () => {
   });
   it("knows app ids", () => {
     expect(["notes", "mail", "a1"].map(validApp)).toEqual([true, true, true]);
-    expect(["app", "device", "lodge", "mcp", "", "N", "a-b"].some(validApp)).toBe(false);
+    expect(["", "N", "a-b"].some(validApp)).toBe(false);
+  });
+  it("refuses each reserved id, as kit/manifest does", () => {
+    const reserved = ["app", "device", "gateway", "lodge", "mcp", "nats", "oauth"];
+    expect(reserved.map(validApp)).toEqual(reserved.map(() => false));
+    expect(validApp("notes")).toBe(true);
   });
 });

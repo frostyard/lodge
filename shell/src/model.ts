@@ -27,7 +27,8 @@ export interface Rail {
 
 const STATES = new Set<string>(["up", "degraded", "down", "disabled"]);
 const ID = /^[a-z][a-z0-9]{0,15}$/;
-const RESERVED = new Set(["app", "device", "lodge", "mcp"]);
+// The ids no app may take: kit/manifest's list (docs/specs/app-contract.md, The manifest).
+const RESERVED = new Set(["app", "device", "gateway", "lodge", "mcp", "nats", "oauth"]);
 /** MAX_BADGE is the largest count lodge sends (ADR-0020). */
 const MAX_BADGE = 99999;
 

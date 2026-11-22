@@ -10,6 +10,7 @@ import {
   parseRail,
   type RailApp,
   titleFor,
+  validApp,
 } from "../src/model.js";
 
 const app = (id: string, name: string, extra: Partial<RailApp> = {}): RailApp => ({
@@ -50,6 +51,14 @@ describe("addresses", () => {
   it("titles the page", () => {
     expect(titleFor("Plan", "Notes")).toBe("Plan — Notes");
     expect(titleFor("", "Notes")).toBe("Notes");
+  });
+});
+
+describe("app ids", () => {
+  it("refuses each reserved id, as kit/manifest does", () => {
+    const reserved = ["app", "device", "gateway", "lodge", "mcp", "nats", "oauth"];
+    expect(reserved.map(validApp)).toEqual(reserved.map(() => false));
+    expect(validApp("notes")).toBe(true);
   });
 });
 

@@ -56,6 +56,26 @@ func TestSessionRelaysWithCallerHeaders(t *testing.T) {
 	}
 }
 
+// The session passes the browser's query to the app's /api unchanged, and
+// adds none when there is none (docs/specs/app-contract.md, Public URLs).
+func TestSessionPassesTheQuery(t *testing.T) {
+	h := newHarness(t)
+	for _, c := range []struct{ path, query string }{
+		{"/app/notes/api?x=1&y=2", "x=1&y=2"},
+		{"/app/notes/api", ""},
+	} {
+		conn, _, err := h.wsDial(c.path, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.path, err)
+		}
+		roundTrip(t, conn)
+		if s := h.notes.last(t); s.Path != "/api" || s.Query != c.query {
+			t.Errorf("%s: the app saw %s?%s, want /api?%s", c.path, s.Path, s.Query, c.query)
+		}
+		conn.Close(websocket.StatusNormalClosure, "")
+	}
+}
+
 // roundTrip sends a frame and reads its echo. Once it returns, the relay
 // is running, so the session is registered.
 func roundTrip(t *testing.T, c *websocket.Conn) {

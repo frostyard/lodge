@@ -75,6 +75,17 @@ func NewQueue(slots int) *Queue {
 	return q
 }
 
+// Resize sets the queue's slots, and background's share with them,
+// and grants any slots it frees. Requests that run keep their slots:
+// after a shrink, no new request starts until fewer than slots run.
+func (q *Queue) Resize(slots int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.slots = slots
+	q.bgMax = max(slots-1, 1)
+	q.grant()
+}
+
 // Acquire waits for a slot for a request of class p, or for ctx to end.
 // The returned release gives the slot back; call it once.
 func (q *Queue) Acquire(ctx context.Context, p Priority) (release func(), err error) {
