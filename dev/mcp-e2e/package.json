@@ -12,6 +12,6 @@
   },
   "devDependencies": {
     "@earendil-works/pi-mcp": "1.5.2",
-    "@modelcontextprotocol/inspector": "2.15.0"
+    "@modelcontextprotocol/inspector": "2.16.0"
   }
 }
