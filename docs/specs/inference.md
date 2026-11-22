@@ -348,6 +348,9 @@ interactive`, and `background` when the header is absent or anything else.
 - At most 256 requests wait per provider (429 past it). A request whose
   app goes away while it waits leaves the queue.
 - A slot is held until the provider's answer ends, streams included.
+- A reload that keeps a provider's type and base URL keeps its queue, with
+  the new `slots`: requests in flight keep their slots, and after a shrink
+  no request starts until fewer than `slots` run.
 
 ### Availability
 

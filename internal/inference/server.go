@@ -171,8 +171,10 @@ func New(o Options) *Server {
 func (s *Server) state() *state { return s.cur.Load() }
 
 // Load replaces the configuration. err, from LoadConfig, refuses it whole:
-// lodge then has no aliases. A provider that stays with its slots keeps its
-// queue, so requests in flight count.
+// lodge then has no aliases. A provider that keeps its type and base URL
+// keeps its queue, resized to the new slots, so requests in flight still
+// count against the limit; its availability is kept only when its
+// configuration is unchanged.
 func (s *Server) Load(cfg Config, err error) {
 	old := s.state()
 	next := &state{providers: map[string]*Provider{}}
@@ -183,11 +185,17 @@ func (s *Server) Load(cfg Config, err error) {
 		next.cfg = cfg
 		for name, pc := range cfg.Providers {
 			p := &Provider{Name: name, Cfg: pc}
-			if o, ok := old.providers[name]; ok && o.Cfg == pc {
-				p.Queue, p.checked, p.once = o.Queue, o.checked, o.once
-				p.available, p.reason = o.state()
+			o, ok := old.providers[name]
+			if ok && o.Cfg.Type == pc.Type && o.Cfg.BaseURL == pc.BaseURL {
+				p.Queue = o.Queue
+				p.Queue.Resize(max(pc.Slots, 1))
 			} else {
 				p.Queue = NewQueue(max(pc.Slots, 1))
+			}
+			if ok && o.Cfg == pc {
+				p.checked, p.once = o.checked, o.once
+				p.available, p.reason = o.state()
+			} else {
 				p.reason = "not checked yet"
 				p.checked, p.once = make(chan struct{}), new(sync.Once)
 			}
