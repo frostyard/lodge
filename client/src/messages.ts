@@ -117,7 +117,8 @@ export type ShellMessage =
   | CompanionAskMessage;
 
 const ID = /^[a-z][a-z0-9]{0,15}$/;
-const RESERVED = new Set(["app", "device", "lodge", "mcp"]);
+// The ids no app may take: kit/manifest's list (docs/specs/app-contract.md, The manifest).
+const RESERVED = new Set(["app", "device", "gateway", "lodge", "mcp", "nats", "oauth"]);
 const KIND = /^[a-z-]{1,32}$/;
 
 /** validApp reports whether `id` may name an app (docs/specs/app-contract.md, The manifest). */
