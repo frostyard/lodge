@@ -1,5 +1,9 @@
-# Dependabot (frostyard/core ADR-0071, baseline row B13): 1 entry for each
-# ecosystem with a manifest here. internal/workflowcheck checks the list.
+# Dependabot (frostyard/core ADR-0071, ADR-0075 and ADR-0089, baseline row
+# B13): exactly 1 entry for each ecosystem with a manifest here, its
+# manifests' directories in that entry's directories list, a monthly
+# schedule, and 1 catch-all group. Each ecosystem then opens at most 1
+# version-update PR a month for all its directories. Security updates stay
+# ungrouped and immediate (no applies-to). internal/workflowcheck checks it.
 #
 # The kit (kit/go.mod) is a module that the apps import: an update there
 # reaches them with the next kit/vX.Y.Z tag. The npm entry updates the
@@ -9,13 +13,14 @@
 #
 # The commit prefix is build (or ci): svu reads it as a patch, not a feature.
 # @types/node follows the Node major of NODE_VERSION; internal/workflowcheck
-# checks it, and a Node major moves by hand with its types.
+# checks it, and a Node major moves by hand with its types. The ignore
+# covers every directory of the npm entry; dev/mcp-e2e has no @types/node.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: ci
       include: scope
@@ -24,9 +29,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: gomod
-    directory: /
+    directories:
+      - /
+      - /kit
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: build
       include: scope
@@ -34,19 +41,6 @@ updates:
       go:
         patterns: ["*"]
 
-  - package-ecosystem: gomod
-    directory: /kit
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build
-      include: scope
-    groups:
-      kit-go:
-        patterns: ["*"]
-
-  # 1 entry for the 4 npm manifests: its 1 group opens at most 1 PR a week
-  # across all 4 directories, not 1 PR for each (Brian, 2026-11-21).
   - package-ecosystem: npm
     directories:
       - /client
@@ -54,7 +48,7 @@ updates:
       - /shell
       - /dev/mcp-e2e
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: build
       include: scope
