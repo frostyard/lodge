@@ -169,6 +169,84 @@ func TestQueueLimit(t *testing.T) {
 	}
 }
 
+// A queue that grows grants the slots it frees to its waiters.
+func TestResizeGrowGrantsWaiters(t *testing.T) {
+	q := watched(1)
+	r, err := q.Acquire(t.Context(), Interactive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ca := try(t, q, Interactive)
+	defer ca()
+	if !waits(t, q, 1, a) {
+		t.Fatal("granted past one slot")
+	}
+	b, cb := try(t, q, Interactive)
+	defer cb()
+	if !waits(t, q, 2, b) {
+		t.Fatal("granted past one slot")
+	}
+	q.Resize(3)
+	ra, rb := got(t, a), got(t, b)
+	if l := q.Load(); l != (Load{Running: 3}) {
+		t.Fatalf("after a grow: %+v", l)
+	}
+	ra()
+	rb()
+	r()
+	if l := q.Load(); l != (Load{}) {
+		t.Errorf("after all releases: %+v", l)
+	}
+}
+
+// A queue that shrinks lets the requests in flight finish, and starts no
+// other until fewer than its slots run.
+func TestResizeShrinkLetsRunningFinish(t *testing.T) {
+	q := watched(3)
+	var held []func()
+	for range 3 {
+		r, err := q.Acquire(t.Context(), Interactive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, r)
+	}
+	// A queue of 2 still gives background its share of 1.
+	q.Resize(2)
+	if q.bgMax != 1 {
+		t.Errorf("after Resize(2), bgMax = %d, want 1", q.bgMax)
+	}
+	// A shrink to 1 frees nothing: 3 requests keep their slots.
+	q.Resize(1)
+	if l := q.Load(); l != (Load{Running: 3}) {
+		t.Fatalf("after a shrink: %+v", l)
+	}
+	w, cancel := try(t, q, Interactive)
+	defer cancel()
+	waits(t, q, 1, w)
+	held[0]()
+	if l := q.Load(); l != (Load{Running: 2, Waiting: 1}) {
+		t.Fatalf("after one release: %+v", l)
+	}
+	if !waits(t, q, 1, w) {
+		t.Fatal("a request started while 2 ran, with one slot")
+	}
+	held[1]()
+	waits(t, q, 1, w)
+	if l := q.Load(); l != (Load{Running: 1, Waiting: 1}) {
+		t.Fatalf("after two releases: %+v", l)
+	}
+	if !waits(t, q, 1, w) {
+		t.Fatal("a request started while 1 ran, with one slot")
+	}
+	held[2]()
+	wr := got(t, w)
+	if l := q.Load(); l != (Load{Running: 1}) {
+		t.Errorf("after the shrink settled: %+v", l)
+	}
+	wr()
+}
+
 func TestParsePriority(t *testing.T) {
 	for h, want := range map[string]Priority{"interactive": Interactive, "background": Background, "": Background, "Interactive": Background, "urgent": Background} {
 		if got := ParsePriority(h); got != want {

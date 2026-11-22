@@ -360,7 +360,8 @@ The shell's files under `/lodge/` follow the same rules from
 `GET /app/<id>/api` with a WebSocket upgrade, after the browser checks:
 
 - lodge opens the app's `GET /api` upgrade over the app's socket, with the
-  session's headers. It upgrades the browser's side only after the app's
+  session's headers and the browser's query unchanged
+  ([app-contract.md](app-contract.md#public-urls)). It upgrades the browser's side only after the app's
   side is up, else it answers 502.
 - **The session** has:
   - an ID of 16 lowercase hex digits from `crypto/rand`;

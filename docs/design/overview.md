@@ -152,8 +152,13 @@ whoever opens it first.
 **Connections.** Each listener caps connections per remote address and in
 all, refused requests close their connections, and device bodies have a
 deadline per read, since device routes run before any identity is known
-([lodge-http.md](../specs/lodge-http.md#connections)). Before each request,
-lodge checks that an app's socket belongs to the manifest's user.
+([lodge-http.md](../specs/lodge-http.md#connections)). On each new
+connection to an app's socket, lodge checks that the socket belongs to the
+manifest's user, and that its peer (`SO_PEERCRED`) is that user or root,
+which made the socket under socket activation. The gateway pools
+idle connections, and a pooled connection keeps the peer it checked, since a
+Unix socket's peer does not change. So a change of the manifest's `user`
+takes effect for new connections.
 
 ### The gateway
 
@@ -438,8 +443,9 @@ aliases fail at once.
 - The configuration is the `inference` member of `/etc/lodge/config.json`,
   reloaded with the manifests. A broken one is refused whole, and
   `lodgectl status` says why.
-- Each provider has its own queue, kept across a reload that leaves the
-  provider unchanged, so requests in flight still count.
+- Each provider has its own queue, kept across a reload that keeps the
+  provider's type and base URL, and resized to its new slots, so requests
+  in flight still count.
 - The usage log goes to the journal and to lodge's database;
   `lodgectl usage` sums it.
 

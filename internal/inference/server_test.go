@@ -614,3 +614,75 @@ func TestUncheckedProviderIsWaitedFor(t *testing.T) {
 		t.Errorf("right after a reload: %d %q", r.status, r.body)
 	}
 }
+
+// A reload that changes only home or slots keeps the provider's queue: a
+// request in flight still holds its slot, so the provider runs no more
+// than its slots at once (docs/specs/inference.md, The queue).
+func TestReloadKeepsQueueWhenHomeChanges(t *testing.T) {
+	h := newHarness(t, 1)
+	release, err := h.s.state().providers["home"].Queue.Acquire(t.Context(), Interactive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := configFor(h.p, 1)
+	pc := cfg.Providers["home"]
+	pc.Home = false
+	cfg.Providers["home"] = pc
+	h.s.Load(cfg, nil)
+	cur := h.s.state().providers["home"]
+	// A new queue would have no request running.
+	if l := cur.Queue.Load(); l != (Load{Running: 1}) {
+		t.Fatalf("after the reload: %+v", l)
+	}
+	ch, cancel := try(t, cur.Queue, Interactive)
+	defer cancel()
+	waitLoad(t, cur.Queue, Load{Running: 1, Waiting: 1})
+	select {
+	case <-ch:
+		t.Fatal("a request started beside the one in flight, with one slot")
+	default:
+	}
+	if _, reason := cur.state(); reason != "not checked yet" {
+		t.Errorf("reason = %q, want not checked yet", reason)
+	}
+	release()
+	got(t, ch)()
+}
+
+// A reload that grows slots grants them to the queue's waiters.
+func TestReloadGrowsSlotsGrantsWaiter(t *testing.T) {
+	h := newHarness(t, 1)
+	old := h.s.state().providers["home"].Queue
+	release, err := old.Acquire(t.Context(), Interactive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ch, cancel := try(t, old, Interactive)
+	defer cancel()
+	waitLoad(t, old, Load{Running: 1, Waiting: 1})
+	h.s.Load(configFor(h.p, 2), nil)
+	r := got(t, ch)
+	cur := h.s.state().providers["home"].Queue
+	if cur != old {
+		t.Fatal("the reload gave the provider a new queue")
+	}
+	if l := cur.Load(); l != (Load{Running: 2}) {
+		t.Errorf("after the reload: %+v", l)
+	}
+	r()
+}
+
+// A reload that changes the base URL gives the provider a new queue.
+func TestReloadNewBaseURLGivesNewQueue(t *testing.T) {
+	h := newHarness(t, 1)
+	old := h.s.state().providers["home"].Queue
+	cfg := configFor(h.p, 1)
+	pc := cfg.Providers["home"]
+	pc.BaseURL = h.p.srv.URL + "/v1/"
+	cfg.Providers["home"] = pc
+	h.s.Load(cfg, nil)
+	if cur := h.s.state().providers["home"].Queue; cur == old {
+		t.Fatal("a new base URL kept the old queue")
+	}
+}
