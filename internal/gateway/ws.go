@@ -50,7 +50,12 @@ func (g *Gateway) session(w http.ResponseWriter, r *http.Request, who peer.WhoIs
 
 	h := http.Header{}
 	setCaller(h, proxyReq{kind: kindSession, peer: p, session: s.ID})
-	app, err = g.dialApp(ctx, a.ID, "/api", h, nil)
+	// The query reaches the app unchanged (docs/specs/app-contract.md, Public URLs).
+	path := "/api"
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	app, err = g.dialApp(ctx, a.ID, path, h, nil)
 	if err != nil {
 		g.log.Warn("open an app's session", "app", a.ID, "err", err)
 		fail(w, http.StatusBadGateway, "app "+a.ID+" did not open the session", headers)
