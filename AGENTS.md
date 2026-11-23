@@ -191,6 +191,18 @@ Everything in the map is built.
 - Never run pnpm, node or cargo on the host. `client/`, `ui/` and `shell/`
   build in the nsl machine `lodge` (`dev/nsl/provision.sh`), as frostnotes' app
   does.
+- **A pocketd agent session cannot run `nsl`**: pocketd's sandbox hides the
+  user systemd bus that nsl drives its machines through
+  ([frostyard/pocketgo#96](https://github.com/frostyard/pocketgo/issues/96),
+  pocketgo's
+  [ADR-0012](https://github.com/frostyard/pocketgo/blob/main/docs/adr/0012-run-tools-without-approval-in-a-sandbox-that-hides-pocketds-files.md)).
+  In such a session, run `make ci` with its nsl targets skipped: the Makefile
+  has no variable for that, so run the others by name, `make verify race
+  cross`. Never set `IN_NSL='sh -c'` there, which runs pnpm and node on the
+  host. The report names each target it skipped (`client-check`, `ui-check`,
+  `shell-check`); those then run only in CI. `make mcp-e2e` cannot run there
+  either and no CI job runs it, so a change that needs it says it is still
+  owed.
 - Fix a lint finding rather than loosening `.golangci.yml`.
 
 ## Invariants (decided; binding from the first line of code)
