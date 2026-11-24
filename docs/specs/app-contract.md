@@ -76,6 +76,8 @@ Proposed).
 | lodge's state | `/var/lib/lodge/` | `lodge`, 0700: tsnet state, allow-lists, tokens, provider credentials |
 | the app's state | the app's own, such as `/var/lib/<user>/` | the app's user, 0700 |
 
+The bundle may load WebAssembly in the app frame. [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md)
+
 - **System users.** Every daemon runs as its own system user, declared in
   `sysusers.d`. lodge runs as `lodge`, in group `lodge`. Each app's user
   MUST be in group `lodge-apps` (for inference), and MUST NOT be in group

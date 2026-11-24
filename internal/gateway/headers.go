@@ -71,7 +71,7 @@ func (n Names) AppPolicy(id string, content, remoteImages bool) string {
 	if remoteImages {
 		img += " https:"
 	}
-	return "default-src 'none'; script-src " + assets + "; style-src " + assets + " 'unsafe-inline'; img-src " + img + "; " +
+	return "default-src 'none'; script-src " + assets + " 'wasm-unsafe-eval'; style-src " + assets + " 'unsafe-inline'; img-src " + img + "; " +
 		"media-src " + media + "; font-src " + base + " data:; connect-src " + base + " " + n.LodgeWS + "/app/" + id + "/api; " +
 		"frame-src " + frame + "; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; " +
 		"form-action 'none'; frame-ancestors 'self'"

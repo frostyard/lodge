@@ -581,6 +581,8 @@ Apps pin all three to a published lodge commit or release.
 - If Tailscale's coordination service is down at start, lodge logs it and
   keeps trying. Peers that already know lodge keep working.
 
+App frames can compile WebAssembly modules supplied by their installed frontend. [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md)
+
 ## References
 
 - Rationale: [ADR-0003](../adr/0003-lodge-is-the-only-process-on-the-network.md) to [ADR-0014](../adr/0014-agents-on-lodges-host-use-a-local-agent-socket.md), [ADR-0023](../adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (OAuth and consent, Proposed), [ADR-0024](../adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (the MCP gateway, Proposed), [ADR-0020](../adr/0020-apps-report-an-unread-count-for-the-rail-in-their-health.md) (badges, Proposed); frostyard/core [ADR-0057](https://github.com/frostyard/core/blob/main/docs/adr/0057-run-first-party-apps-behind-lodge.md)
