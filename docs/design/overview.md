@@ -302,6 +302,8 @@ agent ──Bearer lgo_at_…──► /gateway/mcp ── internal/mcpgw (MCP s
   as its login with every capability of the app, and only its `ui`
   operations.
 
+App frames can compile WebAssembly modules supplied by their installed frontend. [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md)
+
 ### Untrusted content
 
 `lodge-content` serves `https://CONTENT/<id>/<path>` from the app's

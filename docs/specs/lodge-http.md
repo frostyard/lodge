@@ -306,8 +306,10 @@ so nothing the app's daemon serves, such as an `x/` read, can run as
 script:
 
 ```
-default-src 'none'; script-src https://LODGE/app/<id>/assets/; style-src https://LODGE/app/<id>/assets/ 'unsafe-inline'; img-src 'self' data: [content: https://CONTENT] [remoteImages: https:]; media-src 'self' [content: https://CONTENT]; font-src https://LODGE/app/<id>/ data:; connect-src https://LODGE/app/<id>/ wss://LODGE/app/<id>/api; frame-src https://LODGE/app/<id>/ [content: https://CONTENT]; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+default-src 'none'; script-src https://LODGE/app/<id>/assets/ 'wasm-unsafe-eval'; style-src https://LODGE/app/<id>/assets/ 'unsafe-inline'; img-src 'self' data: [content: https://CONTENT] [remoteImages: https:]; media-src 'self' [content: https://CONTENT]; font-src https://LODGE/app/<id>/ data:; connect-src https://LODGE/app/<id>/ wss://LODGE/app/<id>/api; frame-src https://LODGE/app/<id>/ [content: https://CONTENT]; manifest-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
 ```
+
+All app frames can compile WebAssembly. JavaScript must still load from the app’s installed assets directory. See [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md).
 
 - **Content responses** carry their own set ([content
   routes](#content-routes)).

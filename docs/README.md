@@ -45,6 +45,7 @@ frostyard/core's
 - [0022 — lodge embeds a NATS broker for app events](adr/0022-lodge-embeds-a-nats-broker-for-app-events.md) (Proposed)
 - [0023 — lodge issues agent access through OAuth and a consent page](adr/0023-lodge-issues-agent-access-through-oauth-and-a-consent-page.md) (Proposed)
 - [0024 — Agents reach apps on hearth through 1 MCP gateway](adr/0024-agents-reach-apps-on-hearth-through-one-mcp-gateway.md) (Proposed)
+- [0025 — Allow WebAssembly in app frames](adr/0025-allow-webassembly-in-app-frames.md) (Proposed)
 
 ### Design
 
