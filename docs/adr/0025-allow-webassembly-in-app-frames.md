@@ -22,5 +22,5 @@ An opt-in manifest field would require installers and the gateway to negotiate a
 ## References
 
 - [Gateway design](../design/overview.md)
-- [HTTP frame policy](../specs/lodge-http.md#response-headers)
+- [HTTP frame policy](../specs/lodge-http.md#headers)
 - [Installed app bundle](../specs/app-contract.md#install-layout)

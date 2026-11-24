@@ -302,6 +302,8 @@ agent ──Bearer lgo_at_…──► /gateway/mcp ── internal/mcpgw (MCP s
   as its login with every capability of the app, and only its `ui`
   operations.
 
+App frames can compile WebAssembly modules supplied by their installed frontend. [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md)
+
 ### Untrusted content
 
 `lodge-content` serves `https://CONTENT/<id>/<path>` from the app's
@@ -580,8 +582,6 @@ Apps pin all three to a published lodge commit or release.
   reach as unavailable.
 - If Tailscale's coordination service is down at start, lodge logs it and
   keeps trying. Peers that already know lodge keep working.
-
-App frames can compile WebAssembly modules supplied by their installed frontend. [ADR-0025](../adr/0025-allow-webassembly-in-app-frames.md)
 
 ## References
 
